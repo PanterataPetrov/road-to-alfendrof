@@ -1,0 +1,41 @@
+[package]
+name = "t2f"
+version = "0.1.0"
+edition = "2021"
+description = "Road to Alfendrof"
+default-run = "t2f"
+
+[[bin]]
+name = "gen_sprites"
+path = "tools/gen_sprites.rs"
+
+[[bin]]
+name = "gen_ayz"
+path = "tools/gen_ayz.rs"
+
+[[bin]]
+name = "trace_photo"
+path = "tools/trace_photo.rs"
+
+[dependencies]
+bevy = "0.20"
+ggrs = "0.13"
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+# Only used by tools/gen_sprites.rs to write the placeholder PNGs.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[features]
+# Faster incremental builds during development: `cargo run --features dev`
+dev = ["bevy/dynamic_linking"]
+
+# Optimise our own code a little, and dependencies (Bevy) a lot, even in dev builds.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

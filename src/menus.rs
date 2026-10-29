@@ -1,0 +1,291 @@
+//! Title / mode select, character select and stage select.
+//!
+//! One cursor drives every menu. Both players' keys work on it: WASD + F/G or arrows + J/K, and
+//! Enter / Esc. In character select the first confirm picks P1's fighter and the second picks P2's.
+
+use bevy::prelude::*;
+
+use crate::{AppState, Mode, Roster, Selection, Stages};
+
+pub struct MenuPlugin;
+
+impl Plugin for MenuPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Menu>()
+            .init_resource::<Picking>()
+            .add_systems(OnEnter(AppState::Title), spawn_title)
+            .add_systems(OnEnter(AppState::CharSelect), spawn_char_select)
+            .add_systems(OnEnter(AppState::StageSelect), spawn_stage_select)
+            .add_systems(
+                Update,
+                (
+                    (title_confirm.run_if(in_state(AppState::Title)),
+                     char_confirm.run_if(in_state(AppState::CharSelect)),
+                     stage_confirm.run_if(in_state(AppState::StageSelect)))
+                        .before(menu_labels),
+                    menu_nav,
+                    menu_labels,
+                    menu_camera.run_if(not(in_state(AppState::Fight))),
+                ),
+            );
+    }
+}
+
+/// Cursor position and item count of the menu on screen.
+#[derive(Resource, Default)]
+struct Menu {
+    cursor: usize,
+    len: usize,
+}
+
+/// Which player is choosing a fighter: 0 = P1, 1 = P2.
+#[derive(Resource, Default)]
+struct Picking(usize);
+
+#[derive(Component)]
+struct MenuItem {
+    index: usize,
+    label: String,
+    color: Color,
+    enabled: bool,
+}
+
+#[derive(Component)]
+struct Header;
+
+struct Item {
+    label: String,
+    color: Color,
+    enabled: bool,
+    /// A square picture shown to the left of the name (character select).
+    portrait: Option<Handle<Image>>,
+    /// A smaller line under the name ("Arch-Historian").
+    subtitle: Option<String>,
+}
+
+/// A portrait next to a menu item: it grows a little while that item is selected.
+#[derive(Component)]
+struct Portrait(usize);
+
+impl Item {
+    fn new(label: impl Into<String>, color: Color) -> Self {
+        Item { label: label.into(), color, enabled: true, portrait: None, subtitle: None }
+    }
+}
+
+fn confirm_pressed(keys: &ButtonInput<KeyCode>) -> bool {
+    [KeyCode::Enter, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::Space].iter().any(|&k| keys.just_pressed(k))
+}
+
+fn back_pressed(keys: &ButtonInput<KeyCode>) -> bool {
+    [KeyCode::Escape, KeyCode::KeyG, KeyCode::KeyK, KeyCode::Backspace].iter().any(|&k| keys.just_pressed(k))
+}
+
+fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32, color: Color, y: f32) -> Entity {
+    commands
+        .spawn((
+            DespawnOnExit(state),
+            Text2d::new(text),
+            TextFont { font_size: FontSize::Px(size), ..default() },
+            TextColor(color),
+            Transform::from_xyz(0.0, y, 5.0),
+        ))
+        .id()
+}
+
+fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: &str, hint: &str, items: Vec<Item>) {
+    menu.cursor = 0;
+    menu.len = items.len();
+    let header = spawn_text(commands, state.clone(), title.into(), 24.0, Color::srgb(1.0, 0.9, 0.4), 82.0);
+    commands.entity(header).insert(Header);
+    spawn_text(commands, state.clone(), hint.into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
+
+    // Items with pictures need more room: the pictures are square, as tall as their row.
+    let with_pictures = items.iter().any(|i| i.portrait.is_some());
+    let spacing = if with_pictures { (150.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
+    let top = if with_pictures { 50.0 } else { 40.0 };
+    for (index, item) in items.into_iter().enumerate() {
+        let y = top - index as f32 * spacing;
+        let e = spawn_text(commands, state.clone(), item.label.clone(), 16.0, item.color, y);
+        commands.entity(e).insert(MenuItem { index, label: item.label, color: item.color, enabled: item.enabled });
+        if let Some(sub) = item.subtitle {
+            let e = spawn_text(commands, state.clone(), sub, 8.0, item.color.with_alpha(0.7), y - 11.0);
+            commands.entity(e).insert(Transform::from_xyz(0.0, y - 11.0, 5.0));
+        }
+        if let Some(image) = item.portrait {
+            let size = (spacing - 4.0).min(40.0);
+            // A dark frame behind the picture, then the picture, to the left of the name.
+            commands.spawn((
+                DespawnOnExit(state.clone()),
+                Sprite::from_color(Color::srgb(0.02, 0.02, 0.05), Vec2::splat(size + 4.0)),
+                Transform::from_xyz(-142.0, y, 4.0),
+            ));
+            commands.spawn((
+                DespawnOnExit(state.clone()),
+                Portrait(index),
+                Sprite { image, custom_size: Some(Vec2::splat(size)), ..default() },
+                Transform::from_xyz(-142.0, y, 5.0),
+            ));
+        }
+    }
+}
+
+fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>) {
+    let white = Color::WHITE;
+    let mut online = Item::new("Online (coming soon)", Color::srgb(0.45, 0.45, 0.5));
+    online.enabled = false;
+    spawn_menu(
+        &mut commands,
+        &mut menu,
+        AppState::Title,
+        "Road to Alfendrof",
+        "W/S or Up/Down: move    F / J / Enter: select    Esc: quit",
+        vec![Item::new("vs CPU", white), online],
+    );
+}
+
+fn spawn_char_select(
+    mut commands: Commands,
+    mut menu: ResMut<Menu>,
+    roster: Res<Roster>,
+    mut picking: ResMut<Picking>,
+    mode: Res<Mode>,
+    asset_server: Res<AssetServer>,
+) {
+    picking.0 = 0;
+    let items = roster
+        .0
+        .iter()
+        .map(|c| {
+            let mut item = Item::new(c.name.clone(), Color::srgb(c.color.0, c.color.1, c.color.2));
+            item.subtitle = c.subtitle.clone();
+            // portraits/<sprite folder>.png, if there is one
+            let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
+            if crate::assets_dir().join(format!("portraits/{folder}.png")).exists() {
+                item.portrait = Some(asset_server.load(format!("portraits/{folder}.png")));
+            }
+            item
+        })
+        .collect();
+    spawn_menu(
+        &mut commands,
+        &mut menu,
+        AppState::CharSelect,
+        &pick_title(0, *mode),
+        "W/S or Up/Down: move    F / J / Enter: pick    G / K / Esc: back",
+        items,
+    );
+}
+
+fn pick_title(player: usize, mode: Mode) -> String {
+    match (player, mode) {
+        (0, _) => "Choose your fighter".into(),
+        (_, Mode::VsCpu) => "Choose the CPU's fighter".into(),
+    }
+}
+
+fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Res<Stages>) {
+    let items = stages
+        .0
+        .iter()
+        .map(|s| Item::new(s.name.clone(), Color::srgb(s.floor_a.0 + 0.3, s.floor_a.1 + 0.3, s.floor_a.2 + 0.3)))
+        .collect();
+    spawn_menu(
+        &mut commands,
+        &mut menu,
+        AppState::StageSelect,
+        "Choose a stage",
+        "W/S or Up/Down: move    F / J / Enter: fight    G / K / Esc: back",
+        items,
+    );
+}
+
+fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>) {
+    if menu.len == 0 {
+        return;
+    }
+    let up = keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp);
+    let down = keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown);
+    if up {
+        menu.cursor = (menu.cursor + menu.len - 1) % menu.len;
+    }
+    if down {
+        menu.cursor = (menu.cursor + 1) % menu.len;
+    }
+}
+
+fn menu_labels(menu: Res<Menu>, mut items: Query<(&MenuItem, &mut Text2d, &mut TextColor)>, mut portraits: Query<(&Portrait, &mut Sprite)>) {
+    for (Portrait(index), mut sprite) in &mut portraits {
+        sprite.color = if *index == menu.cursor { Color::WHITE } else { Color::srgb(0.55, 0.55, 0.6) };
+    }
+    for (item, mut text, mut color) in &mut items {
+        let selected = item.index == menu.cursor;
+        text.0 = if selected { format!("> {} <", item.label) } else { item.label.clone() };
+        color.0 = if selected || !item.enabled { item.color } else { item.color.with_alpha(0.55) };
+    }
+}
+
+fn title_confirm(
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<Menu>,
+    mut mode: ResMut<Mode>,
+    mut next: ResMut<NextState<AppState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if back_pressed(&keys) && keys.just_pressed(KeyCode::Escape) {
+        exit.write(AppExit::Success);
+    } else if confirm_pressed(&keys) {
+        match menu.cursor {
+            0 => *mode = Mode::VsCpu,
+            _ => return, // Online is not built yet.
+        }
+        next.set(AppState::CharSelect);
+    }
+}
+
+fn char_confirm(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<Menu>,
+    mut picking: ResMut<Picking>,
+    mut sel: ResMut<Selection>,
+    mode: Res<Mode>,
+    stages: Res<Stages>,
+    mut header: Single<&mut Text2d, With<Header>>,
+    mut next: ResMut<NextState<AppState>>,
+) {
+    if back_pressed(&keys) {
+        if picking.0 == 1 {
+            picking.0 = 0;
+            header.0 = pick_title(0, *mode);
+        } else {
+            next.set(AppState::Title);
+        }
+    } else if confirm_pressed(&keys) {
+        sel.chars[picking.0] = menu.cursor;
+        if picking.0 == 0 {
+            picking.0 = 1;
+            header.0 = pick_title(1, *mode);
+            menu.cursor = 0;
+        } else if stages.0.len() == 1 {
+            // Nothing to choose between yet, so go straight to the fight.
+            sel.stage = 0;
+            next.set(AppState::Fight);
+        } else {
+            next.set(AppState::StageSelect);
+        }
+    }
+}
+
+fn stage_confirm(keys: Res<ButtonInput<KeyCode>>, menu: Res<Menu>, mut sel: ResMut<Selection>, mut next: ResMut<NextState<AppState>>) {
+    if back_pressed(&keys) {
+        next.set(AppState::CharSelect);
+    } else if confirm_pressed(&keys) {
+        sel.stage = menu.cursor;
+        next.set(AppState::Fight);
+    }
+}
+
+/// Menus are drawn around the origin, so park the camera there.
+fn menu_camera(mut cam: Single<&mut Transform, With<Camera2d>>) {
+    cam.translation.x = 0.0;
+}

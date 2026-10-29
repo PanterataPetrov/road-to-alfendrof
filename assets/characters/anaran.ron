@@ -1,0 +1,38 @@
+// Anaran, Arch-Historian: a very pompous high elf. Red and copper robes, a black cape, dark
+// crimson hair. Light is a snapping scroll (alternating arms, with the 3-hit combo), Heavy is a
+// dramatic pronouncement that sends a wave of golden runes across the screen, and the Special (the
+// ruby at his throat glows when the meter is full) calls two little goblins that stay beside him
+// for about eight seconds and rush the enemy and bite on their own.
+// See ayz.ron for what each field means; `minions` is explained in src/sim/data.rs.
+(
+    name: "Anaran",
+    // Shown under his name in the character select only.
+    subtitle: Some("Arch-Historian"),
+    sprites: Some("anaran"),
+    color: (0.95, 0.52, 0.38),
+    walk_speed: 195,
+    jump_speed: 1050,
+    special_mark: Some(Scar(color: (0.75, 0.2, 0.25), glow: (1.0, 0.35, 0.4))),
+    moves: [
+        (name: "Scroll Whip", button: Light, crouching: false, anim: Punch, walk_pct: 60,
+         startup: 5, active: 3, recovery: 8, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 12, y: 28, w: 40, h: 10)),
+        (name: "Low Whip", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 6, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 12, y: 0, w: 38, h: 10)),
+        (name: "Pronouncement", button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
+         startup: 16, active: 2, recovery: 22, damage: 60, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 6,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 34, y: 38, aim_y: 38, travel_frames: 14, lifetime: 40, size: (18, 14), image: Some("runes")))),
+        (name: "Air Whip", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 8, y: 0, w: 34, h: 24)),
+        (name: "Plunging Verdict", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
+         startup: 9, active: 7, recovery: 10, damage: 64, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
+         hitbox: (x: 6, y: -4, w: 30, h: 34)),
+        (name: "Call the Goblins", button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),
+         startup: 24, active: 3, recovery: 24, damage: 16, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         minions: Some((count: 4, lifetime: 480, interval: 150, speed: 4, reach: 16, health: 56))),
+    ],
+)
