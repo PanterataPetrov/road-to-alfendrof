@@ -26,6 +26,7 @@ impl Plugin for MenuPlugin {
                     menu_nav,
                     menu_labels,
                     glitch_subtitles,
+                    animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
                 ),
             );
@@ -101,7 +102,7 @@ fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32,
         .id()
 }
 
-fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: &str, hint: &str, items: Vec<Item>) {
+fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: &str, hint: &str, items: Vec<Item>, top_override: Option<f32>) {
     menu.cursor = 0;
     menu.len = items.len();
     let header = spawn_text(commands, state.clone(), title.into(), 24.0, Color::srgb(1.0, 0.9, 0.4), 82.0);
@@ -111,7 +112,7 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     // Items with pictures need more room: the pictures are square, as tall as their row.
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
     let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
-    let top = if with_pictures { 56.0 } else { 40.0 };
+    let top = top_override.unwrap_or(if with_pictures { 56.0 } else { 40.0 });
     for (index, item) in items.into_iter().enumerate() {
         let y = top - index as f32 * spacing;
         let e = spawn_text(commands, state.clone(), item.label.clone(), 16.0, item.color, y);
@@ -141,18 +142,58 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     }
 }
 
-fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>) {
+/// The logo bobs gently; the portal behind the town pulses.
+#[derive(Component)]
+struct TitleLogo;
+
+#[derive(Component)]
+struct TitlePortal;
+
+/// The start screen: Galata Tower under the torn-open portal, the pixel-art logo floating over it,
+/// and the menu underneath.
+fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res<AssetServer>) {
+    let state = AppState::Title;
+    for (image, z, portal) in [("backgrounds/galata/sky.png", -10.0, false), ("backgrounds/galata/portal.png", -9.0, true), ("backgrounds/galata/near.png", -8.0, false)] {
+        let mut e = commands.spawn((DespawnOnExit(state.clone()), Sprite::from_image(asset_server.load(image)), Transform::from_xyz(0.0, 0.0, z)));
+        if portal {
+            e.insert(TitlePortal);
+        }
+    }
+    // A dark band behind the menu so that it reads against the street, and a vignette at the top.
+    commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.82), Vec2::new(384.0, 96.0)), Transform::from_xyz(0.0, -62.0, 1.0)));
+    commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.35), Vec2::new(384.0, 22.0)), Transform::from_xyz(0.0, 105.0, 1.0)));
+    commands.spawn((
+        DespawnOnExit(state.clone()),
+        TitleLogo,
+        Sprite::from_image(asset_server.load("ui/logo.png")),
+        Transform::from_xyz(0.0, 58.0, 3.0),
+    ));
+    commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.7), Vec2::new(86.0, 12.0)), Transform::from_xyz(0.0, 8.0, 4.0)));
+    let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);
+    commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
+
     let white = Color::WHITE;
-    let mut online = Item::new("Online (coming soon)", Color::srgb(0.45, 0.45, 0.5));
+    let mut online = Item::new("Online (coming soon)", Color::srgb(0.72, 0.72, 0.8));
     online.enabled = false;
     spawn_menu(
         &mut commands,
         &mut menu,
-        AppState::Title,
-        "Road to Alfendrof",
+        state,
+        "",
         "W/S or Up/Down: move    F / J / Enter: select    Esc: quit",
         vec![Item::new("vs CPU", white), online],
+        Some(-34.0),
     );
+}
+
+fn animate_title(time: Res<Time>, mut logo: Query<&mut Transform, With<TitleLogo>>, mut portal: Query<&mut Sprite, With<TitlePortal>>) {
+    let t = time.elapsed_secs();
+    for mut tf in &mut logo {
+        tf.translation.y = 58.0 + (t * 1.6).sin() * 2.0;
+    }
+    for mut sprite in &mut portal {
+        sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.8 + (t * 2.2).sin() * 0.2);
+    }
 }
 
 fn spawn_char_select(
@@ -186,6 +227,7 @@ fn spawn_char_select(
         &pick_title(0, *mode),
         "W/S or Up/Down: move    F / J / Enter: pick    G / K / Esc: back",
         items,
+        None,
     );
 }
 
@@ -209,6 +251,7 @@ fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Re
         "Choose a stage",
         "W/S or Up/Down: move    F / J / Enter: fight    G / K / Esc: back",
         items,
+        None,
     );
 }
 

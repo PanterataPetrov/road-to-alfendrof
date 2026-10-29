@@ -137,7 +137,7 @@ impl DevOptions {
         let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
         DevOptions {
             charselect: args.iter().any(|a| a == "--charselect"),
-            fight: (args.iter().any(|a| a == "--fight") || args.iter().any(|a| a == "--screenshot")) && !args.iter().any(|a| a == "--charselect"),
+            fight: (args.iter().any(|a| a == "--fight") || args.iter().any(|a| a == "--screenshot")) && !args.iter().any(|a| a == "--charselect") && !args.iter().any(|a| a == "--title"),
             cpu: args.iter().any(|a| a == "--cpu"),
             debug: args.iter().any(|a| a == "--debug"),
             screenshot: value("--screenshot"),
@@ -237,6 +237,7 @@ fn main() {
                 render::animate_crescent,
                 render::animate_stars,
                 render::animate_marks,
+                render::animate_whips,
                 render::animate_moons,
                 render::animate_bubbles,
                 render::animate_curses,
@@ -427,7 +428,7 @@ fn spawn_fight(
             effects.push("goblin".to_string());
         }
         let frames = t2f::anim::frames_for(c);
-        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some());
+        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip);
     }
     render::spawn_curses(&mut commands, &asset_server);
     render::spawn_combo_ui(&mut commands, &asset_server);

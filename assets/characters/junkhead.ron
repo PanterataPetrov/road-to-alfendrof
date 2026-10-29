@@ -4,7 +4,10 @@
 // Light: whip from the right, whip from the left (the arms alternate while you spam it), and as
 //        the third hit of a combo a jump kick (the finisher). If the finisher lands, his next
 //        standing whip has extra reach (once). Crouching Light is a low whip; in the air Light
-//        spins the whip around him from his head to his legs.
+//        spins the whip around him from his head to his legs. Up to three air attacks per jump:
+//        a connected air light can chain into another one, or into the air Heavy (the whip
+//        pulls him through the air towards the opponent). The special works in the air too: he
+//        hangs there while he spins, and the lash still goes high or low at the floor.
 // Heavy: lash out with the whip, grab the opponent and pull himself to them. If the opponent
 //        blocks, he is only pulled half the way.
 // Special (tattoo glows when the meter is full): he spins the whip three times (just the wind-up,
@@ -22,6 +25,10 @@
     jump_speed: 1050,
     // The CPU starts whipping from 65 px away (his whip reaches about 77 px centre to centre).
     ai_range: Some(65),
+    // His moves have whip layers drawn over the body.
+    whip: true,
+    // Up to three air attacks per jump: air lights chain, and the air heavy can end the chain.
+    air_chain: Some(3),
     // A third less health than the others (667 of their 1000).
     health: Some(667),
     // His special meter fills about 2.35 times as slowly (135% slower).
@@ -44,9 +51,22 @@
          startup: 14, active: 4, recovery: 26, damage: 60, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: 22, w: 105, h: 16)),
         (name: "Whip Spin", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
-         hits: 2, hit_gap: 8,
-         startup: 5, active: 5, recovery: 10, damage: 26, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         hover: true, hits: 2, hit_gap: 8,
+         startup: 5, active: 5, recovery: 10, damage: 26, hitstun: 14, blockstun: 8, knockback: 0, hitstop: 3,
          hitbox: (x: -48, y: -6, w: 96, h: 72)),
+        // The whip pulls him through the air towards the opponent (sideways).
+        (name: "Air Whip Pull", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
+         pull_self: true, pull_gap: 24, guard_hits: Some(2),
+         startup: 12, active: 4, recovery: 18, damage: 55, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
+         hitbox: (x: 10, y: -80, w: 105, h: 110)),
+        // The special works in the air too: he hangs there while he spins, and the lash goes high or
+        // low at the ground (heights are measured from the floor), so it is crouched or jumped like
+        // the ground one.
+        (name: "Air Whip Storm", button: Special, crouching: false, air: true, anim: Summon, walk_pct: 0,
+         hover: true, world_y: true, pull_foe: true, pull_gap: 22,
+         startup: 36, active: 4, recovery: 28, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
+         hitbox: (x: 8, y: 42, w: 120, h: 12),
+         low_hitbox: Some((x: 8, y: 0, w: 120, h: 12))),
         (name: "Whip Storm", button: Special, crouching: false, anim: Summon, walk_pct: 0,
          pull_foe: true, pull_gap: 22,
          startup: 36, active: 4, recovery: 28, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,

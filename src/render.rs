@@ -29,6 +29,10 @@ pub const STAR_SLOTS: usize = 4;
 /// The overlay that shows the special meter (the glowing mark, or the hat).
 #[derive(Component)]
 pub struct MarkOf(pub usize);
+
+/// The whip layer over a fighter's body.
+#[derive(Component)]
+pub struct WhipOf(pub usize);
 /// The moon the Professor hangs in the sky (world space, not on his body), and the star beside it.
 #[derive(Component)]
 pub struct MoonOf(pub usize);
@@ -57,8 +61,11 @@ pub struct CurseOf(pub usize);
 pub const LECTURE_LINE: &str = "so here's the thing...";
 
 /// Every drawing's file name for a character.
-fn all_stems(frames: &[Frame], effects: &[String], mark: bool) -> Vec<String> {
+fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool) -> Vec<String> {
     let mut stems: Vec<String> = frames.iter().map(|f| f.file_stem()).collect();
+    if whip {
+        stems.extend(t2f::anim::whip_stems());
+    }
     if mark {
         stems.extend(frames.iter().map(|f| format!("{}_mark", f.file_stem())));
     }
@@ -83,12 +90,13 @@ pub fn spawn_fighter(
     effects: &[String],
     frames: &[Frame],
     mark: bool,
+    whip: bool,
 ) {
     let folder = name.to_lowercase();
     let has_art = assets_dir.join(format!("sprites/{folder}/idle_0.png")).exists();
     let mut map = HashMap::new();
     if has_art {
-        for stem in all_stems(frames, effects, mark) {
+        for stem in all_stems(frames, effects, mark, whip) {
             map.insert(stem.clone(), asset_server.load(format!("sprites/{folder}/{stem}.png")));
         }
     }
@@ -112,6 +120,18 @@ pub fn spawn_fighter(
                     MarkOf(fighter),
                     Sprite::from_image(get("idle_0_mark").expect("loaded with the rest")),
                     Transform::from_xyz(shift, FULL_H as f32 / 2.0, 0.05),
+                ))
+                .id();
+            commands.entity(root).add_child(overlay);
+        }
+        if whip {
+            // The whip layer is wider than the body drawing but has the same left edge.
+            let overlay = commands
+                .spawn((
+                    WhipOf(fighter),
+                    Sprite::from_image(get("punch_1_whip").expect("loaded with the rest")),
+                    Transform::from_xyz(shift + (t2f::anim::WHIP_W - FRAME_W) as f32 / 2.0, FULL_H as f32 / 2.0, 0.06),
+                    Visibility::Hidden,
                 ))
                 .id();
             commands.entity(root).add_child(overlay);
@@ -338,6 +358,30 @@ pub fn animate_marks(
             Some(MarkKind::Hat) => Color::srgba(1.0, 1.0, 1.0, if ready { 1.0 } else { 0.0 }),
             None => Color::srgba(1.0, 1.0, 1.0, 0.0),
         };
+    }
+}
+
+/// Show the whip layer of the move being thrown, if it has one.
+pub fn animate_whips(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    handles: Res<FrameHandles>,
+    mut whips: Query<(&WhipOf, &mut Sprite, &mut Visibility)>,
+) {
+    for (WhipOf(i), mut sprite, mut visibility) in &mut whips {
+        let f = &sim.0.fighters[*i];
+        let layer = t2f::anim::whip_layer(f, &roster.0[sel.chars[*i]]);
+        match layer.and_then(|name| handles.0.get(*i).and_then(|m| m.get(&name))) {
+            Some(image) => {
+                if sprite.image != *image {
+                    sprite.image = image.clone();
+                }
+                sprite.color = tint(f.state);
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
     }
 }
 

@@ -98,6 +98,10 @@ pub struct Fighter {
     pub pull: i32,
     /// The current move (with a `low_hitbox`) goes low instead of high.
     pub aim_low: bool,
+    /// Air attacks used in this jump (see `CharacterData::air_chain`).
+    pub air_count: u8,
+    /// The current move is hanging in the air (see `MoveData::hover`).
+    pub hovering: bool,
 }
 
 /// The input flag of a move's button.
@@ -168,6 +172,8 @@ impl Fighter {
             boosted: false,
             pull: 0,
             aim_low: false,
+            air_count: 0,
+            hovering: false,
         }
     }
 
@@ -248,6 +254,7 @@ impl Fighter {
             return;
         }
         self.buffer = Input::default();
+        self.hovering = false;
         // Being pulled (a whip) drags the fighter along the ground.
         if self.pull != 0 {
             let step = self.pull.signum() * self.pull.abs().min(Self::PULL_SPEED);
@@ -280,6 +287,7 @@ impl Fighter {
             }
             FighterState::Attack => {
                 let mv = &data.moves[self.attack];
+                self.hovering = mv.hover && !self.grounded() && self.state_frame <= mv.total_frames() - mv.recovery;
                 // A leaping move jumps when its startup ends; landing ends it.
                 if mv.leap > 0 && self.state_frame == mv.startup && self.grounded() {
                     self.vy = mv.leap;
@@ -318,6 +326,23 @@ impl Fighter {
                         }
                     }
                 }
+                // Air combos: a connected air light attack can go straight into another one, or into
+                // the air heavy (which ends the chain).
+                let air_chain = data.air_chain.unwrap_or(1);
+                if self.hit_done && !self.grounded() && mv.air && mv.button == Button::Light && (self.air_count as u32) < air_chain {
+                    for (flag, button) in [(Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
+                        if pressed.has(flag) {
+                            if let Some(index) = data.find_move(button, false, true) {
+                                let vx = self.vx;
+                                self.begin_attack(index, &data.moves[index]);
+                                self.vx = vx;
+                                self.air_used = true;
+                                self.air_count += 1;
+                                return self.finish_step();
+                            }
+                        }
+                    }
+                }
                 // A chargeable move waits at the end of its startup while the button is held.
                 if mv.charge_frames > 0 && self.state_frame == mv.startup && self.charge < mv.charge_frames && input.has(button_flag(mv.button)) {
                     self.charge += 1;
@@ -339,14 +364,17 @@ impl Fighter {
             FighterState::Ko => self.vx = self.vx * 9 / 10,
             // Jumping: one air attack per jump, keeping the jump's momentum.
             FighterState::Jump => {
-                if !self.air_used {
-                    for (flag, button) in [(Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
-                        if pressed.has(flag) {
+                // One air attack per jump, or more after a connected air attack (see `air_chain`).
+                let more = self.hit_done && (self.air_count as u32) < data.air_chain.unwrap_or(1);
+                if !self.air_used || more {
+                    for (flag, button) in [(Input::SPECIAL, Button::Special), (Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
+                        if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
                             if let Some(index) = data.find_move(button, false, true) {
                                 let vx = self.vx;
                                 self.begin_attack(index, &data.moves[index]);
                                 self.vx = vx;
                                 self.air_used = true;
+                                self.air_count += 1;
                                 break;
                             }
                         }
@@ -362,7 +390,9 @@ impl Fighter {
 
     /// Gravity, movement and landing, at the end of a frame.
     fn finish_step(&mut self) {
-        if !self.grounded() {
+        if self.hovering {
+            self.vy = 0;
+        } else if !self.grounded() {
             self.vy -= Self::GRAVITY;
         }
         self.x += self.vx;
@@ -375,6 +405,7 @@ impl Fighter {
                 self.set_state(FighterState::Idle);
             }
             self.air_used = false;
+            self.air_count = 0;
         }
     }
 

@@ -129,6 +129,10 @@ fn color(ch: char) -> Option<[u8; 3]> {
         'è' => [58, 120, 50],
         'ì' => [150, 210, 110],
         'ò' => [120, 80, 50],
+        // Junkhead's whip leather (the coil on his belt): dark, mid, light.
+        'ä' => [86, 52, 30],
+        'ö' => [128, 80, 46],
+        'ü' => [182, 128, 78],
         // The fedora's purple magic.
         '9' => [176, 70, 226],
         '0' => [112, 34, 168],
@@ -2502,7 +2506,15 @@ fn cb_leg_layer(parts: &Parts, legs: &Legs) -> Grid {
 
 /// The body drawing and the tattoo glow overlay for a frame.
 fn cb_drawing(parts: &Parts, frame: Frame) -> (Grid, Grid) {
-    let gs = cb_spec(frame);
+    cb_drawing_with(parts, frame, cb_spec, false)
+}
+
+/// A coil of whip on the left hip (picture left, behind him): 5 rows from the belt down, drawn in
+/// the torso so it leans and drops with it. Its top-left corner is at (3, 35) in the default pose.
+const BELT_COIL: [&str; 5] = [".äää.", "äüöüä", "äö.öä", "äüöüä", ".ääää"];
+
+fn cb_drawing_with(parts: &Parts, frame: Frame, spec_of: fn(Frame) -> GsSpec, belt_whip: bool) -> (Grid, Grid) {
+    let gs = spec_of(frame);
     let legs = gs_legs(match &gs.spec.legs {
         Legs::Stand => Legs::Stand,
         Legs::Squat => Legs::Squat,
@@ -2546,6 +2558,15 @@ fn cb_drawing(parts: &Parts, frame: Frame) -> (Grid, Grid) {
             ArmSpec::Pose { elbow, hand } => {
                 for (x, y) in cb_arm(&mut upper, shoulder, *elbow, *hand, left) {
                     glow.set(x + GOX, y + GOY, 'W');
+                }
+            }
+        }
+    }
+    if belt_whip {
+        for (dy, row) in BELT_COIL.iter().enumerate() {
+            for (dx, ch) in row.chars().enumerate() {
+                if ch != '.' {
+                    upper.set(3 + dx as i32 + GOX, 35 + dy as i32 + GOY, ch);
                 }
             }
         }
@@ -3613,6 +3634,257 @@ fn goblin_frames() -> Vec<Grid> {
     frames
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Junkhead's whip. Each pose that uses it has a layer drawn over the body: the same left edge as
+// the body drawing, but WHIP_W wide so the whip can reach far in front of him. The game puts the
+// layer over the body (see `anim::whip_layer` for which one and `render::animate_whips`).
+// ---------------------------------------------------------------------------------------------
+
+const WHIP_W: i32 = 176;
+const WHIP_DARK: [u8; 4] = [86, 52, 30, 255];
+const WHIP_MID: [u8; 4] = [128, 80, 46, 255];
+const WHIP_LIGHT: [u8; 4] = [182, 128, 78, 255];
+const WHIP_TIP: [u8; 4] = [236, 218, 180, 255];
+
+/// Junkhead's own poses where the cowboy's do not fit a whip: the raised arm of the spin, the
+/// lash, the air attacks (arms out for the spin, the whip arm forward for the air heavy).
+fn jh_spec(frame: Frame) -> GsSpec {
+    use ArmSpec::Keep;
+    let stance = || legs((8.0, 45.0), (4.0, 48.0), (33.0, 45.0), (36.0, 48.0));
+    let own = |arms: (ArmSpec, ArmSpec), lean: f32, legs: Legs| GsSpec {
+        spec: Spec { arms, lean, dy: 0, legs, mouth: 0, finger: None },
+        hat_in_hand: None,
+        hat_on_head: false,
+    };
+    match frame {
+        Frame::Summon(0) => own((Keep, pose((40.0, 21.0), (38.0, 10.0))), 0.0, Legs::Stand),
+        Frame::Summon(1) | Frame::Summon(2) | Frame::Summon(3) => own((Keep, pose((40.0, 12.0), (37.0, 2.0))), -1.0, Legs::Stand),
+        Frame::Summon(4) => own((Keep, pose((36.0, 19.0), (47.0, 17.0))), 4.0, stance()),
+        Frame::Summon(_) => own((Keep, pose((33.0, 24.0), (40.0, 29.0))), 2.0, stance()),
+        Frame::AirSoft(_) => own(
+            (pose((1.0, 22.0), (-5.0, 20.0)), pose((43.0, 22.0), (49.0, 20.0))),
+            0.0,
+            legs((4.0, 44.0), (9.0, 45.0), (37.0, 44.0), (32.0, 45.0)),
+        ),
+        Frame::AirHard(0) => own((Keep, pose((38.0, 14.0), (34.0, 3.0))), -2.0, legs((5.0, 45.0), (8.0, 47.0), (36.0, 45.0), (33.0, 47.0))),
+        Frame::AirHard(_) => own((Keep, pose((36.0, 20.0), (48.0, 22.0))), 5.0, legs((6.0, 45.0), (3.0, 48.0), (38.0, 45.0), (41.0, 48.0))),
+        other => cb_spec(other),
+    }
+}
+
+/// Where a hand is on the finished drawing (the arm's joint, moved by the lean and the drop).
+fn jh_hand_xy(frame: Frame, left: bool) -> (i32, i32) {
+    let gs = jh_spec(frame);
+    let arm = if left { &gs.spec.arms.0 } else { &gs.spec.arms.1 };
+    let ArmSpec::Pose { hand, .. } = arm else { panic!("{frame:?} has no posed arm on that side") };
+    let r = (hand.1.round() as i32).clamp(0, G_UPPER_LAST);
+    let shift = (gs.spec.lean * (G_UPPER_LAST - r) as f32 / G_UPPER_LAST as f32).round() as i32;
+    (hand.0.round() as i32 + GOX + shift, hand.1.round() as i32 + GOY + gs.spec.dy)
+}
+
+fn wl_canvas() -> image::RgbaImage {
+    image::RgbaImage::new(WHIP_W as u32, FULL_H as u32)
+}
+
+fn wl_plot(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 4]) {
+    if x >= 0 && y >= 0 && x < WHIP_W && y < FULL_H {
+        img.put_pixel(x as u32, y as u32, image::Rgba(c));
+    }
+}
+
+/// Paint a path of pixels as a whip: dark leather, thicker at the handle, a lighter glint every
+/// few pixels and a pale cracker at the tip.
+fn wl_paint(img: &mut image::RgbaImage, path: &[(i32, i32)], handle_thick: bool) {
+    let len = path.len();
+    for (k, &(x, y)) in path.iter().enumerate() {
+        let c = if k + 3 >= len {
+            WHIP_TIP
+        } else if k % 5 == 2 {
+            WHIP_LIGHT
+        } else if k % 5 == 4 {
+            WHIP_MID
+        } else {
+            WHIP_DARK
+        };
+        wl_plot(img, x, y, c);
+        if handle_thick && k < 8 {
+            wl_plot(img, x, y + 1, WHIP_DARK);
+        }
+    }
+}
+
+fn wl_dedupe(points: impl Iterator<Item = (f32, f32)>) -> Vec<(i32, i32)> {
+    let mut path: Vec<(i32, i32)> = Vec::new();
+    for (x, y) in points {
+        let p = (x.round() as i32, y.round() as i32);
+        if path.last() != Some(&p) {
+            path.push(p);
+        }
+    }
+    path
+}
+
+/// A whip along a quadratic curve from `p0` (the hand) to `p1` (the tip), bowed towards `c`.
+fn wl_curve(img: &mut image::RgbaImage, p0: (f32, f32), c: (f32, f32), p1: (f32, f32)) {
+    let n = 800;
+    let path = wl_dedupe((0..=n).map(|i| {
+        let t = i as f32 / n as f32;
+        let (a, b, d) = ((1.0 - t) * (1.0 - t), 2.0 * (1.0 - t) * t, t * t);
+        (a * p0.0 + b * c.0 + d * p1.0, a * p0.1 + b * c.1 + d * p1.1)
+    }));
+    wl_paint(img, &path, true);
+}
+
+/// An arc of an ellipse (the whip spinning), `sweep` degrees long starting at `phase`.
+fn wl_ring(img: &mut image::RgbaImage, centre: (f32, f32), rx: f32, ry: f32, phase: f32, sweep: f32) {
+    let n = 900;
+    let path = wl_dedupe((0..=n).map(|i| {
+        let a = (phase + sweep * i as f32 / n as f32).to_radians();
+        (centre.0 + rx * a.cos(), centre.1 + ry * a.sin())
+    }));
+    wl_paint(img, &path, false);
+}
+
+/// Every whip layer, by file name.
+fn jh_whip_layers() -> Vec<(String, image::RgbaImage)> {
+    let mut out: Vec<(String, image::RgbaImage)> = Vec::new();
+    let tip_x = |reach: i32| (CENTRE_X + reach) as f32;
+    let handle = |frame: Frame, left: bool| {
+        let h = jh_hand_xy(frame, left);
+        (h.0 as f32 + 3.0, h.1 as f32 + 0.5)
+    };
+    // The whip cocked back over the shoulder.
+    let windup = |s: (f32, f32)| {
+        let mut img = wl_canvas();
+        wl_curve(&mut img, s, (s.0 - 16.0, s.1 - 20.0), (s.0 - 32.0, s.1 - 4.0));
+        img
+    };
+    // Straight out in front, with a little bow, to `tip`.
+    let strike = |s: (f32, f32), tip: (f32, f32)| {
+        let mut img = wl_canvas();
+        wl_curve(&mut img, s, ((s.0 + tip.0) / 2.0, (s.1 + tip.1) / 2.0 - 3.0), tip);
+        img
+    };
+    // Slack, hanging after the lash.
+    let slack = |s: (f32, f32)| {
+        let mut img = wl_canvas();
+        wl_curve(&mut img, s, (s.0 + 24.0, s.1 + 3.0), (s.0 + 12.0, s.1 + 24.0));
+        img
+    };
+    let floor = (FULL_H - 3) as f32;
+
+    for (k, left) in [(0, false), (1, false), (2, true), (3, true)] {
+        let s = handle(Frame::Punch(k), left);
+        if k % 2 == 0 {
+            out.push((format!("punch_{k}_whip"), windup(s)));
+        } else {
+            out.push((format!("punch_{k}_whip"), strike(s, (tip_x(60), s.1 + 1.0))));
+            out.push((format!("punch_{k}_whipx"), strike(s, (tip_x(105), s.1 + 2.0))));
+        }
+    }
+    out.push(("crouch_soft_0_whip".into(), windup(handle(Frame::CrouchSoft(0), false))));
+    out.push(("crouch_soft_1_whip".into(), strike(handle(Frame::CrouchSoft(1), false), (tip_x(72), floor))));
+    for k in 0..2 {
+        out.push((format!("hard_{k}_whip"), windup(handle(Frame::Hard(k), false))));
+    }
+    let s = handle(Frame::Hard(2), false);
+    out.push(("hard_2_whip".into(), strike(s, (tip_x(115), s.1 + 1.0))));
+    out.push(("hard_3_whip".into(), slack(handle(Frame::Hard(3), false))));
+    out.push(("air_hard_0_whip".into(), windup(handle(Frame::AirHard(0), false))));
+    let s = handle(Frame::AirHard(1), false);
+    out.push(("air_hard_1_whip".into(), strike(s, (tip_x(115), (s.1 + 26.0).min(floor)))));
+
+    // The spin overhead: the whip circles the raised hand, a quarter turn per drawing.
+    let hand = handle(Frame::Summon(2), false);
+    for k in 0..4 {
+        let mut img = wl_canvas();
+        wl_ring(&mut img, (hand.0 - 3.0, hand.1 - 1.0), 22.0, 5.5, k as f32 * 90.0, 290.0);
+        out.push((format!("whip_ring_{k}"), img));
+    }
+    // The lash: high (head and neck height) or low (the floor), then slack.
+    let s = handle(Frame::Summon(4), false);
+    out.push(("summon_4_whip_hi".into(), strike(s, (tip_x(128), 16.0))));
+    out.push(("summon_4_whip_lo".into(), strike(s, (tip_x(128), floor))));
+    out.push(("summon_5_whip".into(), slack(handle(Frame::Summon(5), false))));
+    // The air spin: the whip circles him from his head to his legs.
+    let centre = (CENTRE_X as f32, FULL_H as f32 - 31.0);
+    for (k, base) in [(0, 0.0), (1, 180.0)] {
+        for (suffix, extra) in [("", 0.0), ("b", 90.0)] {
+            let mut img = wl_canvas();
+            wl_ring(&mut img, centre, 27.0, 33.0, base + extra, 290.0);
+            out.push((format!("air_soft_{k}_whip{suffix}"), img));
+        }
+    }
+    out
+}
+
+/// Whether the whip hangs coiled on his belt in this pose: everywhere except the attacks that
+/// have it in his hand (the light whips, the heavy, the air spin and heavy, the special).
+fn jh_belt_whip(frame: Frame) -> bool {
+    !matches!(
+        frame,
+        Frame::Punch(_) | Frame::Soft(_) | Frame::CrouchSoft(_) | Frame::CrouchHard(_) | Frame::Hard(_) | Frame::AirSoft(_) | Frame::AirHard(_) | Frame::Summon(_)
+    )
+}
+
+/// Junkhead's poses and the whip layers over them.
+fn jh_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
+    let parts = cb_split(default);
+    let mut frames = Vec::new();
+    for f in cb_frame_list() {
+        let (body, mark) = cb_drawing_with(&parts, f, jh_spec, jh_belt_whip(f));
+        frames.push((f.file_stem(), body.to_png()));
+        frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
+    }
+    frames.extend(jh_whip_layers());
+    frames
+}
+
+/// The poses that use the whip, each with its layer on top, for a quick look.
+fn jh_whip_sheet(default: &Grid) -> image::RgbaImage {
+    let parts = cb_split(default);
+    let shots: [(Frame, &str); 14] = [
+        (Frame::Punch(0), "punch_0_whip"),
+        (Frame::Punch(1), "punch_1_whip"),
+        (Frame::Punch(1), "punch_1_whipx"),
+        (Frame::Punch(3), "punch_3_whip"),
+        (Frame::CrouchSoft(1), "crouch_soft_1_whip"),
+        (Frame::Hard(1), "hard_1_whip"),
+        (Frame::Hard(2), "hard_2_whip"),
+        (Frame::Hard(3), "hard_3_whip"),
+        (Frame::AirSoft(1), "air_soft_1_whip"),
+        (Frame::AirHard(1), "air_hard_1_whip"),
+        (Frame::Summon(2), "whip_ring_1"),
+        (Frame::Summon(4), "summon_4_whip_hi"),
+        (Frame::Summon(4), "summon_4_whip_lo"),
+        (Frame::Summon(5), "summon_5_whip"),
+    ];
+    let layers: std::collections::HashMap<String, image::RgbaImage> = jh_whip_layers().into_iter().collect();
+    let (cols, scale) = (3u32, 3u32);
+    let (cw, ch) = (WHIP_W as u32 * scale + 8, FULL_H as u32 * scale + 8);
+    let rows = (shots.len() as u32 + cols - 1) / cols;
+    let mut sheet = image::RgbaImage::from_pixel(cols * cw, rows * ch, image::Rgba([196, 214, 232, 255]));
+    for (i, (frame, layer)) in shots.iter().enumerate() {
+        let (mut body, _) = cb_drawing_with(&parts, *frame, jh_spec, jh_belt_whip(*frame));
+        let mut body = body.to_png();
+        junkhead_recolour(&mut body);
+        let mut cell = image::RgbaImage::new(WHIP_W as u32, FULL_H as u32);
+        image::imageops::overlay(&mut cell, &body, 0, 0);
+        image::imageops::overlay(&mut cell, &layers[*layer], 0, 0);
+        let (ox, oy) = ((i as u32 % cols) * cw + 4, (i as u32 / cols) * ch + 4);
+        for y in 0..FULL_H as u32 * scale {
+            for x in 0..WHIP_W as u32 * scale {
+                let p = cell.get_pixel(x / scale, y / scale);
+                if p[3] > 0 {
+                    sheet.put_pixel(ox + x, oy + y, *p);
+                }
+            }
+        }
+    }
+    sheet
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next().unwrap_or_else(|| "ayz_default.png".into());
@@ -3711,6 +3983,15 @@ fn main() {
         return;
     }
 
+    // `--junkhead-whip <out.png>`: his whip poses (the body and the whip layer together), no files
+    // are written to the game.
+    if first == "--junkhead-whip" {
+        let out = args.next().unwrap_or_else(|| "junkhead_whip.png".into());
+        jh_whip_sheet(&jh_default()).save(&out).unwrap();
+        println!("wrote {out}");
+        return;
+    }
+
     // `--cowboy-bare <out.png>`: the Cowboy From Hell's default pose at the real pixel size (same
     // canvas as `--junkhead-bare`), for editing by hand.
     if first == "--cowboy-bare" {
@@ -3754,7 +4035,7 @@ fn main() {
         let default = jh_default();
         let folder = assets.join("sprites").join("junkhead");
         std::fs::create_dir_all(&folder).unwrap();
-        for (frame, mut img) in cb_frames(&default) {
+        for (frame, mut img) in jh_frames(&default) {
             blacken(&mut img);
             img.save(folder.join(format!("{frame}.png"))).unwrap();
         }

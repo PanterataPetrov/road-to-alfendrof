@@ -22,6 +22,13 @@ pub struct CharacterData {
     /// this character (50 if left out). A long-reach fighter sets it higher.
     #[serde(default)]
     pub ai_range: Option<i32>,
+    /// How many air attacks one jump allows (1 if left out). With more than 1, an air light attack
+    /// that connects can be followed by another air light attack, or cancelled into the air heavy.
+    #[serde(default)]
+    pub air_chain: Option<u32>,
+    /// The character's moves have whip layers drawn over the body (`anim::whip_layer`).
+    #[serde(default)]
+    pub whip: bool,
     /// The CPU plays this character as a zoner: it backs away to keep its distance and shoots.
     #[serde(default)]
     pub keeps_distance: bool,
@@ -250,6 +257,13 @@ pub struct MoveData {
     /// goes either high or low).
     #[serde(default)]
     pub low_hitbox: Option<Rect>,
+    /// An air move that hangs in the air (no gravity) from its start until its last active frame.
+    #[serde(default)]
+    pub hover: bool,
+    /// The hitbox heights are measured from the ground, not from the fighter's feet (an air move
+    /// that lashes at the opponent on the floor).
+    #[serde(default)]
+    pub world_y: bool,
 }
 
 impl MoveData {

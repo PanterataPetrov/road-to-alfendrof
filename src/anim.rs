@@ -165,12 +165,69 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     }
 }
 
+/// Width of a whip layer; its left edge lines up with the body drawing's (see `render`).
+pub const WHIP_W: i32 = 176;
+
+/// Every whip layer a character with `whip` can show (file names without the extension).
+pub fn whip_stems() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for k in 0..4 {
+        v.push(format!("punch_{k}_whip"));
+    }
+    v.extend(["punch_1_whipx".into(), "punch_3_whipx".into(), "crouch_soft_0_whip".into(), "crouch_soft_1_whip".into()]);
+    v.extend((0..4).map(|k| format!("hard_{k}_whip")));
+    v.extend(["air_hard_0_whip".into(), "air_hard_1_whip".into()]);
+    v.extend((0..4).map(|k| format!("whip_ring_{k}")));
+    v.extend(["summon_4_whip_hi".into(), "summon_4_whip_lo".into(), "summon_5_whip".into()]);
+    for k in 0..2 {
+        v.push(format!("air_soft_{k}_whip"));
+        v.push(format!("air_soft_{k}_whipb"));
+    }
+    v
+}
+
+/// The whip layer to show over the body now, if any. The layer is named after the body drawing
+/// (`punch_1` -> `punch_1_whip`): cocked back while winding up, out straight on the strike (the
+/// `x` one is the longer whip after a combo finisher), and slack in recovery. The spin overhead
+/// is a ring that turns a quarter every 3 frames, the lash goes `_hi` or `_lo`, and the air spin
+/// circles him (the `b` drawing every other 3 frames).
+pub fn whip_layer(f: &Fighter, data: &CharacterData) -> Option<String> {
+    if !data.whip || f.state != FighterState::Attack {
+        return None;
+    }
+    let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+    if mv.anim == AnimKind::Kicks {
+        return None;
+    }
+    let stem = attack_frame(f, data).file_stem();
+    let frame = f.state_frame;
+    let last_active = mv.startup + (mv.hits.max(1) - 1) * mv.hit_gap + mv.active;
+    match mv.anim {
+        AnimKind::Summon => {
+            if frame <= mv.startup {
+                // The raised arm comes up during the first quarter; after that the whip spins.
+                (frame > mv.startup / 4).then(|| format!("whip_ring_{}", (frame / 3) % 4))
+            } else if frame <= last_active + 8 {
+                Some(format!("{stem}_whip_{}", if f.aim_low { "lo" } else { "hi" }))
+            } else {
+                Some(format!("{stem}_whip"))
+            }
+        }
+        AnimKind::Soft if mv.air => Some(format!("{stem}_whip{}", if (frame / 3) % 2 == 1 { "b" } else { "" })),
+        _ => {
+            let strike = frame > mv.startup && frame <= last_active;
+            let longer = f.boosted && strike && mv.boost_reach > 0;
+            Some(format!("{stem}_whip{}", if longer { "x" } else { "" }))
+        }
+    }
+}
+
 /// The move's own drawings, played along its startup, active and recovery.
 fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
     let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
     let frame = f.state_frame;
     let startup = mv.startup.max(1);
-    if mv.air {
+    if mv.air && mv.anim != AnimKind::Summon {
         let strike = (frame > mv.startup) as usize;
         return match mv.anim {
             AnimKind::Soft => Frame::AirSoft(strike),
@@ -289,6 +346,64 @@ mod tests {
             })
             .collect();
         assert_eq!(seen, [Frame::Lecture(0), Frame::Lecture(0), Frame::Lecture(1), Frame::Lecture(2), Frame::Lecture(3)]);
+    }
+
+    fn junkhead() -> CharacterData {
+        CharacterData::from_ron(include_str!("../assets/characters/junkhead.ron")).unwrap()
+    }
+
+    #[test]
+    fn every_whip_layer_the_game_can_ask_for_exists_in_the_list_and_on_disk() {
+        let j = junkhead();
+        let stems = whip_stems();
+        let mut used = std::collections::BTreeSet::new();
+        for (index, mv) in j.moves.iter().enumerate() {
+            for boosted in [false, true] {
+                for aim_low in [false, true] {
+                    for frame in 1..=mv.total_frames() + 2 {
+                        let mut f = Fighter::new(0, 1);
+                        f.state = FighterState::Attack;
+                        f.attack = index;
+                        f.state_frame = frame;
+                        f.boosted = boosted;
+                        f.aim_low = aim_low;
+                        if let Some(name) = whip_layer(&f, &j) {
+                            used.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(!used.is_empty());
+        for name in &used {
+            assert!(stems.contains(name), "{name} is shown but is not in whip_stems()");
+        }
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sprites/junkhead");
+        for name in &stems {
+            assert!(folder.join(format!("{name}.png")).exists(), "{name}.png is missing: run gen_ayz --junkhead-frames");
+        }
+    }
+
+    #[test]
+    fn the_whip_follows_the_moves_phases() {
+        let j = junkhead();
+        let layer = |name: &str, frame: u32, boosted: bool| {
+            let mut f = Fighter::new(0, 1);
+            f.state = FighterState::Attack;
+            f.attack = j.moves.iter().position(|m| m.name == name).unwrap();
+            f.state_frame = frame;
+            f.boosted = boosted;
+            whip_layer(&f, &j)
+        };
+        assert_eq!(layer("Whip", 2, false).as_deref(), Some("punch_0_whip"), "cocked back");
+        assert_eq!(layer("Whip", 6, false).as_deref(), Some("punch_1_whip"), "out straight");
+        assert_eq!(layer("Whip", 6, true).as_deref(), Some("punch_1_whipx"), "longer after a finisher");
+        assert_eq!(layer("Whip", 12, true).as_deref(), Some("punch_1_whip"), "back to normal in recovery");
+        assert_eq!(layer("Jump Kick", 8, false), None, "the kick has no whip");
+        assert!(layer("Whip Storm", 20, false).unwrap().starts_with("whip_ring_"), "spinning");
+        assert_eq!(layer("Whip Storm", 38, false).as_deref(), Some("summon_4_whip_hi"));
+        assert_eq!(layer("Air Whip Storm", 20, false).map(|s| s.starts_with("whip_ring_")), Some(true), "the air special spins too");
+        assert!(layer("Whip Spin", 7, false).unwrap().starts_with("air_soft_1_whip"));
     }
 
     #[test]

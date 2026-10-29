@@ -220,7 +220,8 @@ impl GameState {
         } else {
             (f.x - (r.x + w) * PX, f.x - r.x * PX)
         };
-        Some([x0, f.y + r.y * PX, x1, f.y + (r.y + r.h) * PX])
+        let base = if mv.world_y { 0 } else { f.y };
+        Some([x0, base + r.y * PX, x1, base + (r.y + r.h) * PX])
     }
 
     /// World-space box `[x0, y0, x1, y1]` in subpixel units.
@@ -1792,5 +1793,126 @@ mod tests {
         let x = s.fighters[0].x;
         assert!(b[0] < x - 40 * PX && b[2] > x + 40 * PX, "reaches both in front of and behind him");
         assert!(b[3] - b[1] >= 70 * PX, "from his head to his legs");
+    }
+
+    /// Junkhead jumps over a passive opponent and presses `button` whenever the move he is doing has
+    /// just connected (and once to start). Returns the state and the names of the air moves he used.
+    fn air_combo(first: u16, then: &[u16]) -> (GameState, Vec<String>) {
+        let j = junkhead();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 24 * PX;
+        s.step([Input(Input::UP), Input(0)], [&j, &evilayz()]);
+        for _ in 0..4 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+        }
+        let mut names = Vec::new();
+        let mut next = then.iter();
+        let mut button = Some(first);
+        let mut pressed_last = false;
+        for _ in 0..70 {
+            let f = &s.fighters[0];
+            let ready = f.state == FighterState::Jump || (f.state == FighterState::Attack && f.hit_done);
+            // Tap (never hold) the next button once the move in progress has connected.
+            let press = match button {
+                Some(b) if ready && !pressed_last => b,
+                _ => 0,
+            };
+            pressed_last = press != 0;
+            let before = (s.fighters[0].attack, s.fighters[0].air_count);
+            s.step([Input(press), Input(0)], [&j, &evilayz()]);
+            let f = &s.fighters[0];
+            if f.state == FighterState::Attack && f.state_frame == 0 && (f.attack, f.air_count) != before {
+                names.push(j.moves[f.attack].name.clone());
+                button = next.next().copied();
+            }
+        }
+        (s, names)
+    }
+
+    #[test]
+    fn junkhead_can_chain_three_air_lights_in_one_jump() {
+        let (s, names) = air_combo(Input::LIGHT, &[Input::LIGHT, Input::LIGHT, Input::LIGHT]);
+        assert_eq!(names, ["Whip Spin", "Whip Spin", "Whip Spin"], "three air lights, and no fourth");
+        assert!(Fighter::MAX_HEALTH - s.fighters[1].health >= 26 * 3, "they hit, took {}", Fighter::MAX_HEALTH - s.fighters[1].health);
+    }
+
+    #[test]
+    fn a_connected_air_light_can_be_cancelled_into_the_air_heavy_which_ends_the_chain() {
+        let (_, names) = air_combo(Input::LIGHT, &[Input::HEAVY, Input::LIGHT]);
+        assert_eq!(names, ["Whip Spin", "Air Whip Pull"], "the heavy ends the chain");
+    }
+
+    #[test]
+    fn the_air_heavy_works_on_its_own_and_pulls_him_towards_the_opponent() {
+        let j = junkhead();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 90 * PX;
+        s.step([Input(Input::UP), Input(0)], [&j, &evilayz()]);
+        for _ in 0..4 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+        }
+        s.step([Input(Input::HEAVY), Input(0)], [&j, &evilayz()]);
+        assert_eq!(j.moves[s.fighters[0].attack].name, "Air Whip Pull");
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+        }
+        assert!(Fighter::MAX_HEALTH - s.fighters[1].health >= 55, "it hit");
+        let gap = (s.fighters[1].x - s.fighters[0].x).abs() / PX;
+        assert!(gap < 40, "he was pulled in, gap {gap}");
+    }
+
+    #[test]
+    fn the_special_works_in_the_air_hangs_there_and_still_lashes_high_or_low_at_the_floor() {
+        let j = junkhead();
+        let storm = |aim_low: bool, foe_input: u16| {
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = 80 * PX;
+            s.fighters[0].meter = Fighter::METER_MAX;
+            s.step([Input(Input::UP), Input(foe_input)], [&j, &evilayz()]);
+            for _ in 0..4 {
+                s.step([Input(0), Input(foe_input)], [&j, &evilayz()]);
+            }
+            s.step([Input(Input::SPECIAL), Input(foe_input)], [&j, &evilayz()]);
+            assert_eq!(j.moves[s.fighters[0].attack].name, "Air Whip Storm");
+            s.fighters[0].aim_low = aim_low;
+            let height = s.fighters[0].y;
+            let mut lowest = height;
+            for _ in 0..60 {
+                s.step([Input(0), Input(foe_input)], [&j, &evilayz()]);
+                if s.fighters[0].state == FighterState::Attack && s.fighters[0].state_frame < 40 {
+                    lowest = lowest.min(s.fighters[0].y);
+                }
+            }
+            assert!(lowest > height - 3 * PX, "he hangs in the air while he spins, {lowest} vs {height}");
+            s
+        };
+        let hit = storm(false, 0);
+        assert_eq!(Fighter::MAX_HEALTH - hit.fighters[1].health, 150);
+        assert_eq!(hit.fighters[0].meter, 0);
+        assert_eq!(storm(false, Input::DOWN).fighters[1].health, Fighter::MAX_HEALTH, "crouching ducks the high lash");
+        assert_eq!(storm(true, Input::DOWN).fighters[1].health, Fighter::MAX_HEALTH - 150, "the low lash gets a crouching fighter");
+    }
+
+    #[test]
+    fn other_characters_still_get_one_air_attack_per_jump() {
+        let c = cowboy();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 24 * PX;
+        s.step([Input(Input::UP), Input(0)], [&c, &evilayz()]);
+        for _ in 0..4 {
+            s.step([Input(0), Input(0)], [&c, &evilayz()]);
+        }
+        let mut used = 0;
+        for _ in 0..70 {
+            let before = s.fighters[0].air_count;
+            s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
+            s.step([Input(0), Input(0)], [&c, &evilayz()]);
+            used += (s.fighters[0].air_count > before) as u32;
+        }
+        assert_eq!(used, 1, "the cowboy gets a single air attack");
     }
 }
