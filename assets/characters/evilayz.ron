@@ -2,6 +2,9 @@
 // slower and heavier-hitting. He uses the same drawings as Ayz, inverted.
 (
     name: "Negaprofessor",
+    subtitle: Some("Alfendrof..."),
+    // Drawn as flickering, corrupted text.
+    corrupted_subtitle: true,
     sprites: Some("evilayz"),
     // Always the last name on the character select list.
     menu_last: true,

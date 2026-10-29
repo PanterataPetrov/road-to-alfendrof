@@ -1,45 +1,58 @@
-// Junkhead: for now identical to the Cowboy From Hell (same moves), except the tank top is black, the tattoo is red and he wears plain shoes.
-// Cowboy From Hell: completely bald, a dark brown ribbed tank top, silver chain and earrings, grey
-// jeans, big brown cowboy boots with spurs, and a whale tattoo on his left arm.
-// Light is a punch that alternates between his right and left arm while you spam it.
-// Heavy is a leap with three kicks downwards.
-// Special (the tattoo glows when the meter is full) curses the opponent: a glowing blue ring with
-// a petal glow appears round them, split into a left half and a right half. Hitting them with any
-// other attack from the left removes the left half, from the right the right half; with both
-// gone the ring squeezes shut and deals the special's damage.
-// See ayz.ron for what each field means; leap / leap_vx / hits / hit_gap / curse are explained in
-// src/sim/data.rs.
+// Junkhead: a whip fighter. Looks are the Cowboy From Hell's with a black tank top, red tattoo, plain
+// shoes and his own head; his drawings for the moves below are still the cowboy's placeholders.
+//
+// Light: whip from the right, whip from the left (the arms alternate while you spam it), and as
+//        the third hit of a combo a jump kick (the finisher). If the finisher lands, his next
+//        standing whip has extra reach (once). Crouching Light is a low whip; in the air Light
+//        spins the whip around him from his head to his legs.
+// Heavy: lash out with the whip, grab the opponent and pull himself to them. If the opponent
+//        blocks, he is only pulled half the way.
+// Special (tattoo glows when the meter is full): he spins the whip three times (just the wind-up,
+//        no damage), then lashes out either HIGH (head and chest: crouch under it) or LOW (the
+//        legs: jump over it), picked at random each time. If it connects the opponent is dragged to
+//        him and stunned.
+// See ayz.ron for what each field means; finisher_move / boost_reach / pull_self / pull_foe /
+// pull_gap / low_hitbox / leap / hits are explained in src/sim/data.rs.
 (
     name: "Junkhead",
+    subtitle: Some("Producer of his own crack"),
     sprites: Some("junkhead"),
     color: (0.85, 0.58, 0.32),
     walk_speed: 210,
     jump_speed: 1050,
+    // The CPU starts whipping from 65 px away (his whip reaches about 77 px centre to centre).
+    ai_range: Some(65),
     // A third less health than the others (667 of their 1000).
     health: Some(667),
     // His special meter fills about 2.35 times as slowly (135% slower).
     meter_gain_pct: Some(43),
     special_mark: Some(Scar(color: (0.78, 0.16, 0.16), glow: (1.0, 0.36, 0.3))),
     moves: [
-        (name: "Punch", button: Light, crouching: false, anim: Punch, walk_pct: 60,
-         startup: 4, active: 3, recovery: 7, damage: 30, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 12, y: 28, w: 27, h: 12)),
-        (name: "Low Punch", button: Light, crouching: true, anim: Soft, walk_pct: 0,
-         startup: 5, active: 3, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 12, y: 0, w: 27, h: 12)),
-        (name: "Dive Kicks", button: Heavy, crouching: false, anim: Kicks, walk_pct: 0,
-         leap: 750, leap_vx: 150, hits: 3, hit_gap: 8, guard_hits: Some(3),
-         startup: 6, active: 6, recovery: 12, damage: 28, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 2, y: -6, w: 32, h: 28)),
-        (name: "Air Punch", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
-         startup: 4, active: 8, recovery: 8, damage: 32, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 8, y: 0, w: 28, h: 24)),
-        (name: "Air Slam", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
-         startup: 9, active: 7, recovery: 10, damage: 66, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
-         hitbox: (x: 6, y: -4, w: 30, h: 34)),
-        (name: "Hell's Rose", button: Special, crouching: false, anim: Summon, walk_pct: 0,
-         startup: 22, active: 3, recovery: 22, damage: 200, hitstun: 0, blockstun: 0, knockback: 0, hitstop: 0,
-         hitbox: (x: 0, y: 0, w: 0, h: 0),
-         curse: Some((duration: 420, squeeze: 24))),
+        (name: "Whip", button: Light, crouching: false, anim: Punch, walk_pct: 60, boost_reach: 45,
+         startup: 5, active: 3, recovery: 9, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 10, y: 26, w: 50, h: 14)),
+        (name: "Low Whip", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 6, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 10, y: 0, w: 62, h: 10)),
+        // The finisher of a light combo; it has to come after the normal Whip.
+        (name: "Jump Kick", button: Light, crouching: false, anim: Kicks, walk_pct: 0, finisher_move: true,
+         leap: 700, leap_vx: 130,
+         startup: 6, active: 8, recovery: 12, damage: 40, hitstun: 16, blockstun: 10, knockback: 3, hitstop: 5,
+         hitbox: (x: 6, y: -4, w: 30, h: 30)),
+        (name: "Whip Pull", button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
+         pull_self: true, pull_gap: 24, guard_hits: Some(2),
+         startup: 14, active: 4, recovery: 26, damage: 60, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
+         hitbox: (x: 10, y: 22, w: 105, h: 16)),
+        (name: "Whip Spin", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         hits: 2, hit_gap: 8,
+         startup: 5, active: 5, recovery: 10, damage: 26, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: -48, y: -6, w: 96, h: 72)),
+        (name: "Whip Storm", button: Special, crouching: false, anim: Summon, walk_pct: 0,
+         pull_foe: true, pull_gap: 22,
+         startup: 36, active: 4, recovery: 28, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
+         // High: head and chest (a crouching fighter, 40 px tall, is under it).
+         hitbox: (x: 8, y: 42, w: 120, h: 12),
+         // Low: the legs (a fighter in the air is over it).
+         low_hitbox: Some((x: 8, y: 0, w: 120, h: 12))),
     ],
 )

@@ -90,6 +90,14 @@ pub struct Fighter {
     pub stun: u32,
     /// Freeze frames after contact. The fighter does nothing while this is above zero.
     pub hitstop: u32,
+    /// The next move with `boost_reach` gets its extra reach (set when a combo finisher lands), and
+    /// whether the current move is using it.
+    pub whip_boost: bool,
+    pub boosted: bool,
+    /// Subpixels this fighter is still being pulled along the ground (negative = left).
+    pub pull: i32,
+    /// The current move (with a `low_hitbox`) goes low instead of high.
+    pub aim_low: bool,
 }
 
 /// The input flag of a move's button.
@@ -120,6 +128,8 @@ impl Fighter {
     pub const STAND_HEIGHT: i32 = 55;
     pub const CROUCH_HEIGHT: i32 = 40;
     pub const KO_HEIGHT: i32 = 14;
+    /// How fast a pulled fighter is dragged, in subpixels per frame.
+    pub const PULL_SPEED: i32 = 14 * PX;
 
     pub fn new(x: i32, facing: i32) -> Self {
         Fighter {
@@ -154,6 +164,10 @@ impl Fighter {
             block_disabled: 0,
             stun: 0,
             hitstop: 0,
+            whip_boost: false,
+            boosted: false,
+            pull: 0,
+            aim_low: false,
         }
     }
 
@@ -200,6 +214,13 @@ impl Fighter {
         } else {
             self.finisher = false;
         }
+        // A move with extra reach spends the boost a finisher earned.
+        if mv.boost_reach > 0 {
+            self.boosted = self.whip_boost;
+            self.whip_boost = false;
+        } else {
+            self.boosted = false;
+        }
         // Spammed punches alternate arms; after a pause the right arm goes first again.
         if mv.anim == AnimKind::Punch {
             self.punch_side = if self.since_punch > 45 { 0 } else { self.punch_side ^ 1 };
@@ -227,6 +248,12 @@ impl Fighter {
             return;
         }
         self.buffer = Input::default();
+        // Being pulled (a whip) drags the fighter along the ground.
+        if self.pull != 0 {
+            let step = self.pull.signum() * self.pull.abs().min(Self::PULL_SPEED);
+            self.x += step;
+            self.pull -= step;
+        }
         self.state_frame += 1;
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
@@ -359,7 +386,9 @@ impl Fighter {
             (Input::LIGHT, Button::Light),
         ] {
             if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
-                if let Some(index) = data.find_move(button, crouching, false) {
+                // The third light attack of a combo may be a move of its own.
+                let finisher = if button == Button::Light && !crouching && self.combo == 2 { data.find_finisher() } else { None };
+                if let Some(index) = finisher.or_else(|| data.find_move(button, crouching, false)) {
                     self.begin_attack(index, &data.moves[index]);
                     return;
                 }

@@ -16,6 +16,7 @@
 // Fighters are about 55 px tall and 34 px wide.
 (
     name: "The Professor",
+    subtitle: Some("Probably not a real professor..."),
     sprites: Some("ayz"),
     color: (1.0, 0.60, 0.10),
     walk_speed: 200,

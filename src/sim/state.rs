@@ -86,6 +86,8 @@ impl GameState {
     pub const ROUNDS_TO_WIN: u8 = 2;
     /// A blocked hit takes this fraction of its damage (1/CHIP_DIVISOR) but never kills.
     const CHIP_DIVISOR: i32 = 10;
+    /// A blocked whip pulls its user only this much of the way (percent).
+    const PULL_BLOCKED_PCT: i32 = 50;
 
     pub fn new() -> Self {
         GameState {
@@ -128,6 +130,7 @@ impl GameState {
 
         match self.phase {
             Phase::Fighting => {
+                self.start_lashes(chars);
                 self.launch_projectiles(chars);
                 self.apply_curses(chars);
                 self.summon_minions(chars);
@@ -207,14 +210,15 @@ impl GameState {
         if !mv.is_active(f.state_frame) {
             return None;
         }
-        let r = mv.hitbox;
+        let r = if f.aim_low { mv.low_hitbox.unwrap_or(mv.hitbox) } else { mv.hitbox };
         if r.w <= 0 {
             return None; // a summon has no melee hit
         }
+        let w = r.w + if f.boosted { mv.boost_reach } else { 0 };
         let (x0, x1) = if f.facing > 0 {
-            (f.x + r.x * PX, f.x + (r.x + r.w) * PX)
+            (f.x + r.x * PX, f.x + (r.x + w) * PX)
         } else {
-            (f.x - (r.x + r.w) * PX, f.x - r.x * PX)
+            (f.x - (r.x + w) * PX, f.x - r.x * PX)
         };
         Some([x0, f.y + r.y * PX, x1, f.y + (r.y + r.h) * PX])
     }
@@ -256,6 +260,7 @@ impl GameState {
             self.fighters[a].hitstop = mv.hitstop;
             let power = if self.fighters[a].finisher { 150 } else { 100 };
             let blocked = self.apply_hit(1 - a, mv, dir, blocks[1 - a], power);
+            self.apply_pulls(a, mv, blocked);
             self.gain_meter(a, mv, mv.damage * power / 100, blocked, chars[a].meter_gain_pct.unwrap_or(100));
             self.register_light_hit(a, mv, blocked);
             self.mark_curse(a);
@@ -275,6 +280,54 @@ impl GameState {
             }
         }
         any
+    }
+
+    /// A move with a `low_hitbox` picks, as it starts, whether it goes high or low at random (from
+    /// the frame and where everyone stands, so it is the same on every machine). The special spends
+    /// the meter when its lash comes out.
+    fn start_lashes(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            if f.state != FighterState::Attack {
+                continue;
+            }
+            let mv = &chars[owner].moves[f.attack];
+            if mv.low_hitbox.is_none() {
+                continue;
+            }
+            if f.state_frame == 0 {
+                let mut h = (self.frame).wrapping_mul(2_654_435_761)
+                    ^ (self.fighters[0].x as u32).wrapping_mul(40_503)
+                    ^ (self.fighters[1].x as u32).wrapping_mul(97_001)
+                    ^ (self.fighters[owner].health as u32).wrapping_mul(31)
+                    ^ owner as u32;
+                h = (h ^ (h >> 15)).wrapping_mul(2_246_822_519);
+                self.fighters[owner].aim_low = (h >> 13) & 1 == 1;
+            } else if f.state_frame == mv.startup + 1 && mv.button == super::data::Button::Special {
+                self.fighters[owner].meter = 0;
+            }
+        }
+    }
+
+    /// A whip that connects pulls the attacker towards the opponent, or the opponent towards the
+    /// attacker, until they are `pull_gap` pixels apart. A blocked hit only pulls the attacker half way.
+    fn apply_pulls(&mut self, attacker: usize, mv: &MoveData, blocked: bool) {
+        if !mv.pull_self && !mv.pull_foe {
+            return;
+        }
+        let (ax, dx) = (self.fighters[attacker].x, self.fighters[1 - attacker].x);
+        let travel = (ax - dx).abs() - mv.pull_gap * PX;
+        if travel <= 0 {
+            return;
+        }
+        let towards_foe = if dx > ax { 1 } else { -1 };
+        if mv.pull_self {
+            let amount = if blocked { travel * Self::PULL_BLOCKED_PCT / 100 } else { travel };
+            self.fighters[attacker].pull = towards_foe * amount;
+        }
+        if mv.pull_foe && !blocked {
+            self.fighters[1 - attacker].pull = -towards_foe * travel;
+        }
     }
 
     /// Damage and stun `defender` with `mv`, pushing them in direction `dir`.
@@ -525,6 +578,9 @@ impl GameState {
             let f = &mut self.fighters[attacker];
             f.combo = if was_finisher { 3 } else { (f.combo + 1).min(2) };
             f.combo_timer = 0;
+        }
+        if was_finisher && !blocked {
+            self.fighters[attacker].whip_boost = true;
         }
         if was_finisher && blocked {
             let dir = if self.fighters[attacker].x <= self.fighters[1 - attacker].x { -1 } else { 1 };
@@ -1597,5 +1653,144 @@ mod tests {
             step(&mut replay, a, b);
         }
         assert_eq!(hash(&live), hash(&replay));
+    }
+
+    fn junkhead() -> CharacterData {
+        CharacterData::from_ron(include_str!("../../assets/characters/junkhead.ron")).unwrap()
+    }
+
+    #[test]
+    fn junkheads_third_light_is_a_jump_kick_and_a_landed_finisher_gives_one_long_whip() {
+        let j = junkhead();
+        let step = |s: &mut GameState, a: u16, b: u16| s.step([Input(a), Input(b)], [&j, &evilayz()]);
+        let mut s = close_up();
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            s.fighters[1].x = s.fighters[0].x + 30 * PX;
+            step(&mut s, Input::LIGHT, 0);
+            names.push(j.moves[s.fighters[0].attack].name.clone());
+            for _ in 0..40 {
+                step(&mut s, 0, 0);
+            }
+        }
+        assert_eq!(names, ["Whip", "Whip", "Jump Kick"]);
+        assert!(s.fighters[0].whip_boost, "the finisher landed, so the next whip is boosted");
+
+        // 95 px away is out of a normal whip's reach (60 px) but inside the boosted one's (105 px).
+        for _ in 0..40 {
+            step(&mut s, 0, 0);
+        }
+        let before = s.fighters[1].health;
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 95 * PX;
+        step(&mut s, Input::LIGHT, 0);
+        for _ in 0..30 {
+            step(&mut s, 0, 0);
+        }
+        assert_eq!(before - s.fighters[1].health, 28, "the boosted whip reaches");
+        assert!(!s.fighters[0].whip_boost, "and the boost is spent");
+
+        for _ in 0..80 {
+            step(&mut s, 0, 0);
+        }
+        let before = s.fighters[1].health;
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 95 * PX;
+        step(&mut s, Input::LIGHT, 0);
+        for _ in 0..30 {
+            step(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[1].health, before, "the next whip is back to normal reach");
+    }
+
+    #[test]
+    fn the_whip_pull_drags_him_to_the_opponent_but_only_half_way_if_it_is_blocked() {
+        let j = junkhead();
+        let gap_after = |foe_input: u16| {
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = 100 * PX;
+            for _ in 0..80 {
+                let a = if s.frame == 0 { Input::HEAVY } else { 0 };
+                s.step([Input(a), Input(foe_input)], [&j, &evilayz()]);
+            }
+            ((s.fighters[1].x - s.fighters[0].x) / PX, Fighter::MAX_HEALTH - s.fighters[1].health)
+        };
+        let (gap, taken) = gap_after(0);
+        assert!((22..=26).contains(&gap), "pulled right up to the opponent, gap {gap}");
+        assert_eq!(taken, 60);
+        let (gap, taken) = gap_after(Input::BLOCK);
+        assert!((55..=70).contains(&gap), "blocked: only about half of the 76 px, gap {gap}");
+        assert!(taken < 60, "a blocked whip only chips, took {taken}");
+    }
+
+    #[test]
+    fn the_whip_storm_goes_high_or_low_at_random_and_drags_a_victim_in_and_stuns_them() {
+        let j = junkhead();
+        // Both outcomes happen, depending on the moment.
+        let mut seen = [false; 2];
+        for frame in 0..60 {
+            let mut s = GameState::new();
+            s.frame = frame;
+            s.fighters[0].meter = Fighter::METER_MAX;
+            s.step([Input(Input::SPECIAL), Input(0)], [&j, &evilayz()]);
+            seen[s.fighters[0].aim_low as usize] = true;
+        }
+        assert_eq!(seen, [true, true], "it should sometimes go high and sometimes low");
+
+        // Plays the special with the aim forced; the opponent presses `foe_input` (and jumps if `jump`).
+        let storm = |aim_low: bool, foe_input: u16, jump: bool| {
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = 80 * PX;
+            s.fighters[0].meter = Fighter::METER_MAX;
+            for _ in 0..60 {
+                let a = if s.frame == 0 { Input::SPECIAL } else { 0 };
+                s.step([Input(a), Input(foe_input)], [&j, &evilayz()]);
+                if s.frame == 1 {
+                    s.fighters[0].aim_low = aim_low;
+                }
+                // The opponent jumps during the spins, so they are in the air when the lash comes out.
+                if jump && s.frame == 8 {
+                    s.fighters[1].vy = 1050;
+                    s.fighters[1].state = FighterState::Jump;
+                }
+            }
+            s
+        };
+        let hit = storm(false, 0, false);
+        assert_eq!(Fighter::MAX_HEALTH - hit.fighters[1].health, 150);
+        assert_eq!(hit.fighters[1].state, FighterState::Hitstun, "stunned");
+        let gap = (hit.fighters[1].x - hit.fighters[0].x) / PX;
+        assert!((20..=24).contains(&gap), "dragged right up to him, gap {gap}");
+        assert_eq!(hit.fighters[0].meter, 0, "the special spends the meter");
+
+        assert_eq!(storm(false, Input::DOWN, false).fighters[1].health, Fighter::MAX_HEALTH, "crouching ducks the high lash");
+        assert_eq!(storm(true, 0, false).fighters[1].health, Fighter::MAX_HEALTH - 150, "the low lash hits a standing fighter");
+        assert_eq!(storm(true, Input::DOWN, false).fighters[1].health, Fighter::MAX_HEALTH - 150, "and a crouching one");
+        assert_eq!(storm(true, 0, true).fighters[1].health, Fighter::MAX_HEALTH, "jumping clears the low lash");
+    }
+
+    #[test]
+    fn the_air_whip_spin_covers_both_sides_of_him() {
+        let j = junkhead();
+        let mut s = GameState::new();
+        s.step([Input(Input::UP), Input(0)], [&j, &evilayz()]);
+        for _ in 0..5 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+        }
+        s.step([Input(Input::LIGHT), Input(0)], [&j, &evilayz()]);
+        let mut box_seen = None;
+        for _ in 0..20 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+            if let Some(b) = s.hitbox(0, &j) {
+                box_seen = Some(b);
+                break;
+            }
+        }
+        let b = box_seen.expect("the spin should become active");
+        let x = s.fighters[0].x;
+        assert!(b[0] < x - 40 * PX && b[2] > x + 40 * PX, "reaches both in front of and behind him");
+        assert!(b[3] - b[1] >= 70 * PX, "from his head to his legs");
     }
 }

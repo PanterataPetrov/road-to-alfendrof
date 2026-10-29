@@ -25,6 +25,7 @@ impl Plugin for MenuPlugin {
                         .before(menu_labels),
                     menu_nav,
                     menu_labels,
+                    glitch_subtitles,
                     menu_camera.run_if(not(in_state(AppState::Fight))),
                 ),
             );
@@ -61,7 +62,14 @@ struct Item {
     portrait: Option<Handle<Image>>,
     /// A smaller line under the name ("Arch-Historian").
     subtitle: Option<String>,
+    /// The subtitle glitches like corrupted text.
+    corrupted: bool,
 }
+
+/// A subtitle drawn as flickering, corrupted text: it keeps its true wording but letters keep
+/// turning into noise, and it jitters and changes colour.
+#[derive(Component)]
+struct Glitch(String);
 
 /// A portrait next to a menu item: it grows a little while that item is selected.
 #[derive(Component)]
@@ -69,7 +77,7 @@ struct Portrait(usize);
 
 impl Item {
     fn new(label: impl Into<String>, color: Color) -> Self {
-        Item { label: label.into(), color, enabled: true, portrait: None, subtitle: None }
+        Item { label: label.into(), color, enabled: true, portrait: None, subtitle: None, corrupted: false }
     }
 }
 
@@ -102,15 +110,18 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
 
     // Items with pictures need more room: the pictures are square, as tall as their row.
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
-    let spacing = if with_pictures { (150.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
-    let top = if with_pictures { 50.0 } else { 40.0 };
+    let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
+    let top = if with_pictures { 56.0 } else { 40.0 };
     for (index, item) in items.into_iter().enumerate() {
         let y = top - index as f32 * spacing;
         let e = spawn_text(commands, state.clone(), item.label.clone(), 16.0, item.color, y);
         commands.entity(e).insert(MenuItem { index, label: item.label, color: item.color, enabled: item.enabled });
         if let Some(sub) = item.subtitle {
-            let e = spawn_text(commands, state.clone(), sub, 8.0, item.color.with_alpha(0.7), y - 11.0);
+            let e = spawn_text(commands, state.clone(), sub.clone(), 8.0, item.color.with_alpha(0.7), y - 11.0);
             commands.entity(e).insert(Transform::from_xyz(0.0, y - 11.0, 5.0));
+            if item.corrupted {
+                commands.entity(e).insert(Glitch(sub));
+            }
         }
         if let Some(image) = item.portrait {
             let size = (spacing - 4.0).min(40.0);
@@ -159,6 +170,7 @@ fn spawn_char_select(
         .map(|c| {
             let mut item = Item::new(c.name.clone(), Color::srgb(c.color.0, c.color.1, c.color.2));
             item.subtitle = c.subtitle.clone();
+            item.corrupted = c.corrupted_subtitle;
             // portraits/<sprite folder>.png, if there is one
             let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
             if crate::assets_dir().join(format!("portraits/{folder}.png")).exists() {
@@ -222,6 +234,37 @@ fn menu_labels(menu: Res<Menu>, mut items: Query<(&MenuItem, &mut Text2d, &mut T
         let selected = item.index == menu.cursor;
         text.0 = if selected { format!("> {} <", item.label) } else { item.label.clone() };
         color.0 = if selected || !item.enabled { item.color } else { item.color.with_alpha(0.55) };
+    }
+}
+
+/// Corrupt the glitching subtitles: every few frames some letters turn into noise, the line jitters
+/// sideways and flickers between red, violet and white.
+fn glitch_subtitles(time: Res<Time>, mut lines: Query<(&Glitch, &mut Text2d, &mut TextColor, &mut Transform)>) {
+    let tick = (time.elapsed_secs() * 14.0) as u32;
+    let noise = |n: u32| {
+        let mut h = n.wrapping_mul(0x9E37_79B1) ^ 0x85EB_CA6B;
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^ (h >> 12)
+    };
+    const JUNK: &[u8] = b"#%&@$?!/\\<>*^~|01";
+    for (Glitch(original), mut text, mut color, mut tf) in &mut lines {
+        let calm = noise(tick / 5) % 4 == 0;
+        text.0 = original
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let n = noise(tick.wrapping_mul(31).wrapping_add(i as u32 * 977));
+                if !calm && c != '.' && c != ' ' && n % 100 < 32 { JUNK[(n >> 8) as usize % JUNK.len()] as char } else { c }
+            })
+            .collect();
+        tf.translation.x = if calm { 0.0 } else { (noise(tick) % 7) as f32 - 3.0 };
+        color.0 = match noise(tick / 2) % 5 {
+            0 => Color::srgb(1.0, 0.2, 0.25),
+            1 => Color::srgb(0.7, 0.3, 1.0),
+            2 => Color::srgb(0.95, 0.95, 0.95),
+            _ => Color::srgb(0.75, 0.15, 0.3),
+        };
     }
 }
 

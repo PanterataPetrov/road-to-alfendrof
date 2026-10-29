@@ -8,6 +8,9 @@ pub struct CharacterData {
     /// A second line shown only in the character select ("Arch-Historian").
     #[serde(default)]
     pub subtitle: Option<String>,
+    /// The subtitle is drawn as glitching, corrupted text (the Negaprofessor).
+    #[serde(default)]
+    pub corrupted_subtitle: bool,
     /// Folder under `assets/sprites/` holding this character's drawings (the lower-cased name if left out).
     #[serde(default)]
     pub sprites: Option<String>,
@@ -15,6 +18,10 @@ pub struct CharacterData {
     pub color: (f32, f32, f32),
     pub walk_speed: i32,
     pub jump_speed: i32,
+    /// How close (centre to centre, in pixels) the CPU gets before it starts attacking when it plays
+    /// this character (50 if left out). A long-reach fighter sets it higher.
+    #[serde(default)]
+    pub ai_range: Option<i32>,
     /// The CPU plays this character as a zoner: it backs away to keep its distance and shoots.
     #[serde(default)]
     pub keeps_distance: bool,
@@ -223,6 +230,26 @@ pub struct MoveData {
     /// A projectile launched on the first active frame. It uses this move's damage and stun.
     #[serde(default)]
     pub projectile: Option<ProjectileData>,
+    /// A light move that is thrown instead of the normal light attack as the third hit of a combo
+    /// (the finisher). It must come after the normal light attack in the character's move list.
+    #[serde(default)]
+    pub finisher_move: bool,
+    /// Extra reach in pixels the move's hitbox gets once after a combo finisher has landed.
+    #[serde(default)]
+    pub boost_reach: i32,
+    /// On a hit the attacker is pulled towards the opponent until they are `pull_gap` pixels apart
+    /// (only half the way if the hit was blocked).
+    #[serde(default)]
+    pub pull_self: bool,
+    /// On a hit the opponent is dragged towards the attacker until they are `pull_gap` pixels apart.
+    #[serde(default)]
+    pub pull_foe: bool,
+    #[serde(default)]
+    pub pull_gap: i32,
+    /// A second hitbox: each time the move starts it randomly uses `hitbox` or this one (a lash that
+    /// goes either high or low).
+    #[serde(default)]
+    pub low_hitbox: Option<Rect>,
 }
 
 impl MoveData {
@@ -251,6 +278,11 @@ impl MoveData {
 impl CharacterData {
     pub fn from_ron(text: &str) -> Result<Self, ron::error::SpannedError> {
         ron::from_str(text)
+    }
+
+    /// The light move thrown as the third hit of a combo, if the character has one.
+    pub fn find_finisher(&self) -> Option<usize> {
+        self.moves.iter().position(|m| m.finisher_move)
     }
 
     /// The move triggered by `button`, preferring a crouching version when Down is held. Air

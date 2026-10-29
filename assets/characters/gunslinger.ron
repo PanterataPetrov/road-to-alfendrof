@@ -7,6 +7,7 @@
 // sprite folder (bullet_0.png, fedora_0.png ...).
 (
     name: "Gunslinger",
+    subtitle: Some("Fastest draw north of the Thames"),
     sprites: Some("gunslinger"),
     color: (0.85, 0.90, 0.40),
     // The CPU plays him as a zoner that backs away to keep its distance.

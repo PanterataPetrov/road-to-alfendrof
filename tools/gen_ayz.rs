@@ -1377,6 +1377,11 @@ fn soul_with_hair(hair: bool) -> Grid {
 
 /// A sprite read back from a PNG as letters, by exact colour.
 fn grid_from_png(path: &str) -> Grid {
+    grid_from_png_with(path, &[])
+}
+
+/// Like `grid_from_png`, with extra colours (checked first) that stand for a palette letter.
+fn grid_from_png_with(path: &str, extra: &[([u8; 3], char)]) -> Grid {
     let img = image::open(path).unwrap().to_rgba8();
     let letters: Vec<char> = "ABCDEFGHIJKLMNOPQRabcdefghijklmnopqrstuvwxyzSTUVWXYZ0123456789$!^*+=<>?;:/()|{}[],-_'\"~`\\tUàèìò".chars().collect();
     let table: Vec<(char, [u8; 3])> = letters.iter().filter_map(|&c| std::panic::catch_unwind(|| color(c)).ok().flatten().map(|rgb| (c, rgb))).collect();
@@ -1387,7 +1392,7 @@ fn grid_from_png(path: &str) -> Grid {
             if p[3] == 0 {
                 continue;
             }
-            let ch = table.iter().find(|(_, rgb)| rgb[..] == p.0[..3]).map(|(c, _)| *c).unwrap_or_else(|| panic!("unknown colour {:?} at {x},{y}", &p.0[..3]));
+            let ch = extra.iter().find(|(rgb, _)| rgb[..] == p.0[..3]).map(|(_, c)| *c).or_else(|| table.iter().find(|(_, rgb)| rgb[..] == p.0[..3]).map(|(c, _)| *c)).unwrap_or_else(|| panic!("unknown colour {:?} at {x},{y}", &p.0[..3]));
             g.set(x as i32, y as i32, ch);
         }
     }
@@ -2300,65 +2305,15 @@ fn junkhead_recolour(img: &mut image::RgbaImage) {
         }
 }
 
-/// Junkhead's default pose: the cowboy's with a wider jawline (his own head grid, +2 rows as in
-/// `cb_default`). The cheeks and chin stay a column further out on each side instead of tapering in,
-/// and the bottom corners of the jaw are cut by a pixel (the bottom row keeps the cowboy's width).
+/// Junkhead's default pose: the user's own finished 1x drawing (`tools/junkhead_final.png`, made
+/// from `--junkhead-bare`). Its black tank top and red tattoo are mapped back to the cowboy's
+/// tank-top and tattoo letters, so the pose code treats them like the cowboy's (`junkhead_recolour`
+/// turns them black and red again when the frames are written).
 fn jh_default() -> Grid {
-    let mut g = {
-        let d = cowboy_build(false);
-        let mut rows: Vec<Vec<char>> = vec![vec!['.'; d.w]; 2];
-        rows.extend((0..d.h).map(|y| d.row(y)));
-        Grid::from_rows(rows)
-    };
-    for (x, y, ch) in [
-        (9, 13, '?'), (20, 13, '>'),
-        (10, 14, '?'), (11, 14, '<'), (18, 14, '<'), (19, 14, '>'),
-    ] {
-        g.set(x, y, ch);
-    }
-    // Curly, lifted middle-length hair with a centre part, in the Professor's blue-black (k, with
-    // lighter curls l and shadow between them g). It rises into a bumpy puff above the head, is
-    // parted at x = 14, and falls in curls over the ears.
-    let hair: [(i32, &[(i32, i32)]); 12] = [
-        (0, &[(10, 12), (14, 16)]),
-        (1, &[(9, 18)]),
-        (2, &[(8, 20)]),
-        (3, &[(7, 21)]),
-        (4, &[(7, 21)]),
-        (5, &[(7, 21)]),
-        (6, &[(8, 13), (15, 20)]),
-        (7, &[(8, 11), (17, 20)]),
-        (8, &[(7, 10), (18, 21)]),
-        (9, &[(7, 9), (19, 21)]),
-        (10, &[(7, 8), (20, 21)]),
-        (11, &[(7, 8), (20, 21)]),
-    ];
-    for (y, spans) in hair {
-        for &(x0, x1) in spans {
-            for x in x0..=x1 {
-                g.set(x, y, 'k');
-            }
-        }
-    }
-    // The part: a thin line of scalp down the middle of the crown.
-    for y in 3..=5 {
-        g.set(14, y, '<');
-    }
-    // Curls: a lighter arc on top and a shadow underneath each one.
-    for (x, y) in [(11, 0), (15, 0), (10, 2), (13, 2), (16, 2), (19, 2), (8, 4), (11, 4), (17, 4), (20, 4), (9, 7), (19, 8), (7, 9), (21, 10)] {
-        g.set(x, y, 'l');
-    }
-    for (x, y) in [(12, 1), (16, 1), (11, 3), (14, 2), (18, 3), (9, 3), (20, 3), (12, 5), (16, 5), (9, 5), (19, 5), (8, 8), (21, 9), (7, 11), (21, 11)] {
-        g.set(x, y, 'g');
-    }
-    // A black goatee: a moustache under the nose, and a separate patch on the chin below the mouth.
-    for (x, y) in [(13, 14), (14, 14), (15, 14), (16, 14), (17, 14), (18, 14)] {
-        g.set(x, y, 'k');
-    }
-    for (x, y) in [(14, 16), (15, 16), (16, 16), (15, 17)] {
-        g.set(x, y, 'k');
-    }
-    g
+    grid_from_png_with(
+        "tools/junkhead_final.png",
+        &[([26, 26, 30], '$'), ([12, 12, 15], '!'), ([58, 58, 64], '^'), ([84, 16, 22], 'G'), ([176, 40, 44], 'A'), ([226, 88, 84], 'N')],
+    )
 }
 
 const CB_SKIN: &str = "<>?;:";
@@ -3745,6 +3700,27 @@ fn main() {
         return;
     }
 
+    // `--junkhead-bare <out.png>`: Junkhead's default pose at the real pixel size (one image pixel
+    // per sprite pixel, transparent background), for editing by hand.
+    if first == "--junkhead-bare" {
+        let out = args.next().unwrap_or_else(|| "junkhead_default_1x.png".into());
+        let mut one = jh_default().to_png();
+        junkhead_recolour(&mut one);
+        one.save(&out).unwrap(); // (the same drawing as tools/junkhead_final.png)
+        println!("wrote {out} ({}x{})", one.width(), one.height());
+        return;
+    }
+
+    // `--cowboy-bare <out.png>`: the Cowboy From Hell's default pose at the real pixel size (same
+    // canvas as `--junkhead-bare`), for editing by hand.
+    if first == "--cowboy-bare" {
+        let out = args.next().unwrap_or_else(|| "cowboy_default_1x.png".into());
+        let one = cb_default().to_png();
+        one.save(&out).unwrap();
+        println!("wrote {out} ({}x{})", one.width(), one.height());
+        return;
+    }
+
     // `--junkhead <out.png>`: only Junkhead's default pose next to the cowboy's, for approval (no
     // other poses are drawn).
     if first == "--junkhead" {
@@ -3782,8 +3758,12 @@ fn main() {
             blacken(&mut img);
             img.save(folder.join(format!("{frame}.png"))).unwrap();
         }
-        let mut portrait = image::open(assets.join("portraits/cowboy.png")).unwrap().to_rgba8();
-        blacken(&mut portrait);
+        // His portrait: the top of his default pose (head and chest) on a 40x40 canvas.
+        let mut full = default.to_png();
+        blacken(&mut full);
+        let mut portrait = image::RgbaImage::new(40, 40);
+        let top = image::imageops::crop_imm(&full, 0, 0, full.width(), 40.min(full.height())).to_image();
+        image::imageops::overlay(&mut portrait, &top, ((40 - full.width() as i64) / 2).max(0), 0);
         portrait.save(assets.join("portraits/junkhead.png")).unwrap();
         if let Some(sheet) = args.next() {
             let (a, b) = (cb_default().to_png(), {

@@ -1,7 +1,7 @@
 //! CPU opponent. It produces the same `Input` a player does, using only the game state, so it is
 //! deterministic: the same state always gives the same input.
 
-use crate::sim::{CharacterData, Fighter, FighterState, GameState, Input, Phase, PX};
+use crate::sim::{Button, CharacterData, Fighter, FighterState, GameState, Input, MoveData, Phase, PX};
 
 /// Centre-to-centre distance in pixels at which the CPU starts attacking.
 const ATTACK_RANGE: i32 = 50;
@@ -16,6 +16,11 @@ fn noise(window: u32, me: usize) -> u32 {
     x = x.wrapping_mul(2_246_822_519);
     x ^= x >> 13;
     x
+}
+
+/// How far from the fighter's centre a move can reach an opponent standing in front of it, in pixels.
+fn reach(mv: &MoveData, boosted: bool) -> i32 {
+    mv.hitbox.x + mv.hitbox.w + if boosted { mv.boost_reach } else { 0 } + Fighter::HALF_WIDTH / PX
 }
 
 pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
@@ -115,13 +120,30 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
         return Input(toward);
     }
 
-    if dist > ATTACK_RANGE {
+    // Buttons go down on one frame only.
+    let button = |flag: u16| Input(if first_frame { flag } else { 0 });
+    // A long-reach fighter starts attacking from further away, and a whip that just got its extra
+    // reach is used from that distance.
+    let light = data.find_move(Button::Light, false, false).map(|i| &data.moves[i]);
+    let mut range = data.ai_range.unwrap_or(ATTACK_RANGE);
+    if let Some(l) = light.filter(|l| m.whip_boost && l.boost_reach > 0) {
+        range = range.max(reach(l, true) - 15);
+    }
+    if dist > range {
+        // A lash that drags the opponent in, or pulls the fighter to them, works from a distance.
+        let special = data.find_move(Button::Special, false, false).map(|i| &data.moves[i]);
+        if special.is_some_and(|s| s.pull_foe && dist <= reach(s, false) - 25) && m.meter >= Fighter::METER_MAX && roll < 40 {
+            return button(Input::SPECIAL);
+        }
+        let heavy = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]);
+        if heavy.is_some_and(|h| h.pull_self && dist <= reach(h, false) - 15) && roll < 30 {
+            return button(Input::HEAVY);
+        }
         let hop = if roll < 10 && dist > 70 { Input::UP } else { 0 };
         return Input(toward | hop);
     }
 
-    // In range: pick an attack, retreat, or wait. Buttons go down on one frame only.
-    let button = |flag: u16| Input(if first_frame { flag } else { 0 });
+    // In range: pick an attack, retreat, or wait.
     // With the special ready, use it often.
     if m.meter >= crate::sim::Fighter::METER_MAX && roll < 45 {
         return button(Input::SPECIAL);
@@ -222,6 +244,27 @@ mod tests {
         let i = cpu_input(&s, 1, &c[1]);
         assert!(!i.has(Input::LEFT) && !i.has(Input::RIGHT), "should stand and attack the goblin, got {i:?}");
         assert!(i.has(Input::LIGHT) || i.has(Input::HEAVY) || i.has(Input::SPECIAL), "should attack, got {i:?}");
+    }
+
+    #[test]
+    fn a_long_reach_cpu_starts_attacking_from_further_away_than_a_normal_one() {
+        let j = CharacterData::from_ron(include_str!("../assets/characters/junkhead.ron")).unwrap();
+        let c = chars();
+        let mut s = GameState::new();
+        s.fighters[0].x = -150 * PX;
+        s.fighters[1].x = 80 * PX;
+        let mut start_gaps = Vec::new();
+        for _ in 0..1_500 {
+            let cpu = cpu_input(&s, 1, &j);
+            s.step([Input::default(), cpu], [&c[0], &j]);
+            let f = &s.fighters[1];
+            if f.state == FighterState::Attack && f.state_frame == 0 {
+                start_gaps.push((s.fighters[1].x - s.fighters[0].x).abs() / PX);
+            }
+        }
+        assert!(!start_gaps.is_empty(), "the CPU never attacked");
+        assert!(start_gaps.iter().any(|&g| g > ATTACK_RANGE + 5), "it should whip from beyond 55 px, gaps {start_gaps:?}");
+        assert!(s.fighters[0].health < Fighter::MAX_HEALTH, "and it should land some hits");
     }
 
     #[test]
