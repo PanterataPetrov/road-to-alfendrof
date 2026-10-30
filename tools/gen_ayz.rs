@@ -779,6 +779,8 @@ fn spec(frame: Frame) -> Spec {
         Frame::Grab(_) => s((Keep, pose((38.0, 27.0), (41.0, 29.0))), 1.0, 0, stand(), 1),
         // Only the Gunslinger has the volley; the others never draw these.
         Frame::Gun(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
+        Frame::Roll(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -4327,6 +4329,109 @@ fn jh_whip_sheet(default: &Grid) -> image::RgbaImage {
     sheet
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// The roll drawings, made from a character's crouch drawing.
+
+/// The rows and columns the opaque pixels of `img` cover: (x0, y0, x1, y1), inclusive.
+fn opaque_bounds(img: &image::RgbaImage) -> Option<(u32, u32, u32, u32)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in img.enumerate_pixels() {
+        if p[3] > 0 {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    (x0 != u32::MAX).then_some((x0, y0, x1, y1))
+}
+
+/// Resize to `w` x `h` taking the nearest pixel, so no new colours appear.
+fn nearest_resize(img: &image::RgbaImage, w: u32, h: u32) -> image::RgbaImage {
+    let mut out = image::RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let (sx, sy) = (((x as f32 + 0.5) * img.width() as f32 / w as f32) as u32, ((y as f32 + 0.5) * img.height() as f32 / h as f32) as u32);
+            out.put_pixel(x, y, *img.get_pixel(sx.min(img.width() - 1), sy.min(img.height() - 1)));
+        }
+    }
+    out
+}
+
+/// Turn clockwise by `deg` degrees, taking the nearest pixel, into a square big enough for any angle.
+/// Single-pixel holes the sampling leaves are filled from their neighbours.
+fn rotate_clockwise(img: &image::RgbaImage, deg: f32) -> image::RgbaImage {
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let side = (w * w + h * h).sqrt().ceil() as u32 + 2;
+    let (sin, cos) = deg.to_radians().sin_cos();
+    let mut out = image::RgbaImage::new(side, side);
+    for oy in 0..side {
+        for ox in 0..side {
+            let (dx, dy) = (ox as f32 + 0.5 - side as f32 / 2.0, oy as f32 + 0.5 - side as f32 / 2.0);
+            let (sx, sy) = (dx * cos + dy * sin + w / 2.0, -dx * sin + dy * cos + h / 2.0);
+            if sx >= 0.0 && sy >= 0.0 && sx < w && sy < h {
+                out.put_pixel(ox, oy, *img.get_pixel(sx as u32, sy as u32));
+            }
+        }
+    }
+    let copy = out.clone();
+    for y in 1..side - 1 {
+        for x in 1..side - 1 {
+            if copy.get_pixel(x, y)[3] > 0 {
+                continue;
+            }
+            let mut near: Vec<image::Rgba<u8>> = Vec::new();
+            for (dx, dy) in [(-1i32, -1i32), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let p = *copy.get_pixel((x as i32 + dx) as u32, (y as i32 + dy) as u32);
+                if p[3] > 0 {
+                    near.push(p);
+                }
+            }
+            if near.len() >= 6 {
+                // the most common neighbour colour
+                let best = near.iter().max_by_key(|c| near.iter().filter(|d| d == c).count()).unwrap();
+                out.put_pixel(x, y, *best);
+            }
+        }
+    }
+    out
+}
+
+/// The ten roll drawings of `img` (the same size as `body`, the crouch drawing they are measured
+/// from): a tuck, a ball turned 0, 45, ... 315 degrees, and a rise. The ball touches the floor.
+fn roll_drawings(img: &image::RgbaImage, body: &image::RgbaImage) -> Vec<image::RgbaImage> {
+    let (bx0, by0, bx1, by1) = opaque_bounds(body).expect("the crouch drawing is not empty");
+    let (w, h) = (bx1 - bx0 + 1, by1 - by0 + 1);
+    let crop = |i: &image::RgbaImage| image::imageops::crop_imm(i, bx0, by0, w, h).to_image();
+    let (body_c, img_c) = (crop(body), crop(img));
+    let centre_x = (bx0 + bx1) as f32 / 2.0;
+    // (width squash, height squash, turn in degrees)
+    let mut specs: Vec<(f32, f32, f32)> = vec![(0.92, 0.84, 0.0)];
+    specs.extend((0..8).map(|k| (0.80, 0.70, k as f32 * 45.0)));
+    specs.push((0.96, 0.92, 0.0));
+    specs
+        .into_iter()
+        .map(|(sw, sh, deg)| {
+            let (nw, nh) = (((w as f32 * sw).round() as u32).max(1), ((h as f32 * sh).round() as u32).max(1));
+            let (bs, is) = (nearest_resize(&body_c, nw, nh), nearest_resize(&img_c, nw, nh));
+            let (br, ir) = if deg == 0.0 { (bs, is) } else { (rotate_clockwise(&bs, deg), rotate_clockwise(&is, deg)) };
+            // The opaque part of the body decides where it sits: centred on the crouch, bottom on the floor.
+            let (rx0, _ry0, rx1, ry1) = opaque_bounds(&br).expect("the squashed drawing is not empty");
+            let left = (centre_x - (rx0 + rx1) as f32 / 2.0).round() as i32;
+            let top = by1 as i32 - ry1 as i32;
+            let mut out = image::RgbaImage::new(body.width(), body.height());
+            for (x, y, p) in ir.enumerate_pixels() {
+                let (ox, oy) = (x as i32 + left, y as i32 + top);
+                if p[3] > 0 && ox >= 0 && oy >= 0 && ox < out.width() as i32 && oy < out.height() as i32 {
+                    out.put_pixel(ox as u32, oy as u32, *p);
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next().unwrap_or_else(|| "ayz_default.png".into());
@@ -4374,6 +4479,52 @@ fn main() {
             gs_contact_sheet(&default, 4).save(&sheet).unwrap();
         }
         println!("wrote the Gunslinger's frames");
+        return;
+    }
+
+    // `--roll-frames <assets dir> [sheet.png]`: the roll drawings for every character, made from its
+    // crouch drawing (and the `_mark` and `_nr` versions): the crouch tucked tighter, a tight ball turned
+    // in eighths of a turn, and a rise. `sheet.png` is a look at the first character's.
+    if first == "--roll-frames" {
+        let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
+        let sheet = args.next();
+        let mut sheet_done = false;
+        let mut folders: Vec<_> = std::fs::read_dir(assets.join("sprites")).unwrap().flatten().map(|e| e.path()).filter(|p| p.join("crouch.png").exists()).collect();
+        folders.sort();
+        for folder in folders {
+            let body = image::open(folder.join("crouch.png")).unwrap().to_rgba8();
+            for suffix in ["", "_nr", "_mark"] {
+                let path = folder.join(format!("crouch{suffix}.png"));
+                if !path.exists() {
+                    continue;
+                }
+                let img = image::open(&path).unwrap().to_rgba8();
+                let frames = roll_drawings(&img, &body);
+                for (k, f) in frames.iter().enumerate() {
+                    f.save(folder.join(format!("roll_{k}{suffix}.png"))).unwrap();
+                }
+                if suffix.is_empty() && !sheet_done {
+                    if let Some(out) = &sheet {
+                        let scale = 4;
+                        let (w, h) = (body.width() * scale, body.height() * scale);
+                        let mut s = image::RgbaImage::from_pixel(w * frames.len() as u32, h, image::Rgba([196, 214, 232, 255]));
+                        for (k, f) in frames.iter().enumerate() {
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let p = f.get_pixel(x / scale, y / scale);
+                                    if p[3] > 0 {
+                                        s.put_pixel(k as u32 * w + x, y, *p);
+                                    }
+                                }
+                            }
+                        }
+                        s.save(out).unwrap();
+                        sheet_done = true;
+                    }
+                }
+            }
+            println!("rolled {}", folder.display());
+        }
         return;
     }
 

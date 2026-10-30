@@ -167,6 +167,12 @@ pub fn emit(
                     spawn(&mut commands, feet + Vec2::new(dir * 8.0, 1.0), v, dust[k % 2], 3.0, 0.4, -20.0, true);
                 }
             }
+            // dashes and rolls kick dust up behind them
+            if matches!(f.state, FighterState::Dash | FighterState::Roll) && f.y == 0 && f.state_frame % 2 == 0 {
+                let back = -(f.move_dir as f32);
+                let v = Vec2::new(back * seen.range(20.0, 70.0), seen.range(8.0, 28.0));
+                spawn(&mut commands, feet + Vec2::new(back * 8.0, 1.0), v, dust[(f.state_frame as usize / 2) % 2], 3.0, 0.35, -40.0, true);
+            }
             if f.state == FighterState::Walk && f.vx != 0 && f.state_frame % 8 == 0 {
                 let v = Vec2::new(-(f.facing as f32) * seen.range(10.0, 30.0), seen.range(8.0, 24.0));
                 spawn(&mut commands, feet + Vec2::new(-(f.facing as f32) * 8.0, 1.0), v, dust[0], 3.0, 0.3, -20.0, true);

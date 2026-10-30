@@ -49,6 +49,8 @@ pub enum Frame {
     Point(usize),
     /// Collar grab: beckon, pull, hold (talking), hold (quiet), shove, recover.
     Grab(usize),
+    /// The roll: tuck in, a tight ball turning in eighths of a turn (1..=8), then rise (9).
+    Roll(usize),
 }
 
 impl Frame {
@@ -78,6 +80,7 @@ impl Frame {
             Frame::Kick(i) => format!("kick_{i}"),
             Frame::Point(i) => format!("point_{i}"),
             Frame::Grab(i) => format!("grab_{i}"),
+            Frame::Roll(i) => format!("roll_{i}"),
         }
     }
 
@@ -103,6 +106,9 @@ impl Frame {
 pub const PUNCH_FRAMES: usize = 4;
 pub const KICK_FRAMES: usize = 4;
 
+/// Roll drawings: the tuck, eight turns of the ball, the rise.
+pub const ROLL_DRAWINGS: usize = 10;
+
 /// Lecture drawings.
 pub const LECTURE_FRAMES: usize = 4;
 
@@ -116,6 +122,7 @@ pub const GUN_FRAMES: usize = 5;
 /// Everything this character needs: the common set plus what its moves use.
 pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     let mut v = Frame::all();
+    v.extend((0..ROLL_DRAWINGS).map(Frame::Roll));
     if data.moves.iter().any(|m| m.anim == AnimKind::Volley) {
         v.extend((0..GUN_FRAMES).map(Frame::Gun));
     }
@@ -144,6 +151,20 @@ pub const STAR_FRAMES: usize = 2;
 /// Ticks each walking drawing is held (six make a stride).
 const WALK_TICKS: u32 = 5;
 
+/// Which roll drawing to show: tuck in, a ball turning an eighth every two frames, then rise. A
+/// backward roll turns the other way.
+fn roll_drawing(f: &Fighter) -> usize {
+    let t = f.state_frame;
+    if t <= 3 {
+        0
+    } else if t >= 21 {
+        ROLL_DRAWINGS - 1
+    } else {
+        let step = ((t - 4) / 2) as usize % 8;
+        if f.move_dir * f.facing > 0 { 1 + step } else { 8 - step }
+    }
+}
+
 /// Picks the drawing for a fighter. `speaking` swaps idle for the talking pose; `tick` drives breathing and the mouth.
 pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -> Frame {
     match f.state {
@@ -151,9 +172,9 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
         FighterState::Hitstun => return Frame::Hurt(if f.state_frame < 8 { 0 } else { 1 }),
         FighterState::Blockstun | FighterState::Guard => return Frame::Block,
         FighterState::Attack => return attack_frame(f, data),
-        // dash = quick run, roll = tight crouch that gets spun
+        // a dash is a quick run
         FighterState::Dash => return Frame::Walk(((f.state_frame / 3) % WALK_FRAMES as u32) as usize),
-        FighterState::Roll => return Frame::Crouch,
+        FighterState::Roll => return Frame::Roll(roll_drawing(f)),
         _ => {}
     }
     if !f.grounded() {

@@ -169,6 +169,8 @@ impl DevOptions {
                             "heavy" => Input::HEAVY,
                             "special" => Input::SPECIAL,
                             "block" => Input::BLOCK,
+                            "rollleft" => Input::ROLL_LEFT,
+                            "rollright" => Input::ROLL_RIGHT,
                             _ => 0,
                         }
                     })

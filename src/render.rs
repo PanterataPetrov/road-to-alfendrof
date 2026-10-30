@@ -283,9 +283,9 @@ pub fn animate_body(
     roster: Res<Roster>,
     sel: Res<Selection>,
     handles: Res<FrameHandles>,
-    mut sprites: Query<(&SpriteOf, &mut Sprite, &mut Transform)>,
+    mut sprites: Query<(&SpriteOf, &mut Sprite)>,
 ) {
-    for (SpriteOf(i), mut sprite, mut tf) in &mut sprites {
+    for (SpriteOf(i), mut sprite) in &mut sprites {
         let f = &sim.0.fighters[*i];
         let frame = frame_for(f, &roster.0[sel.chars[*i]], speaking(&sim.0, *i), sim.0.frame);
         // while the raven is out, use the body drawing without it on the shoulder
@@ -299,14 +299,6 @@ pub fn animate_body(
             }
         }
         sprite.color = tint(f.state);
-        // a roll spins the crouched body once round, forwards or backwards
-        tf.rotation = if f.state == FighterState::Roll {
-            let turns = f.state_frame as f32 / Fighter::ROLL_FRAMES as f32;
-            let forward = if f.move_dir * f.facing > 0 { -1.0 } else { 1.0 };
-            Quat::from_rotation_z(forward * turns.min(1.0) * std::f32::consts::TAU)
-        } else {
-            Quat::IDENTITY
-        };
     }
 }
 
