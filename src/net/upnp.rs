@@ -1,6 +1,6 @@
-//! Asking the router to forward the game's UDP port (UPnP), so that a friend can invite you even when
-//! you have not invited them. Many home routers allow it; when it does not work the invitation still
-//! goes through if both players enter each other's address (see `lobby`).
+//! Asking the router to forward the game's UDP port (UPnP), so a friend can invite you even if you
+//! haven't invited them. If it doesn't work, the invite still goes through when both players enter each
+//! other's address (see `lobby`).
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc::{channel, Receiver};
@@ -8,18 +8,18 @@ use std::time::Duration;
 
 use igd_next::{search_gateway, PortMappingProtocol, SearchOptions};
 
-/// The result of the attempt, which runs on its own thread (searching for a router takes a moment).
+/// Result of the attempt, which runs on its own thread (finding a router takes a moment).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mapping {
     Working,
-    /// The router said no or there is none; the text says why.
+    /// The router said no, or there isn't one; the text says why.
     Unavailable(String),
-    /// The router's own idea of the public address, when it gave one.
+    /// The router's own idea of the public address, if it gave one.
     Opened(SocketAddr),
 }
 
-/// The address of this computer on the local network, found by asking the OS which interface it
-/// would use to reach the internet (nothing is sent).
+/// This computer's address on the local network: the interface the OS would use to reach the
+/// internet (nothing is sent).
 pub fn lan_ip() -> Option<Ipv4Addr> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("8.8.8.8:80").ok()?;

@@ -1,11 +1,11 @@
-//! Finding out the address the internet sees: a STUN "binding request" to a public server comes back
-//! with the IP and port the router gave this socket. That is the address a friend types to invite you.
+//! Finding the address the internet sees: a STUN request to a public server comes back with the IP and
+//! port the router gave this socket, which is what a friend types to invite you.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 
 const COOKIE: u32 = 0x2112_A442;
 
-/// Public STUN servers (they only tell you your own address; nothing is stored).
+/// Public STUN servers (they only tell you your own address).
 pub const SERVERS: &[&str] = &["stun.l.google.com:19302", "stun1.l.google.com:19302", "stun.cloudflare.com:3478"];
 
 /// The server addresses that resolve.
@@ -23,7 +23,7 @@ pub fn request(txid: [u8; 12]) -> Vec<u8> {
     m
 }
 
-/// The address a binding response reports, if the message is one for `txid`.
+/// The address a binding response reports, if it's a reply for `txid`.
 pub fn parse_response(msg: &[u8], txid: [u8; 12]) -> Option<SocketAddr> {
     if msg.len() < 20 || msg[0..2] != 0x0101u16.to_be_bytes() || msg[4..8] != COOKIE.to_be_bytes() || msg[8..20] != txid {
         return None;
@@ -39,14 +39,14 @@ pub fn parse_response(msg: &[u8], txid: [u8; 12]) -> Option<SocketAddr> {
             let port = u16::from_be_bytes([body[2], body[3]]);
             let ip = [body[4], body[5], body[6], body[7]];
             match kind {
-                // XOR-MAPPED-ADDRESS: port and address are xor-ed with the cookie.
+                // XOR-MAPPED-ADDRESS: port and address are xor-ed with the cookie
                 0x0020 => {
                     let xp = port ^ (COOKIE >> 16) as u16;
                     let c = COOKIE.to_be_bytes();
                     let xi = [ip[0] ^ c[0], ip[1] ^ c[1], ip[2] ^ c[2], ip[3] ^ c[3]];
                     return Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(xi)), xp));
                 }
-                // MAPPED-ADDRESS, from old servers.
+                // MAPPED-ADDRESS, from old servers
                 0x0001 => plain = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ip)), port)),
                 _ => {}
             }
@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn it_reads_an_xor_mapped_address() {
         let txid = [7u8; 12];
-        // 203.0.113.5:54321, xor-ed as a server would send it.
+        // 203.0.113.5:54321, xor-ed the way a server sends it
         let c = COOKIE.to_be_bytes();
         let ip = [203u8, 0, 113, 5];
         let xp = 54321u16 ^ (COOKIE >> 16) as u16;

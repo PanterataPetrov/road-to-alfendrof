@@ -1,12 +1,10 @@
-// Anaran, Arch-Historian: a very pompous high elf. Red and copper robes, a black cape, dark
-// crimson hair. Light is a snapping scroll (alternating arms, with the 3-hit combo), Heavy is a
-// dramatic pronouncement that sends a wave of golden runes across the screen, and the Special (the
-// ruby at his throat glows when the meter is full) calls two little goblins that stay beside him
-// for about eight seconds and rush the enemy and bite on their own.
+// Anaran, Arch-Historian: a pompous high elf in red and copper robes with a black cape and dark crimson hair.
+// Light: scroll whip (arms alternate, 3-hit combo). Heavy: a pronouncement that sends golden runes across the screen.
+// Special (the ruby at his throat glows when the meter is full): four goblins that swarm the enemy and bite until they're killed or time out.
 // See ayz.ron for what each field means; `minions` is explained in src/sim/data.rs.
 (
     name: "Anaran",
-    // Shown under his name in the character select only.
+    // shown under his name in the character select only
     subtitle: Some("Arch-Historian"),
     sprites: Some("anaran"),
     color: (0.95, 0.52, 0.38),

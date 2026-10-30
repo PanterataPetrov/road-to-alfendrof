@@ -1,5 +1,5 @@
-/// One frame of controller state for one player, as a bitflag.
-/// Keyboard, CPU and network players all produce this same type.
+/// One frame of controller state for one player, as a bitflag. Keyboard, CPU and network
+/// players all produce it.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub struct Input(pub u16);
 
@@ -11,14 +11,17 @@ impl Input {
     pub const LIGHT: u16 = 1 << 4;
     pub const HEAVY: u16 = 1 << 5;
     pub const SPECIAL: u16 = 1 << 6;
-    /// Hold to guard (the shield): light attacks can never get through it.
+    /// Hold to guard: light attacks can never get through.
     pub const BLOCK: u16 = 1 << 7;
+    /// Q and E: roll left or right (on the ground or in the air).
+    pub const ROLL_LEFT: u16 = 1 << 8;
+    pub const ROLL_RIGHT: u16 = 1 << 9;
 
     pub fn has(self, flag: u16) -> bool {
         self.0 & flag != 0
     }
 
-    /// Horizontal direction: -1 left, 0 neutral, 1 right. Opposite directions cancel.
+    /// -1 left, 0 neutral, 1 right; opposite directions cancel.
     pub fn horizontal(self) -> i32 {
         self.has(Self::RIGHT) as i32 - self.has(Self::LEFT) as i32
     }

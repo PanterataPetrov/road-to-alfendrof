@@ -1,12 +1,9 @@
 //! Online play: rollback netcode over UDP with `ggrs`.
 //!
-//! Each player's game runs the whole simulation. Only inputs cross the network; when a remote
-//! input turns out to differ from what was predicted, ggrs rewinds to the saved state, and the
-//! simulation is stepped forward again. That works because `GameState` is `Clone + Hash` and the
-//! simulation is deterministic (integers only, fixed processing order). Both players must run the
-//! same build with the same character files.
-//!
-//! The host is player 0 (the left fighter) and the joiner is player 1.
+//! Only inputs cross the network. When a remote input differs from the prediction, ggrs rewinds to the
+//! saved state and the simulation is stepped forward again; that works because `GameState` is
+//! `Clone + Hash` and deterministic. Both players need the same build and character files.
+//! Player 0 is the left fighter.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -46,14 +43,14 @@ pub struct NetConfig;
 
 impl Config for NetConfig {
     type Input = NetInput;
-    // A held button is the best guess for what the other player is still doing.
+    // a held button is the best guess for what the other player is still doing
     type InputPredictor = PredictRepeatLast;
     type State = GameState;
     type Address = SocketAddr;
 }
 
-/// The game's speed, and how the netcode is tuned: a couple of frames of input delay on your own
-/// buttons, and up to 8 frames predicted ahead of what the other player has confirmed.
+/// Game speed and netcode tuning: two frames of input delay on your own buttons, up to 8 frames
+/// predicted ahead of the other player.
 pub const FPS: usize = 60;
 pub const INPUT_DELAY: usize = 2;
 pub const MAX_PREDICTION: usize = 8;
@@ -66,15 +63,14 @@ fn builder() -> Result<SessionBuilder<NetConfig>, GgrsError> {
         .with_fps(FPS)?
         .with_max_prediction_window(MAX_PREDICTION)
         .with_input_delay(INPUT_DELAY)
-        // Both sides compare a checksum of the state every 60 frames, to catch a desync.
+        // both sides compare a checksum of the state every 60 frames to catch a desync
         .with_desync_detection_mode(DesyncDetection::On { interval: 60 })
         .with_disconnect_timeout(Duration::from_secs(6))
         .with_disconnect_notify_delay(Duration::from_secs(2)))
 }
 
-/// Start a session as player `local` (0 = left fighter, 1 = right) with the other player at
-/// `remote`, over a socket that has already been used for the lobby (so the router's mapping for
-/// it stays open).
+/// Start a session as player `local` (0 = left, 1 = right) with the other player at `remote`, over the
+/// socket the lobby used (so the router mapping stays open).
 pub fn start_p2p(socket: transport::GameSocket, local: usize, remote: SocketAddr) -> Result<P2PSession<NetConfig>, GgrsError> {
     builder()?
         .add_player(PlayerType::Local, local)?
@@ -82,8 +78,8 @@ pub fn start_p2p(socket: transport::GameSocket, local: usize, remote: SocketAddr
         .start_p2p_session(socket)
 }
 
-/// An offline session that rolls back every frame and compares checksums: it finds anything in the
-/// simulation that is not deterministic.
+/// An offline session that rolls back every frame and compares checksums, to find anything
+/// non-deterministic.
 pub fn start_synctest(check_distance: usize) -> Result<SyncTestSession<NetConfig>, GgrsError> {
     SessionBuilder::<NetConfig>::new()
         .with_num_players(2)?
@@ -92,21 +88,21 @@ pub fn start_synctest(check_distance: usize) -> Result<SyncTestSession<NetConfig
         .start_synctest_session()
 }
 
-/// A fingerprint of the whole state, which the two players compare.
+/// A fingerprint of the whole state, compared between the players.
 pub fn checksum(state: &GameState) -> u128 {
     let mut h = DefaultHasher::new();
     state.hash(&mut h);
     h.finish() as u128
 }
 
-/// Carry out what ggrs asks for: save the state, load a saved one, or step the simulation.
+/// Do what ggrs asks: save the state, load a saved one, or step the simulation.
 pub fn handle_requests(state: &mut GameState, requests: Vec<GgrsRequest<NetConfig>>, chars: [&CharacterData; 2]) {
     for request in requests {
         match request {
             GgrsRequest::SaveGameState { cell, frame } => save(state, cell, frame),
             GgrsRequest::LoadGameState { cell, .. } => *state = cell.load().expect("ggrs asked to load a state that was never saved"),
             GgrsRequest::AdvanceFrame { inputs } => {
-                // A disconnected player's input is the default (nothing pressed).
+                // a disconnected player's input is the default (nothing pressed)
                 let pad = |i: usize| match inputs.get(i) {
                     Some((input, status)) if *status != InputStatus::Disconnected => Input::from(*input),
                     _ => Input::default(),
@@ -132,7 +128,7 @@ mod tests {
         CharacterData::from_ron(&text).unwrap()
     }
 
-    /// A deterministic stream of button presses that holds each choice for a while, like a player.
+    /// A deterministic stream of button presses, each held for a while like a player would.
     fn pad(seed: u32, frame: u32) -> NetInput {
         let window = frame / 7;
         let mut x = window.wrapping_mul(2_654_435_761) ^ seed.wrapping_mul(40_503);
@@ -148,8 +144,8 @@ mod tests {
         NetInput(bits)
     }
 
-    /// Every character pairing is rolled back every frame, with specials ready, and the checksums
-    /// must match each time (ggrs returns an error if they do not).
+    /// Every character pairing is rolled back every frame with specials ready; the checksums must match
+    /// each time (ggrs errors if not).
     #[test]
     fn the_simulation_survives_rollback_every_frame() {
         let names = ["ayz", "anaran", "junkhead", "gunslinger", "cowboy", "evilayz"];
@@ -168,8 +164,8 @@ mod tests {
         }
     }
 
-    /// Two sessions talk over localhost UDP for a while, each seeing the other's inputs late. Their
-    /// checksums are compared every 60 frames; a desync would show up as an event.
+    /// Two sessions over localhost UDP, each seeing the other's inputs late; checksums are compared every
+    /// 60 frames and a desync would show up as an event.
     #[test]
     fn two_players_over_localhost_stay_in_sync() {
         let (ca, cb) = (load("junkhead"), load("anaran"));
@@ -195,7 +191,7 @@ mod tests {
                 let f = advanced;
                 a.add_local_input(0, pad(1, f)).unwrap();
                 b.add_local_input(1, pad(2, f)).unwrap();
-                // A frame may be skipped when one side is too far ahead; that is fine.
+                // a frame may be skipped when one side is too far ahead; that's fine
                 if let Ok(r) = a.advance_frame() {
                     handle_requests(&mut sa, r, [&ca, &cb]);
                 }

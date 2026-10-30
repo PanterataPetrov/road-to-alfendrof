@@ -1,22 +1,22 @@
-// Gunslinger: a zoner. Long brown hair, a black puritan hat, an olive corduroy blazer over a
-// white shirt with a red tie, mustard trousers and black boots.
-// Light is a single finger-gun shot with no range limit (alternating hands; in the air it is the one aimed finger-gun shot), Heavy is three finger-gun shots in a row (bam bam bam, left right left hand) and needs the ground,
-// Special is throwing his hat: it only appears on his head once the special meter is full, and
-// the meter fills as he lands hits.
-// See ayz.ron for what each field means. image / summon_image name the effect drawings in his
-// sprite folder (bullet_0.png, fedora_0.png ...).
+// Gunslinger: a zoner with long brown hair, a black puritan hat, an olive corduroy blazer over a white shirt with a
+// red tie, mustard trousers and black boots.
+// Light: one finger-gun shot with no range limit (hands alternate); in the air it's the one aimed shot.
+// Heavy: three finger-gun shots in a row, left right left; needs the ground.
+// Special: he throws his hat, which only appears on his head once the meter is full. The meter fills as he lands hits.
+// See ayz.ron for what each field means. image / summon_image name the effect drawings in his sprite folder
+// (bullet_0.png, fedora_0.png ...).
 (
     name: "Gunslinger",
     subtitle: Some("Fastest draw north of the Thames"),
     sprites: Some("gunslinger"),
     color: (0.85, 0.90, 0.40),
-    // The CPU plays him as a zoner that backs away to keep its distance.
+    // the CPU plays him as a zoner that backs away to keep its distance
     walk_speed: 190,
     keeps_distance: true,
     jump_speed: 1050,
     special_mark: Some(Hat),
     moves: [
-        // A single finger-gun shot, straight ahead with no range limit (it flies until it hits something or leaves the stage).
+        // one finger-gun shot straight ahead, no range limit (it flies until it hits something or leaves the stage)
         (name: "Finger Shot", button: Light, crouching: false, anim: Punch, walk_pct: 60,
          startup: 9, active: 2, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
@@ -28,7 +28,7 @@
          startup: 20, active: 20, recovery: 34, damage: 22, hitstun: 16, blockstun: 10, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 34, y: 44, aim_y: 44, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet")))),
-        // The one aimed shot: from the air, on Light. (Heavy needs the ground.)
+        // the one aimed shot: from the air, on Light (Heavy needs the ground)
         (name: "Air Shot", button: Light, crouching: false, air: true, anim: Hard, walk_pct: 100,
          startup: 15, active: 2, recovery: 14, damage: 45, hitstun: 18, blockstun: 12, knockback: 3, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),

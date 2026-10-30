@@ -118,7 +118,7 @@ fn color(ch: char) -> Option<[u8; 3]> {
         '"' => [234, 166, 104],
         '-' => [214, 84, 76],
         '_' => [112, 28, 36],
-        // Anaran's copper boots (the user's own edit): gold, bronze and a bright highlight.
+        // Anaran's copper boots (hand-edited): gold, bronze and a bright highlight.
         '~' => [235, 168, 83],
         '`' => [187, 133, 64],
         '\\' => [255, 195, 119],
@@ -297,7 +297,7 @@ fn ayz_default() -> Grid {
     // The original's glints in the glasses were white (P); the recolour above is for rows 24 and
     // down only, so they are untouched.
 
-    // ---- Head (the head is shifted 7 columns right of the original) ----
+    // Head (the head is shifted 7 columns right of the original)
     let hx = |c: i32| c + 7;
     // A bald forehead: clear the fringe that hangs over it, leaving skin, the way the original
     // draws skin beside the hair.
@@ -400,10 +400,10 @@ fn ayz_default() -> Grid {
     flow(&mut g, 15.0, -0.08, 3.0, 7.0); // left, the heavier side, as in the original
     flow(&mut g, 27.2, 0.04, 2.0, 5.0); // right
 
-    // ---- The belly ----
+    // The belly
     belly(&mut g);
 
-    // ---- Finish the shoes, which the original's image cuts off ----
+    // Finish the shoes, which the original's image cuts off
     let last = g.h - 1;
     let shoe_row = g.row(last);
     let mut extra: Vec<Vec<char>> = Vec::new();
@@ -479,9 +479,7 @@ fn belly(g: &mut Grid) {
     g.set(nx, ny + 1, 'e');
 }
 
-// ---------------------------------------------------------------------------------------------
-// The poses, all drawn from the approved default pose
-// ---------------------------------------------------------------------------------------------
+// The poses, all drawn from the default pose
 //
 // The default pose is split into a body without arms and the two original arms. Every upper-body
 // drawing puts the body on a canvas and adds arms: either the original arm (where a pose keeps
@@ -766,6 +764,19 @@ fn spec(frame: Frame) -> Spec {
         Frame::Punch(_) => s((pose((24.0, 23.0), (46.0, 21.0)), Keep), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
         // The kicks are the Cowboy's own (see cb_spec).
         Frame::Kick(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        // Commanding the raven: a finger up, the arm thrown out at the enemy, then back.
+        Frame::Point(0) => Spec { arms: (Keep, pose((42.0, 17.0), (44.0, 10.0))), lean: 0.0, dy: 0, legs: stand(), mouth: 1, finger: Some((44.0, 10.0)) },
+        Frame::Point(1) => s((Keep, pose((44.0, 22.0), (57.0, 20.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 1),
+        Frame::Point(_) => s((Keep, pose((41.0, 26.0), (45.0, 24.0))), 1.0, 0, stand(), 0),
+        // The collar grab: beckon, pull him in, hold him by the collar talking (then with the
+        // mouth shut), shove him away with both hands, recover. The hand that holds is about 25 px
+        // in front of him: where the enemy's collar is once he has been pulled in.
+        Frame::Grab(0) => s((Keep, pose((40.0, 25.0), (49.0, 22.0))), 2.0, 0, stand(), 0),
+        Frame::Grab(1) => s((pose((9.0, 26.0), (14.0, 22.0)), pose((38.0, 24.0), (46.0, 21.0))), 3.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
+        Frame::Grab(2) => s((pose((9.0, 26.0), (15.0, 22.0)), pose((39.0, 22.0), (46.0, 19.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 2),
+        Frame::Grab(3) => s((pose((9.0, 26.0), (15.0, 22.0)), pose((39.0, 22.0), (46.0, 19.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 1),
+        Frame::Grab(4) => s((pose((22.0, 25.0), (50.0, 22.0)), pose((43.0, 21.0), (58.0, 20.0))), 7.0, 1, legs((6.0, 46.0), (0.0, 48.0), (36.0, 45.0), (42.0, 48.0)), 2),
+        Frame::Grab(_) => s((Keep, pose((38.0, 27.0), (41.0, 29.0))), 1.0, 0, stand(), 1),
         // Only the Gunslinger has the volley; the others never draw these.
         Frame::Gun(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
@@ -1136,6 +1147,11 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
     let mut every = Frame::all();
     every.extend((0..t2f::anim::LECTURE_FRAMES).map(Frame::Lecture));
     every.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
+    if raven {
+        // The Professor's new moves (the negative twin keeps his old drawings).
+        every.extend((0..t2f::anim::POINT_FRAMES).map(Frame::Point));
+        every.extend((0..t2f::anim::GRAB_FRAMES).map(Frame::Grab));
+    }
     for f in every {
         let (body, mark) = drawing_and_mark_with(&parts, f, raven);
         frames.push((f.file_stem(), body.to_png()));
@@ -1157,11 +1173,9 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
 }
 
 
-// ---------------------------------------------------------------------------------------------
 // The Professor's raven (black with a blue sheen, like his hair), the rose it drops, and the
 // words ("uh", "meh") he speaks at the enemy. The shapes are drawn from ellipses and polygons so
 // that the perched, flying, pecking and clawing drawings all match.
-// ---------------------------------------------------------------------------------------------
 
 /// Where the perched raven's feet are in the torso drawing (x centre, y bottom row).
 const RAVEN_PERCH: (i32, i32) = (48, 22);
@@ -1309,8 +1323,11 @@ fn stamp_raven(canvas: &mut Grid, sprite: &Grid, x: i32, y: i32) {
     }
 }
 
-/// A word in a tiny 3 x 5 pixel font (m is 5 wide), white with a dark outline; the second drawing
-/// wobbles a pixel up.
+/// A word in a tiny 3 x 5 pixel font (m is 5 wide), each font pixel `WORD_SCALE` image pixels big
+/// (2.4: strokes are 2 or 3 pixels wide), white with a dark outline; the second drawing wobbles a
+/// little up.
+const WORD_SCALE: f32 = 2.4;
+
 fn word_art(word: &str, variant: usize) -> Grid {
     let glyph = |c: char| -> Vec<&'static str> {
         match c {
@@ -1321,35 +1338,42 @@ fn word_art(word: &str, variant: usize) -> Grid {
             _ => vec!["...", "...", "...", "...", "..."],
         }
     };
+    // The word at font resolution.
     let glyphs: Vec<Vec<&str>> = word.chars().map(glyph).collect();
-    let width: usize = glyphs.iter().map(|g| g[0].len()).sum::<usize>() + glyphs.len() - 1;
-    let mut g = Grid::blank(width as i32 + 4, 9);
-    let mut x0 = 2;
+    let letters_w: usize = glyphs.iter().map(|g| g[0].len()).sum::<usize>() + glyphs.len() - 1;
+    let mut font = vec![vec![false; letters_w]; 5];
+    let mut x0 = 0;
     for rows in &glyphs {
         for (y, row) in rows.iter().enumerate() {
             for (x, c) in row.chars().enumerate() {
-                if c == 'x' {
-                    let (px, py) = (x0 + x as i32, 2 + y as i32 - variant as i32);
-                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
-                        if g.get(px + dx, py + dy) == '.' {
-                            g.set(px + dx, py + dy, 'g');
-                        }
-                    }
-                }
+                font[y][x0 + x] = c == 'x';
             }
         }
-        x0 += rows[0].len() as i32 + 1;
+        x0 += rows[0].len() + 1;
     }
-    let mut x0 = 2;
-    for rows in &glyphs {
-        for (y, row) in rows.iter().enumerate() {
-            for (x, c) in row.chars().enumerate() {
-                if c == 'x' {
-                    g.set(x0 + x as i32, 2 + y as i32 - variant as i32, 'W');
+    // Scaled up by sampling (nearest), with room for the outline.
+    let (w, h) = ((letters_w as f32 * WORD_SCALE).ceil() as i32, (5.0 * WORD_SCALE).ceil() as i32);
+    let pad = 2;
+    let lift = variant as i32 * 2;
+    let mut g = Grid::blank(w + pad * 2, h + pad * 2 + 2);
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = ((x as f32 / WORD_SCALE) as usize, (y as f32 / WORD_SCALE) as usize);
+            if font[fy.min(4)][fx.min(letters_w - 1)] {
+                g.set(pad + x, pad + 2 + y - lift, 'W');
+            }
+        }
+    }
+    // The dark outline: every empty cell touching the white.
+    let white: Vec<(i32, i32)> = (0..g.h as i32).flat_map(|y| (0..g.w as i32).map(move |x| (x, y))).filter(|&(x, y)| g.get(x, y) == 'W').collect();
+    for (x, y) in white {
+        for dy in -1..=1i32 {
+            for dx in -1..=1i32 {
+                if g.get(x + dx, y + dy) == '.' {
+                    g.set(x + dx, y + dy, 'g');
                 }
             }
         }
-        x0 += rows[0].len() as i32 + 1;
     }
     g
 }
@@ -1377,7 +1401,7 @@ fn raven_sheet() -> image::RgbaImage {
     };
     let scale = 10u32;
     let cols = 5u32;
-    let (cw, ch) = (26 * scale, 18 * scale);
+    let (cw, ch) = (50 * scale, 26 * scale);
     let rows = (items.len() as u32 + cols - 1) / cols;
     let mut sheet = image::RgbaImage::from_pixel(cols * cw, rows * ch, image::Rgba([186, 214, 238, 255]));
     for (i, (_, img)) in items.iter().enumerate() {
@@ -1430,10 +1454,8 @@ fn contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     sheet
 }
 
-// ---------------------------------------------------------------------------------------------
 // the Gunslinger: the original's own pose and proportions (the eyes, the stance and the arms
 // are the original's pixels), slimmer than the Professor and dressed differently
-// ---------------------------------------------------------------------------------------------
 
 fn soul_default() -> Grid {
     soul_with_hair(true)
@@ -1636,11 +1658,9 @@ fn soul_with_hair(hair: bool) -> Grid {
 }
 
 
-// ---------------------------------------------------------------------------------------------
 // Graypersona: the Gunslinger's slim body and face (the original's own pixels), with dark brown
 // curly hair, a feminine face, and a gothic dress: a black laced corset, silver choker and lace,
 // long sleeves and a flared skirt with a lace hem, over black boots.
-// ---------------------------------------------------------------------------------------------
 
 fn gp_default() -> Grid {
     let mut g = soul_default();
@@ -1667,7 +1687,7 @@ fn gp_default() -> Grid {
         }
     }
 
-    // ---- The face: lashes and liner, dark red lips -------------------------------------------
+    // The face: lashes and liner, dark red lips
     for (x, y) in [(12, 9), (13, 9), (14, 9), (17, 9), (18, 9), (19, 9)] {
         g.set(x, y, 'V');
     }
@@ -1676,7 +1696,7 @@ fn gp_default() -> Grid {
         g.set(x, 15, 'B');
     }
 
-    // ---- The dress ----------------------------------------------------------------------------
+    // The dress
     // The olive blazer becomes black: sleeves, body, folds.
     for y in 16..g.h as i32 {
         for x in 0..w {
@@ -1778,7 +1798,7 @@ fn gp_default() -> Grid {
         }
     }
 
-    // ---- Dark brown curly hair --------------------------------------------------------------------
+    // Dark brown curly hair
     // A big rounded crown, curtain bangs either side of a middle part, and ringlets over the
     // shoulders, each row a span per side (mirrored about the middle of the face). Wavy edges and
     // a lighter curl and a deep shadow scattered through it.
@@ -1896,9 +1916,7 @@ fn texture_hair(input: &str, output: &str) {
     println!("wrote {output}");
 }
 
-// ---------------------------------------------------------------------------------------------
-// The Gunslinger's poses, drawn from his approved default pose (the user's own gunslinger.png)
-// ---------------------------------------------------------------------------------------------
+// The Gunslinger's poses, drawn from his default pose (`gunslinger.png`)
 //
 // The same machinery as the Professor's (torso leaned and dropped over legs, arms drawn as tubes),
 // with his own joints, sleeves, trousers and hands, and the Professor's arm and leg positions
@@ -2424,10 +2442,8 @@ fn gs_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     sheet
 }
 
-// ---------------------------------------------------------------------------------------------
 // Cowboy From Hell: the original's own pose and eyes, bald, in a dark brown ribbed tank top, with
 // silver earrings and a chain, and big brown cowboy boots
-// ---------------------------------------------------------------------------------------------
 
 fn cowboy_default() -> Grid {
     cowboy_build(true)
@@ -2501,7 +2517,7 @@ fn cowboy_build(boots: bool) -> Grid {
         }
     }
 
-    // ---- A completely bald head ----------------------------------------------------------------
+    // A completely bald head
     // The original's hair goes (E and I, in the head), the glasses frames become skin.
     for y in 0..=19 {
         for x in 0..g.w as i32 {
@@ -2566,7 +2582,7 @@ fn cowboy_build(boots: bool) -> Grid {
         }
     }
 
-    // ---- The tank top: a round neckline, straps, ribbing, and a silver chain -------------------
+    // The tank top: a round neckline, straps, ribbing, and a silver chain
     // The neckline scoops down in skin, edged with the darker rib.
     for (y, x0, x1) in [(20, 11, 18), (21, 12, 17), (22, 13, 16), (23, 14, 15)] {
         for x in x0..=x1 {
@@ -2609,7 +2625,7 @@ fn cowboy_build(boots: bool) -> Grid {
     }
     g.set(16, 25, 'J');
 
-    // ---- Big brown cowboy boots ----------------------------------------------------------------
+    // Big brown cowboy boots
     // Junkhead keeps the original's plain shoes (the Professor's) instead.
     if boots {
         let jeans = "AGHN";
@@ -2713,10 +2729,8 @@ fn cowboy_build(boots: bool) -> Grid {
     Grid::from_rows(rows)
 }
 
-// ---------------------------------------------------------------------------------------------
 // Cowboy From Hell's poses: the Gunslinger's machinery (same proportions and joints), with his
 // own bare arms, grey jeans and boots. The whale tattoo is also an overlay, so it can glow.
-// ---------------------------------------------------------------------------------------------
 
 /// His default pose gets two blank rows on top so that every coordinate matches the Gunslinger's.
 fn cb_default() -> Grid {
@@ -2743,7 +2757,7 @@ fn junkhead_recolour(img: &mut image::RgbaImage) {
         }
 }
 
-/// Junkhead's default pose: the user's own finished 1x drawing (`tools/junkhead_final.png`, made
+/// Junkhead's default pose: the finished 1x drawing (`tools/junkhead_final.png`, made
 /// from `--junkhead-bare`). Its black tank top and red tattoo are mapped back to the cowboy's
 /// tank-top and tattoo letters, so the pose code treats them like the cowboy's (`junkhead_recolour`
 /// turns them black and red again when the frames are written).
@@ -3149,10 +3163,8 @@ fn write_curse_art(assets: &Path) {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
 // Anaran, Arch-Historian: the original's own pose, pale skin and eyes (brown), a pompous high elf
 // with long dark crimson hair, red robes with copper armour, and a black cape behind him
-// ---------------------------------------------------------------------------------------------
 
 fn anaran_default() -> Grid {
     anaran_with_cape(1)
@@ -3190,7 +3202,7 @@ fn anaran_with_cape(cape: u8) -> Grid {
         .collect();
     g.recolor(25, 46, &[('J', 'F'), ('M', 'D'), ('P', 'F')]);
 
-    // ---- Head: no glasses, brown eyes (the original's), dark crimson hair ---------------------
+    // Head: no glasses, brown eyes (the original's), dark crimson hair
     for (c, y) in [
         (13, 13), (14, 13), (12, 14), (12, 15), (15, 14), (15, 15), (13, 16), (14, 16),
         (17, 13), (18, 13), (16, 14), (19, 14), (19, 15), (17, 16), (18, 16),
@@ -3215,7 +3227,7 @@ fn anaran_with_cape(cape: u8) -> Grid {
     for (x, y) in [(14, 18), (15, 18), (16, 18)] {
         g.set(x, y, 'O');
     }
-    // ---- Red robes with copper armour --------------------------------------------------------
+    // Red robes with copper armour
     // The original's red shirt is the robe; the short sleeves become the robe's red sleeves for now.
     // A copper band down the front of the robe, a belt with a buckle, and a high red trim.
     for y in 22..=40 {
@@ -3266,7 +3278,7 @@ fn anaran_with_cape(cape: u8) -> Grid {
     // Copper boots.
     g.recolor(47, 99, &[('J', '"'), ('M', ','), ('L', ','), ('Q', '\''), ('R', '\'')]);
 
-    // ---- The robe is a long robe: the skirt closes the gap between the legs ---------------------------
+    // The robe is a long robe: the skirt closes the gap between the legs
     for y in 41..=52 {
         let row = g.row(y as usize);
         let xs: Vec<usize> = row.iter().enumerate().filter(|(_, &c)| c != '.').map(|(x, _)| x).collect();
@@ -3280,7 +3292,7 @@ fn anaran_with_cape(cape: u8) -> Grid {
         }
     }
 
-    // ---- The mantle, and the cape: `cape` picks which design (see the options) ---------------------------
+    // The mantle, and the cape: `cape` picks which design (see the options)
     // 1 = a short mantle over the shoulders and a long cape flaring out behind his legs like a bell;
     // 2 = a long open cloak that covers both arms, lined in red, with the robe showing in the front;
     // 3 = just the short mantle (no long cape).
@@ -3419,7 +3431,7 @@ fn anaran_with_cape(cape: u8) -> Grid {
         }
     }
 
-    // ---- His hair is the Gunslinger's, as the user drew and textured it, in dark crimson --------------
+    // His hair is the Gunslinger's, as drawn and textured by hand, in dark crimson
     let gunslinger = grid_from_png("tools/gunslinger_textured.png");
     let hair = gs_split(&gunslinger).body;
     for y in 0..hair.h as i32 {
@@ -3496,9 +3508,7 @@ fn write_icons(assets: &Path) {
     img.save(folder.join("block_broken.png")).unwrap();
 }
 
-// ---------------------------------------------------------------------------------------------
-// Anaran's poses, drawn from the user's own edited default pose (`tools/anaran_final.png`)
-// ---------------------------------------------------------------------------------------------
+// Anaran's poses, drawn from the hand-edited default pose (`tools/anaran_final.png`)
 //
 // His picture is the standard frame moved 3 columns right (room for the cape) and 1 row up, so
 // canvas = grid + (AOX, AOY). Joints are given in the Gunslinger's frame (as everywhere else) and
@@ -4069,11 +4079,9 @@ fn goblin_frames() -> Vec<Grid> {
 }
 
 
-// ---------------------------------------------------------------------------------------------
 // Junkhead's whip. Each pose that uses it has a layer drawn over the body: the same left edge as
 // the body drawing, but WHIP_W wide so the whip can reach far in front of him. The game puts the
 // layer over the body (see `anim::whip_layer` for which one and `render::animate_whips`).
-// ---------------------------------------------------------------------------------------------
 
 const WHIP_W: i32 = 176;
 const WHIP_DARK: [u8; 4] = [86, 52, 30, 255];
@@ -4332,12 +4340,14 @@ fn main() {
             let folder = assets.join("sprites").join(name);
             std::fs::create_dir_all(&folder).unwrap();
             // The Professor has a raven (perched on every pose, and the flying drawings, the rose
-            // and the words); the negative twin keeps his old drawings.
-            let mut every = all_frames(&default, !negative);
-            if !negative {
-                every.extend(raven_effects());
-            }
+            // and the words); the negative twin has exactly the same, inverted.
+            let mut every = all_frames(&default, true);
+            every.extend(raven_effects());
             for (frame, img) in every {
+                // Neither of them uses the old fish or the moon's star any more.
+                if frame.starts_with("fish_") || frame.starts_with("moon_star_") {
+                    continue;
+                }
                 // The scar overlay stays white: the game tints it.
                 let img = if negative && !frame.ends_with("_mark") { invert(&img) } else { img };
                 img.save(folder.join(format!("{frame}.png"))).unwrap();
@@ -4351,7 +4361,7 @@ fn main() {
     }
 
     // `--gunslinger <gunslinger.png> <assets dir> <contact sheet.png>`: draw every pose from his
-    // approved default pose into the game's sprite folder, with a contact sheet.
+    // default pose into the game's sprite folder, with a contact sheet.
     if first == "--gunslinger" {
         let default = grid_from_png(&args.next().expect("default pose png"));
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
@@ -4376,7 +4386,7 @@ fn main() {
         return;
     }
 
-    // `--texture-hair <in.png> <out.png>`: the hair in the user's drawing is one flat colour; give it
+    // `--texture-hair <in.png> <out.png>`: the hair in the hand-drawn sprite is one flat colour; give it
     // texture and shading without touching its shape or anything else.
     if first == "--texture-hair" {
         let input = args.next().expect("input png");
@@ -4393,7 +4403,7 @@ fn main() {
     }
 
     // `--cowboy-frames <assets dir> <contact sheet.png>`: draw every pose of Cowboy From Hell from his
-    // approved default pose into the game's sprite folder, and the curse's drawings into
+    // default pose into the game's sprite folder, and the curse's drawings into
     // assets/effects.
     if first == "--cowboy-frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
@@ -4483,7 +4493,7 @@ fn main() {
         return;
     }
 
-    // `--junkhead <out.png>`: only Junkhead's default pose next to the cowboy's, for approval (no
+    // `--junkhead <out.png>`: only Junkhead's default pose next to the cowboy's, for review (no
     // other poses are drawn).
     if first == "--junkhead" {
         let out = args.next().unwrap_or_else(|| "junkhead_default.png".into());
@@ -4509,7 +4519,7 @@ fn main() {
 
     // `--junkhead-frames <assets dir> <contact sheet.png>`: Junkhead is the Cowboy From Hell with a
     // black tank top (for now). His folder gets every cowboy drawing with the tank top's browns
-    // (body, dark rib, pale rib) swapped for blacks, (his portrait is his own photo, made by hand: this does not write it).
+    // (body, dark rib, pale rib) swapped for blacks, (the portrait is made by hand; this does not write it).
     if first == "--junkhead-frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
         let blacken = junkhead_recolour;
@@ -4564,8 +4574,8 @@ fn main() {
         return;
     }
 
-    // `--anaran-frames <assets dir> <contact sheet.png>`: draw every pose of Anaran from the user's
-    // edited default pose into the game's sprite folder, plus the runes and the goblins.
+    // `--anaran-frames <assets dir> <contact sheet.png>`: draw every pose of Anaran from the hand-edited
+    // default pose into the game's sprite folder, plus the runes and the goblins.
     if first == "--anaran-frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
         let default = an_default();
@@ -4599,7 +4609,7 @@ fn main() {
         return;
     }
 
-    // `--anaran <out.png>`: Anaran's default pose next to the Professor's, for approval.
+    // `--anaran <out.png>`: Anaran's default pose next to the Professor's, for review.
     if first == "--anaran" {
         let out = args.next().unwrap_or_else(|| "anaran_default.png".into());
         let scale = 12;
@@ -4617,7 +4627,7 @@ fn main() {
         return;
     }
 
-    // `--cowboy <out.png>`: Cowboy From Hell's default pose next to the Professor's, for approval.
+    // `--cowboy <out.png>`: Cowboy From Hell's default pose next to the Professor's, for review.
     if first == "--cowboy" {
         let out = args.next().unwrap_or_else(|| "cowboy_default.png".into());
         let scale = 12;
@@ -4652,7 +4662,7 @@ fn main() {
         return;
     }
 
-    // `--soul <out.png>`: the the Gunslinger's default pose next to the Professor's, for approval.
+    // `--soul <out.png>`: the Gunslinger's default pose next to the Professor's, for review.
     if first == "--soul" {
         let out = args.next().unwrap_or_else(|| "soul_default.png".into());
         let scale = 12;

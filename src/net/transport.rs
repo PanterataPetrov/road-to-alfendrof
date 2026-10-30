@@ -1,10 +1,6 @@
-//! One UDP socket for everything online: the lobby's invitations, the router-address lookup (STUN)
-//! and the game's own packets. Using a single socket matters: a router only lets replies through
-//! to the exact local port that sent to the other side first, so the same port that was used to
-//! find out the public address and to invite has to carry the game.
-//!
-//! Every packet starts with a tag byte: lobby or game. STUN replies are recognised by their
-//! header (they start with 0x01).
+//! One UDP socket for everything online: lobby invitations, the address lookup (STUN) and the game.
+//! One socket matters because a router only lets replies through to the exact local port that sent
+//! first. Packets start with a tag byte (lobby or game); STUN replies are recognised by their header (0x01).
 
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -21,9 +17,9 @@ const BUFFER: usize = 4096;
 /// What arrived on the socket.
 pub enum Packet {
     Lobby(LobbyMsg),
-    /// The reply of a STUN server (the raw message).
+    /// A STUN server's reply (raw).
     Stun(Vec<u8>),
-    /// A game packet; only the game socket looks at these.
+    /// A game packet; only the game socket reads these.
     Game(Vec<u8>),
 }
 
@@ -53,7 +49,7 @@ impl Transport {
         let _ = self.socket.send_to(bytes, to);
     }
 
-    /// Everything that has arrived since the last call.
+    /// Everything that arrived since the last call.
     pub fn receive(&self) -> Vec<(SocketAddr, Packet)> {
         let mut out = Vec::new();
         let mut buf = [0u8; BUFFER];
@@ -81,8 +77,8 @@ impl Transport {
         }
     }
 
-    /// Hand the socket to the game. `repeat` is a lobby message that keeps being resent (every 250 ms,
-    /// for up to 3 s, or until a game packet arrives) in case the other side has not seen it yet.
+    /// Hand the socket to the game. `repeat` is a lobby message resent every 250 ms (for up to 3 s, or
+    /// until a game packet arrives) in case the other side hasn't seen it.
     pub fn into_game_socket_repeating(self, repeat: Option<(LobbyMsg, SocketAddr)>) -> GameSocket {
         GameSocket { socket: self.socket, repeat, last: Instant::now(), deadline: Instant::now() + Duration::from_secs(3), heard_game: false }
     }
@@ -109,7 +105,7 @@ impl NonBlockingSocket<SocketAddr> for GameSocket {
     }
 
     fn receive_all_messages(&mut self) -> Vec<(SocketAddr, Message)> {
-        // Until the other side's game starts talking, keep repeating the last lobby message.
+        // until the other side's game starts talking, keep repeating the last lobby message
         if let Some((msg, to)) = &self.repeat {
             if !self.heard_game && Instant::now() < self.deadline && self.last.elapsed() >= Duration::from_millis(250) {
                 let mut bytes = vec![TAG_LOBBY];

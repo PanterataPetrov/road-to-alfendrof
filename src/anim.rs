@@ -1,18 +1,13 @@
-//! Frame-by-frame animation. Each fighter is one hand-drawn whole-body sprite per frame: the
-//! torso leans, bobs and swings its arms together with the legs, so movement reads as one body.
-//!
-//! This module is pure (no Bevy) so the generator and the game agree on the sizes and file
-//! names, and so the frame choice can be tested.
+//! Animation: one whole-body drawing per frame, so torso, arms and legs move together.
+//! No Bevy in here, so the sprite generator and the game agree on sizes and file names.
 
 use crate::sim::{AnimKind, CharacterData, Fighter, FighterState, Raven, RavenMove};
 
-/// Every drawing is this wide and this tall. The fighter's body centre is at column `CENTRE_X`,
-/// which leaves room on the right for outstretched arms and on the left for the long hair. The
-/// feet are on the bottom row.
+/// Every drawing is this size. The body centre is at `CENTRE_X`, with room on the right for arms and on the left for hair. Feet are on the bottom row.
 pub const FRAME_W: i32 = 84;
 pub const FULL_H: i32 = 63;
 pub const CENTRE_X: i32 = 33;
-/// Height of the torso part of a drawing while generating (head to hips).
+/// Height of the torso part while drawing (head to hips).
 pub const UPPER_H: i32 = 50;
 
 pub const IDLE_FRAMES: usize = 2;
@@ -42,18 +37,22 @@ pub enum Frame {
     Hard(usize),
     Summon(usize),
     Speak(usize),
-    /// The alternating punches: right arm (wind-up, strike), then left arm (wind-up, strike).
+    /// Alternating punches: right wind-up and strike, then left.
     Punch(usize),
-    /// The leap and its kicks: the crouch, tucked in the air, a kick with one leg, a kick with the other.
+    /// The leap: crouch, tucked in the air, then a kick with each leg.
     Kick(usize),
-    /// The Professor's lecture: breath, the finger goes up, the lecture, the finger comes down.
+    /// Lecture: breath, finger up, the lecture, finger down.
     Lecture(usize),
-    /// The finger-gun volley: ready, then a shot from the left hand, the right, the left, then recovery.
+    /// Finger-gun volley: ready, left, right, left, recovery.
     Gun(usize),
+    /// Commanding the raven: finger up, arm out, recovery.
+    Point(usize),
+    /// Collar grab: beckon, pull, hold (talking), hold (quiet), shove, recover.
+    Grab(usize),
 }
 
 impl Frame {
-    /// File name (without extension) in `assets/sprites/<character>/`.
+    /// File name without extension, in `assets/sprites/<character>/`.
     pub fn file_stem(self) -> String {
         match self {
             Frame::Idle(i) => format!("idle_{i}"),
@@ -77,6 +76,8 @@ impl Frame {
             Frame::Lecture(i) => format!("lecture_{i}"),
             Frame::Punch(i) => format!("punch_{i}"),
             Frame::Kick(i) => format!("kick_{i}"),
+            Frame::Point(i) => format!("point_{i}"),
+            Frame::Grab(i) => format!("grab_{i}"),
         }
     }
 
@@ -98,17 +99,21 @@ impl Frame {
     }
 }
 
-/// The drawings of the alternating punches and of the kicks.
+/// Punch and kick drawings.
 pub const PUNCH_FRAMES: usize = 4;
 pub const KICK_FRAMES: usize = 4;
 
-/// The drawings of the lecture.
+/// Lecture drawings.
 pub const LECTURE_FRAMES: usize = 4;
 
-/// The drawings of the finger-gun volley, for characters that have one.
+/// Raven command and collar grab drawings.
+pub const POINT_FRAMES: usize = 3;
+pub const GRAB_FRAMES: usize = 6;
+
+/// Finger-gun volley drawings.
 pub const GUN_FRAMES: usize = 5;
 
-/// Every drawing this character needs: the common set, plus the volley's if it has a volley move.
+/// Everything this character needs: the common set plus what its moves use.
 pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     let mut v = Frame::all();
     if data.moves.iter().any(|m| m.anim == AnimKind::Volley) {
@@ -123,24 +128,32 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     if data.moves.iter().any(|m| m.anim == AnimKind::Lecture) {
         v.extend((0..LECTURE_FRAMES).map(Frame::Lecture));
     }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Point) {
+        v.extend((0..POINT_FRAMES).map(Frame::Point));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Grab) {
+        v.extend((0..GRAB_FRAMES).map(Frame::Grab));
+    }
     v
 }
 
-/// Frames of the effect drawings (the summoned crescent, and the shooting star).
+/// Effect drawing counts (crescent, star).
 pub const CRESCENT_FRAMES: usize = 2;
 pub const STAR_FRAMES: usize = 2;
 
-/// Ticks each walking drawing is held; six drawings make one stride cycle.
+/// Ticks each walking drawing is held (six make a stride).
 const WALK_TICKS: u32 = 5;
 
-/// The drawing for a fighter. `speaking` swaps the idle drawings for the speaking ones, and
-/// `tick` drives the idle breathing and the mouth.
+/// Picks the drawing for a fighter. `speaking` swaps idle for the talking pose; `tick` drives breathing and the mouth.
 pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -> Frame {
     match f.state {
         FighterState::Ko => return Frame::Ko,
         FighterState::Hitstun => return Frame::Hurt(if f.state_frame < 8 { 0 } else { 1 }),
         FighterState::Blockstun | FighterState::Guard => return Frame::Block,
         FighterState::Attack => return attack_frame(f, data),
+        // dash = quick run, roll = tight crouch that gets spun
+        FighterState::Dash => return Frame::Walk(((f.state_frame / 3) % WALK_FRAMES as u32) as usize),
+        FighterState::Roll => return Frame::Crouch,
         _ => {}
     }
     if !f.grounded() {
@@ -155,6 +168,7 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     if f.state == FighterState::Crouch {
         return Frame::Crouch;
     }
+
     if f.vx != 0 && f.state == FighterState::Walk {
         return Frame::Walk(((f.state_frame / WALK_TICKS) % WALK_FRAMES as u32) as usize);
     }
@@ -165,8 +179,7 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     }
 }
 
-/// Every drawing of a raven that flies, and of the rose it carries, for a character with a raven.
-/// (Each body drawing also has a `_nr` version without the raven on the shoulder.)
+/// Drawings for a flying raven and its rose (each body drawing also has a `_nr` version with no raven on the shoulder).
 pub fn raven_stems() -> Vec<String> {
     let mut v = Vec::new();
     for base in ["raven_fly", "raven_peck", "raven_claw", "rose"] {
@@ -175,8 +188,7 @@ pub fn raven_stems() -> Vec<String> {
     v
 }
 
-/// The drawing of a raven that is out of its owner's shoulder: flapping, clawing on its way to
-/// the opponent, or pecking (cocked, then the strike). `None` while it is perched.
+/// The raven when it is away from the shoulder: flapping, clawing on the way out, pecking. `None` while perched.
 pub fn raven_frame(r: &Raven, data: &CharacterData, tick: u32) -> Option<String> {
     if !r.active {
         return None;
@@ -190,10 +202,10 @@ pub fn raven_frame(r: &Raven, data: &CharacterData, tick: u32) -> Option<String>
     })
 }
 
-/// Width of a whip layer; its left edge lines up with the body drawing's (see `render`).
+/// Width of a whip layer; its left edge matches the body drawing's.
 pub const WHIP_W: i32 = 176;
 
-/// Every whip layer a character with `whip` can show (file names without the extension).
+/// Every whip layer a whip character can show (file names, no extension).
 pub fn whip_stems() -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
     for k in 0..4 {
@@ -211,9 +223,7 @@ pub fn whip_stems() -> Vec<String> {
     v
 }
 
-/// Where Junkhead's whip hand is in the poses where the whip lashes out (pixels of the drawing,
-/// from its left edge and from the top). The lash itself is not an image: the game draws it from
-/// here to the enemy. `layer` is the name `whip_layer` gives.
+/// Where Junkhead's whip hand is in each lashing pose (pixels, from the drawing's left and top). The lash itself is drawn by the game from there to the enemy.
 pub fn lash_hand(layer: &str) -> Option<(f32, f32)> {
     match layer.split("_whip").next()? {
         "punch_1" => Some((72.0, 27.5)),
@@ -226,11 +236,7 @@ pub fn lash_hand(layer: &str) -> Option<(f32, f32)> {
     }
 }
 
-/// The whip layer to show over the body now, if any. The layer is named after the body drawing
-/// (`punch_1` -> `punch_1_whip`): cocked back while winding up, out straight on the strike (the
-/// `x` one is the longer whip after a combo finisher), and slack in recovery. The spin overhead
-/// is a ring that turns a quarter every 3 frames, the lash goes `_hi` or `_lo`, and the air spin
-/// circles him (the `b` drawing every other 3 frames).
+/// The whip layer to draw over the body now, if any. Named after the body drawing (`punch_1` -> `punch_1_whip`): cocked back in the wind-up, out on the strike (`x` after a finisher), slack in recovery.
 pub fn whip_layer(f: &Fighter, data: &CharacterData) -> Option<String> {
     if !data.whip || f.state != FighterState::Attack {
         return None;
@@ -245,7 +251,7 @@ pub fn whip_layer(f: &Fighter, data: &CharacterData) -> Option<String> {
     match mv.anim {
         AnimKind::Summon => {
             if frame <= mv.startup {
-                // The raised arm comes up during the first quarter; after that the whip spins.
+                // the arm comes up in the first quarter, then the whip spins
                 (frame > mv.startup / 4).then(|| format!("whip_ring_{}", (frame / 3) % 4))
             } else if frame <= last_active + 8 {
                 Some(format!("{stem}_whip_{}", if f.aim_low { "lo" } else { "hi" }))
@@ -262,7 +268,7 @@ pub fn whip_layer(f: &Fighter, data: &CharacterData) -> Option<String> {
     }
 }
 
-/// The move's own drawings, played along its startup, active and recovery.
+/// The move's own drawings across startup, active and recovery.
 fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
     let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
     let frame = f.state_frame;
@@ -287,7 +293,6 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
             if frame <= mv.startup {
                 Frame::Kick(0)
             } else if let Some(k) = mv.window(frame) {
-                // The legs alternate: right, left, right.
                 Frame::Kick(2 + (k % 2) as usize)
             } else {
                 Frame::Kick(1)
@@ -312,11 +317,37 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
             } else if f.shots >= total && frame > mv.startup + (total - 1) * mv.volley_gap + 5 {
                 Frame::Gun(GUN_FRAMES - 1)
             } else {
-                // Hands alternate: the first shot is the left hand, the second the right, ...
+                // hands alternate, left first
                 Frame::Gun(f.shots.min(3) as usize)
             }
         }
         AnimKind::Speak => Frame::Speak(if frame <= mv.startup { 0 } else { 1 }),
+        AnimKind::Point => {
+            // finger up for half the startup, then the arm goes out
+            let cock = (mv.startup * 55 / 100).max(1);
+            Frame::Point(if frame <= cock {
+                0
+            } else if frame <= mv.startup + mv.active + 3 {
+                1
+            } else {
+                2
+            })
+        }
+        AnimKind::Grab => {
+            // beckon, pull until the first hit, hold while talking, shove on the last hit, recover
+            let second = mv.startup + (mv.hits.max(1) - 1) * mv.hit_gap;
+            Frame::Grab(if frame <= startup / 2 {
+                0
+            } else if frame <= mv.startup + mv.active {
+                1
+            } else if frame <= second {
+                2 + ((frame / 8) % 2) as usize
+            } else if frame <= second + mv.active + 4 {
+                4
+            } else {
+                5
+            })
+        }
         AnimKind::Soft => Frame::Soft(if frame <= mv.startup { 0 } else { 1 }),
         AnimKind::Hard => {
             let half = (startup / 2).max(1);
@@ -478,6 +509,7 @@ mod tests {
 
     #[test]
     fn the_professors_moves_have_their_drawings() {
+        assert!(frames_for(&professor()).contains(&Frame::Grab(5)) && frames_for(&professor()).contains(&Frame::Point(2)));
         let p = professor();
         let at = |name: &str, frame: u32| {
             let mut f = Fighter::new(0, 1);
@@ -488,7 +520,13 @@ mod tests {
         };
         assert_eq!(at("Uh", 3), Frame::Speak(0), "breath");
         assert_eq!(at("Uh", 12), Frame::Speak(1), "the word comes out");
-        assert!(matches!(at("Here's the Thing", 10), Frame::Lecture(_)));
+        assert_eq!(at("Here's the Thing", 5), Frame::Grab(0), "beckoning");
+        assert_eq!(at("Here's the Thing", 18), Frame::Grab(1), "pulling him in");
+        assert!(matches!(at("Here's the Thing", 40), Frame::Grab(2 | 3)), "holding him by the collar");
+        assert_eq!(at("Here's the Thing", 104), Frame::Grab(4), "the shove");
+        assert_eq!(at("Here's the Thing", 125), Frame::Grab(5), "recovering");
+        assert_eq!(at("Raven Claw", 2), Frame::Point(0), "finger up");
+        assert_eq!(at("Raven Claw", 9), Frame::Point(1), "thrust at the enemy");
         assert!(matches!(at("Raven Storm", 10), Frame::Summon(_)));
     }
 

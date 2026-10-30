@@ -1,8 +1,5 @@
-//! Draws the placeholder pixel art for the map. Runs offline and costs nothing:
-//! `cargo run --bin gen_sprites` writes PNGs into `assets/backgrounds/`.
-//!
-//! The characters are drawn by `gen_ayz` (`cargo run --bin gen_ayz -- --frames assets`), built
-//! from the original sprite.
+//! Draws the map's background pieces (sky, portal, cobbles) into `assets/backgrounds/`: `cargo run --bin gen_sprites`.
+//! Characters come from `gen_ayz`, the buildings from `trace_photo`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +55,7 @@ impl Img {
         }
     }
 
-    /// Draw `col` over whatever is there, with opacity 0..1.
+    /// Draw `col` over what's there, with opacity 0..1.
     fn blend(&mut self, x: i32, y: i32, col: Rgba, alpha: f32) {
         if x < 0 || y < 0 || x >= self.w || y >= self.h || alpha <= 0.0 {
             return;
@@ -92,7 +89,7 @@ impl Img {
         }
     }
 
-    /// Enlarge by a whole factor with no smoothing, so every pixel becomes an `n` x `n` block.
+    /// Enlarge by a whole factor with no smoothing: every pixel becomes an `n` x `n` block.
     fn upscale(&self, n: i32) -> Img {
         let mut out = Img::new((self.w * n) as u32, (self.h * n) as u32);
         for y in 0..out.h {
@@ -153,26 +150,21 @@ impl Rng {
     }
 }
 
-/// A repeatable pseudo-random number from two coordinates, for per-stone tones.
+/// Repeatable pseudo-random number from two coordinates, for per-stone tones.
 fn hash2(a: i32, b: i32) -> u32 {
     let h = (a as u32).wrapping_mul(73_856_093) ^ (b as u32).wrapping_mul(19_349_663);
     (h ^ (h >> 13)).wrapping_mul(1_274_126_177) >> 8
 }
 
-// ---------------------------------------------------------------------------------------------
-// The map: a lane in Istanbul climbing toward Galata Tower on a sunny day, with an evil portal over the tower
-// ---------------------------------------------------------------------------------------------
-//
-// Everything here is drawn at HALF resolution and enlarged 2x when saved, so every background
-// pixel is a chunky 2 x 2 block. The layers are 320 x 108 (640 x 216 in the game); image column
-// 160 is world x = 0.
+// The map: a lane in Istanbul climbing to Galata Tower, with a portal over the tower.
+// Drawn at half resolution and enlarged 2x when saved, so every background pixel is a 2 x 2 block.
 
 const LAYER_W: i32 = 200;
 const LAYER_H: i32 = 108;
 const SKY_W: i32 = 192;
 /// Row of the floor line (the floor top is at world y = -80).
 const GROUND_ROW: i32 = 94;
-/// Galata Tower stands at the far end of the lane, with the portal torn open in the sky above its spire.
+/// The tower at the far end of the lane, with the portal in the sky above its spire.
 const TOWER_X: i32 = 93;
 const SPIRE_TOP: i32 = 31;
 /// Below the HUD (which covers roughly the top 16 rows), directly above the spire.
@@ -212,7 +204,7 @@ fn sky() -> Img {
     let (w, h) = (SKY_W, LAYER_H);
     let mut i = Img::new(w as u32, h as u32);
     let stops = [(0.0, c(0.28, 0.56, 0.95)), (0.55, c(0.50, 0.76, 0.98)), (1.0, c(0.88, 0.96, 0.99))];
-    // Banded gradient with a checker dither between bands.
+    // banded gradient with a checker dither between bands
     let bands = 10;
     for y in 0..h {
         let t = y as f32 / h as f32 * bands as f32;
@@ -222,7 +214,7 @@ fn sky() -> Img {
             i.set(x, y, gradient(&stops, ((band + dither) / bands as f32).min(1.0)));
         }
     }
-    // The sun, with stepped halos.
+    // the sun, with stepped halos
     for (r, a) in [(16, 0.10), (13, 0.12), (10, 0.16)] {
         for y in -r..=r {
             for x in -r..=r {
@@ -243,7 +235,7 @@ fn sky() -> Img {
     wisp(&mut i, 70, 40, 56);
     wisp(&mut i, 110, 8, 48);
     wisp(&mut i, 8, 48, 40);
-    // Gulls riding the wind.
+    // gulls
     let gull = c(0.32, 0.36, 0.48);
     for (x, y) in [(30, 50), (46, 44), (126, 56), (140, 70)] {
         for (dx, dy) in [(-2, 0), (-1, 1), (0, 0), (1, 1), (2, 0)] {
@@ -252,9 +244,8 @@ fn sky() -> Img {
     }
     i
 }
-/// The evil portal: a torn, spiralling rift in the sky above the tower, ringed with crackling
-/// energy and trailing dark storm clouds, with lightning arcing down to the spire. It is its
-/// own layer so the game can make it pulse.
+/// The portal: a torn spiral rift above the tower with crackling energy, dark storm clouds and lightning
+/// down to the spire. Its own layer so the game can pulse it.
 fn portal() -> Img {
     let (w, h) = (LAYER_W, LAYER_H);
     let mut i = Img::new(w as u32, h as u32);
@@ -262,8 +253,7 @@ fn portal() -> Img {
     let (cx, cy) = PORTAL;
     let (rx, ry) = (12, 8);
 
-    // Storm clouds spiralling around it, flowing outward and thinning into the sky. Kept close
-    // to the portal so they do not wash out the tower below.
+    // storm clouds spiral outwards and thin into the sky; kept close so they don't wash out the tower
     for arm in 0..4 {
         let phase = arm as f32 * std::f32::consts::TAU / 4.0;
         for t in 0..110 {
@@ -277,7 +267,7 @@ fn portal() -> Img {
             }
         }
     }
-    // Glow: stepped halos.
+    // glow: stepped halos
     for step in (1..=5).rev() {
         let grow = 1.0 + step as f32 * 0.22;
         let (grx, gry) = ((rx as f32 * grow) as i32, (ry as f32 * grow) as i32);
@@ -290,11 +280,11 @@ fn portal() -> Img {
             }
         }
     }
-    // The ring and its layers, from the outside in.
+    // the ring and its layers, outside in
     for (grow, col) in [(0, c(0.55, 0.08, 0.76)), (-2, c(0.86, 0.34, 0.98)), (-4, c(0.32, 0.04, 0.50)), (-6, c(0.10, 0.01, 0.18))] {
         i.ellipse(cx, cy, rx + grow, ry + grow * 4 / 5, col);
     }
-    // Ragged flames licking off the rim.
+    // ragged flames off the rim
     let spikes = 28;
     for k in 0..spikes {
         let a = k as f32 / spikes as f32 * std::f32::consts::TAU;
@@ -303,7 +293,7 @@ fn portal() -> Img {
         let (x1, y1) = (cx + ((rx + out) as f32 * a.cos()) as i32, cy + ((ry + out) as f32 * a.sin()) as i32);
         i.line(x0, y0, x1, y1, c(0.92, 0.50, 1.0));
     }
-    // Spiral arms dragging into the void.
+    // spiral arms into the void
     for arm in 0..3 {
         for t in 0..90 {
             let f = t as f32 / 90.0;
@@ -312,14 +302,14 @@ fn portal() -> Img {
             i.set(x, y, mix(c(0.96, 0.62, 1.0), c(0.56, 0.12, 0.82), f));
         }
     }
-    // The void at the centre, with two red eyes glaring down at the fight.
+    // the void, with two red eyes glaring down at the fight
     i.ellipse(cx, cy, 5, 6, c(0.02, 0.0, 0.05));
     i.rect(cx - 3, cy - 1, 2, 1, c(1.0, 0.16, 0.20));
     i.rect(cx + 1, cy - 1, 2, 1, c(1.0, 0.16, 0.20));
     i.set(cx - 3, cy - 1, c(1.0, 0.78, 0.72));
     i.set(cx + 1, cy - 1, c(1.0, 0.78, 0.72));
 
-    // Lightning from the portal down to the tip of the spire, and a few stray bolts.
+    // lightning from the portal to the spire tip, and a few stray bolts
     let (mut x, mut y) = (cx, cy + ry);
     while y < SPIRE_TOP - 3 {
         let toward = (TOWER_X - x).signum();
@@ -345,7 +335,7 @@ fn portal() -> Img {
             sy = ny;
         }
     }
-    // Sparks and shards drifting off it.
+    // sparks and shards
     for _ in 0..22 {
         let (x, y) = (cx + rng.range(-34, 35), cy + rng.range(-12, 18));
         i.set(x, y, if rng.chance(50) { c(0.84, 0.36, 0.98) } else { c(1.0, 0.80, 1.0) });
@@ -353,7 +343,7 @@ fn portal() -> Img {
     i
 }
 
-/// A cobbled path made of rounded, uneven stones. It wraps left to right, so it tiles.
+/// A cobbled path of rounded, uneven stones; it wraps left to right so it tiles.
 fn cobblestones() -> Img {
     let (w, h) = (16, 20);
     let mut i = Img::new(w as u32, h as u32);
@@ -368,7 +358,7 @@ fn cobblestones() -> Img {
             let sw = rng.range(5, 8);
             let t = rng.range(0, 100) as f32 / 100.0;
             let base = if course == 0 { c(0.80, 0.74, 0.68) } else { mix(c(0.58, 0.52, 0.52), c(0.74, 0.68, 0.64), t) };
-            // Draw three copies so a stone crossing the edge wraps around.
+            // three copies so a stone crossing the edge wraps around
             for wrap in [-w, 0, w] {
                 let (cx, cy) = (x + wrap + sw / 2, y + ch / 2);
                 i.ellipse(cx, cy, sw / 2, (ch / 2).max(1), shade(base, 0.82));
@@ -380,7 +370,7 @@ fn cobblestones() -> Img {
         y += ch;
         course += 1;
     }
-    // Tufts of green pushing up between the stones.
+    // tufts of green between the stones
     for _ in 0..4 {
         let (x, y) = (rng.range(0, w), rng.range(2, h));
         i.set(x, y, c(0.40, 0.62, 0.30));
@@ -392,9 +382,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let out: PathBuf = args.next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("assets"));
 
-    // The characters are drawn by `gen_ayz`, from the original sprite, and the buildings (near.png)
-    // are traced from the photo by `trace_photo`. This draws the rest of the stage at half
-    // resolution; enlarging 2x makes the pixels chunkier.
+    // characters come from `gen_ayz` and the buildings from `trace_photo`; this draws the rest at half resolution, enlarged 2x
     let bg = out.join("backgrounds").join("galata");
     sky().upscale(2).save(&bg.join("sky.png"));
     portal().upscale(2).save(&bg.join("portal.png"));

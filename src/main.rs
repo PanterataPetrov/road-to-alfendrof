@@ -9,14 +9,14 @@ use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
-use t2f::ai::cpu_input;
+use t2f::cpu::cpu_input;
 use t2f::sim::{CharacterData, Fighter, GameState, Input, Phase, PX};
 use t2f::stage::StageData;
 
-/// Native pixel-art resolution. The window shows this scaled up.
+/// Pixel-art resolution; the window scales it up.
 const VIEW_W: f32 = 384.0;
 const VIEW_H: f32 = 216.0;
-/// Y of the floor line in world pixels.
+/// Floor line, in world pixels.
 const GROUND_Y: f32 = -80.0;
 
 const BAR_W: f32 = 160.0;
@@ -32,7 +32,6 @@ pub enum AppState {
     Title,
     CharSelect,
     StageSelect,
-    /// The online screen: your address, a friend's, invitations.
     Online,
     Fight,
 }
@@ -44,15 +43,15 @@ pub enum Mode {
     Online,
 }
 
-/// Every character found in `assets/characters`, in file-name order.
+/// Characters from `assets/characters`.
 #[derive(Resource)]
 pub struct Roster(pub Vec<CharacterData>);
 
-/// Every stage found in `assets/stages`, in file-name order.
+/// Stages from `assets/stages`.
 #[derive(Resource)]
 pub struct Stages(pub Vec<StageData>);
 
-/// What the players picked in the menus.
+/// What was picked in the menus.
 #[derive(Resource, Default)]
 pub struct Selection {
     pub chars: [usize; 2],
@@ -65,10 +64,10 @@ struct Sim(GameState);
 #[derive(Resource)]
 struct DebugView(bool);
 
-/// A background layer that trails the camera by `1 - parallax`.
+/// Background layer; trails the camera by `1 - parallax`.
 #[derive(Component)]
 struct ParallaxLayer(f32);
-/// A layer that slowly pulses (the portal).
+/// Pulses slowly (the portal).
 #[derive(Component)]
 struct Glow;
 #[derive(Component)]
@@ -83,12 +82,10 @@ struct RoundPip(usize, u8);
 struct TimerText;
 #[derive(Component)]
 struct BannerText;
-/// Small hint line under the banner ("Enter: rematch").
 #[derive(Component)]
 struct SubBannerText;
 
-/// The `assets` folder: next to the working directory when run from the project, otherwise the
-/// project's own copy.
+/// The assets folder: next to the working directory if there is one, otherwise the project's own.
 fn assets_dir() -> PathBuf {
     let here = std::env::current_dir().unwrap_or_default().join("assets");
     if here.is_dir() { here } else { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets") }
@@ -115,18 +112,16 @@ fn load_dir<T>(sub: &str, parse: impl Fn(&str) -> Result<T, ron::error::SpannedE
     items
 }
 
-/// Developer options on the command line, handy for testing without clicking through menus:
-/// `--fight` skips the menus, `--cpu` makes player 2 the CPU, `--debug` shows hitboxes, and
-/// `--screenshot <file.png> [--delay <seconds>]` saves a frame of the game and quits.
+/// Command-line options for testing: `--fight` skips the menus, `--cpu` makes player 2 the CPU,
+/// `--debug` shows hitboxes, `--screenshot <file.png> [--delay <s>]` saves a frame and quits.
 #[derive(Resource, Default)]
 struct DevOptions {
     fight: bool,
-    /// `--charselect`: start on the character select screen (with `--screenshot`, to look at it).
+    /// `--charselect`: start on the character select.
     charselect: bool,
     /// `--online`: start on the online screen.
     online: bool,
-    /// For testing two copies on one computer: `--invite 127.0.0.1:7777` invites at once, `--autoaccept`
-    /// accepts any invitation, `--pick N` locks in roster index N on the online pick screen.
+    /// For two copies on one PC: `--invite <addr>`, `--autoaccept`, `--pick <n>`.
     invite: Option<String>,
     autoaccept: bool,
     online_pick: Option<usize>,
@@ -134,11 +129,11 @@ struct DevOptions {
     debug: bool,
     screenshot: Option<String>,
     delay: f32,
-    /// Roster indices for each player (`--p1 0 --p2 1`).
+    /// `--p1 0 --p2 1`: roster indices.
     picks: [usize; 2],
-    /// Inputs held down for player 1 the whole time: `--hold right,light`.
+    /// `--hold right,light`: inputs player 1 holds all the time.
     hold: u16,
-    /// `--meter 0..100`: start both fighters with this much special meter (for testing).
+    /// `--meter 0..100`: starting special meter.
     meter: i32,
 }
 
@@ -183,8 +178,7 @@ impl DevOptions {
     }
 }
 
-/// With `--screenshot`, save the game's own rendered frame once it has had time to load, then
-/// quit. This reads the GPU frame, so it works even when the desktop is locked.
+/// With `--screenshot`: save a frame once things have loaded, then quit. It reads the GPU frame, so it works with the screen locked.
 fn dev_screenshot(
     mut commands: Commands,
     time: Res<Time<Real>>,
@@ -227,7 +221,7 @@ fn main() {
         .insert_resource(ClearColor(MENU_BACKGROUND))
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(Roster({
-            // File-name order, except that characters marked `menu_last` go to the end.
+            // characters marked `menu_last` go to the end
             let mut roster = load_dir("characters", CharacterData::from_ron);
             roster.sort_by_key(|c| c.menu_last);
             roster
@@ -276,7 +270,7 @@ fn main() {
         .add_systems(Update, (toggle_debug, dev_screenshot));
 
     if dev.fight {
-        // Clamp to the roster so a bad index cannot crash the shortcut.
+        // keep a bad index from crashing
         let last = app.world().resource::<Roster>().0.len() - 1;
         app.insert_resource(Selection { chars: dev.picks.map(|p| p.min(last)), stage: 0 });
         app.insert_state(AppState::Fight);
@@ -326,7 +320,7 @@ fn spawn_fight(
     clear.0 = rgb(stage.sky);
     let scoped = DespawnOnExit(AppState::Fight);
 
-    // HUD lives under its own root, which follows the camera so it stays fixed on screen.
+    // HUD root follows the camera so it stays put on screen
     commands
         .spawn((HudRoot, scoped.clone(), Transform::default(), Visibility::default()))
         .with_children(|hud| {
@@ -342,7 +336,7 @@ fn spawn_fight(
                     Sprite::from_color(Color::srgb(0.95, 0.8, 0.2), Vec2::new(BAR_W, BAR_H)),
                     Transform::from_xyz(mid, BAR_Y, 10.1),
                 ));
-                // The special meter, a thin bar under the health bar that fills as hits land.
+                // special meter: a thin bar under the health bar
                 let special_y = BAR_Y - BAR_H / 2.0 - 4.0;
                 hud.spawn((
                     Sprite::from_color(Color::srgb(0.1, 0.1, 0.16), Vec2::new(BAR_W + 2.0, 5.0)),
@@ -354,7 +348,7 @@ fn spawn_fight(
                     Transform::from_xyz(mid, special_y, 10.1),
                 ));
                 for n in 0..GameState::ROUNDS_TO_WIN {
-                    // Pips sit under the inner end of the bar, names under the outer end.
+                    // pips under the inner end of the bar, names under the outer end
                     let x = dir * (BAR_EDGE - BAR_W + 4.0 + n as f32 * 10.0);
                     hud.spawn((
                         RoundPip(side, n),
@@ -362,12 +356,11 @@ fn spawn_fight(
                         Transform::from_xyz(x, BAR_Y - 17.0, 10.1),
                     ));
                 }
-                // Fighter name under each bar.
                 hud.spawn((
                     Text2d::new(roster.0[selection.chars[side]].name.clone()),
                     TextFont { font_size: FontSize::Px(10.0), ..default() },
                     TextColor(rgb(roster.0[selection.chars[side]].color)),
-                    // Long names are centred further in, so they never run off the screen.
+                    // long names sit further in so they stay on screen
                     Transform::from_xyz(dir * (BAR_EDGE - 6.0 - roster.0[selection.chars[side]].name.len() as f32 * 2.8), BAR_Y - 18.0, 10.2),
                 ));
             }
@@ -393,8 +386,7 @@ fn spawn_fight(
             ));
         });
 
-    // Background: art layers when the stage has them, otherwise plain pillars so camera movement
-    // is still visible.
+    // background layers, or plain pillars if the stage has none
     for layer in &stage.layers {
         let mut e = commands.spawn((
             scoped.clone(),
@@ -407,7 +399,7 @@ fn spawn_fight(
         }
     }
 
-    // The floor spans the whole stage: a repeated tile, or two alternating colours.
+    // floor: a repeated tile or two alternating colours
     let stage_w = (GameState::STAGE_HALF_WIDTH * 2 / PX) as f32;
     let half = stage_w / 2.0;
     let mut x = -half + 16.0;
@@ -433,9 +425,9 @@ fn spawn_fight(
     let mut handles = render::FrameHandles::default();
     for i in 0..2 {
         let c = &roster.0[selection.chars[i]];
-        // The summon's crescent appears where its projectile starts.
+        // the crescent appears where the summon's projectile starts
         let summon = c.moves.iter().find(|m| m.anim == t2f::sim::AnimKind::Summon).and_then(|m| m.projectile.as_ref());
-        // Every effect drawing the character's moves use, the first one for the projectile sprite.
+        // effect drawings the moves use
         let mut effects: Vec<String> = Vec::new();
         for p in c.moves.iter().filter_map(|m| m.projectile.as_ref()) {
             for name in [p.image_name(), p.summon_name()] {
@@ -459,7 +451,7 @@ fn spawn_fight(
     commands.insert_resource(handles);
 }
 
-/// The player: WASD + F (soft) / G (hard) / H (special) / Space (block). The opponent is always the CPU.
+/// WASD to move, F / G / H for light / heavy / special, Space to block, Q / E to roll. Player 2 is the CPU.
 fn read_input(keys: &ButtonInput<KeyCode>) -> Input {
     let mut bits = 0;
     for (key, flag) in [
@@ -471,6 +463,8 @@ fn read_input(keys: &ButtonInput<KeyCode>) -> Input {
         (KeyCode::KeyG, Input::HEAVY),
         (KeyCode::KeyH, Input::SPECIAL),
         (KeyCode::Space, Input::BLOCK),
+        (KeyCode::KeyQ, Input::ROLL_LEFT),
+        (KeyCode::KeyE, Input::ROLL_RIGHT),
     ] {
         if keys.pressed(key) {
             bits |= flag;
@@ -494,7 +488,7 @@ fn step_sim(
 ) {
     let mut player = read_input(&keys);
     player.0 |= dev.hold;
-    // Online: the other player's buttons come over the network (see `online::step_online`).
+    // online: the other player's buttons come from the network
     if *mode == Mode::Online {
         if let Some(mut net) = net {
             if let Some(problem) = online::step_online(&mut net, &mut sim, &roster, &sel, player, &mut fixed) {
@@ -509,7 +503,7 @@ fn step_sim(
     sim.0.step(inputs, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
 }
 
-/// Make glowing layers breathe between 70% and 100% opacity.
+/// Pulse between 70% and 100% opacity.
 fn pulse_glow(time: Res<Time>, mut layers: Query<&mut Sprite, With<Glow>>) {
     let alpha = 0.85 + 0.15 * (time.elapsed_secs() * 2.6).sin();
     for mut sprite in &mut layers {
@@ -517,7 +511,7 @@ fn pulse_glow(time: Res<Time>, mut layers: Query<&mut Sprite, With<Glow>>) {
     }
 }
 
-/// Keep the camera on the midpoint of the fighters without showing past the stage edges.
+/// Camera follows the fighters' midpoint and stays inside the stage.
 fn follow_camera(
     sim: Res<Sim>,
     time: Res<Time>,
@@ -529,7 +523,7 @@ fn follow_camera(
     let mid = (sim.0.fighters[0].x + sim.0.fighters[1].x) as f32 / 2.0 / PX as f32;
     let limit = (GameState::STAGE_HALF_WIDTH / PX) as f32 - VIEW_W / 2.0;
     let base = mid.clamp(-limit, limit);
-    // Screen shake after a heavy hit; the HUD moves with the camera so it stays put on screen.
+    // screen shake after a heavy hit; the HUD moves with the camera
     let t = time.elapsed_secs();
     let (shake_x, shake_y) = ((t * 97.0).sin() * shake.0, (t * 131.0).cos() * shake.0);
     cam.translation.x = base + shake_x.round();
@@ -537,7 +531,7 @@ fn follow_camera(
     hud.translation.x = cam.translation.x;
     hud.translation.y = cam.translation.y;
     for (ParallaxLayer(parallax), mut tf) in &mut layers {
-        // Whole pixels only, so the chunky background art does not shimmer as it scrolls.
+        // whole pixels only, so the background doesn't shimmer
         tf.translation.x = (base * parallax).round();
     }
 }
@@ -561,7 +555,7 @@ fn sync_hud(
         let dir = if *side == 0 { -1.0 } else { 1.0 };
         sprite.custom_size = Some(Vec2::new(w, 3.0));
         tf.translation.x = dir * (BAR_EDGE - BAR_W + w / 2.0);
-        // Purple while it fills; a pulsing gold once the special is ready.
+        // purple while filling, pulsing gold when ready
         sprite.color = if frac >= 1.0 {
             let pulse = 0.75 + 0.25 * (time.elapsed_secs() * 8.0).sin();
             Color::srgb(1.0 * pulse, 0.85 * pulse, 0.2 * pulse)
@@ -574,7 +568,7 @@ fn sync_hud(
         let w = BAR_W * frac;
         let dir = if *side == 0 { -1.0 } else { 1.0 };
         sprite.custom_size = Some(Vec2::new(w, BAR_H));
-        // Bars are anchored at the centre side and drain toward the outer screen edge.
+        // bars drain from the centre outwards
         tf.translation.x = dir * (BAR_EDGE - BAR_W + w / 2.0);
     }
     for (RoundPip(side, n), mut sprite) in &mut pips {
@@ -635,7 +629,7 @@ fn restart_match(
 ) {
     if keys.just_pressed(KeyCode::Enter) && sim.0.phase == Phase::MatchOver {
         if *mode == Mode::Online {
-            // A rematch online is a new invitation: leave the finished match.
+            // online, a rematch means inviting again
             commands.remove_resource::<online::NetSession>();
             next.set(AppState::Online);
         } else {
@@ -644,7 +638,7 @@ fn restart_match(
     }
 }
 
-/// A new match, with each fighter on their own character's starting health.
+/// New match; each fighter starts with their character's health.
 fn fresh_sim(roster: &Roster, sel: &Selection) -> Sim {
     let mut sim = Sim::default();
     sim.0.set_health([0, 1].map(|i| roster.0[sel.chars[i]].health.unwrap_or(Fighter::MAX_HEALTH)));

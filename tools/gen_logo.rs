@@ -1,7 +1,6 @@
-//! Draws the game's pixel-art logo: `cargo run --bin gen_logo -- assets/ui/logo.png`.
-//!
-//! "ROAD TO" in silver above a big golden "ALFENDROF", both in a chunky 5 x 7 pixel font with a
-//! bevel, a dark outline and a drop shadow, over a dithered purple glow (the portal).
+//! Draws the logo: `cargo run --bin gen_logo -- assets/ui/logo.png`.
+//! "ROAD TO" in silver over a big golden "ALFENDROF", in a chunky 5 x 7 font with a bevel, outline and drop
+//! shadow, over a dithered purple glow.
 
 use image::{Rgba, RgbaImage};
 
@@ -66,8 +65,8 @@ fn lerp(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 4] {
     [m(0), m(1), m(2), 255]
 }
 
-/// Draw `mask` with its top-left at (ox, oy): shadow, outline, a vertical gradient fill with a
-/// light top edge and a dark bottom edge.
+/// Draw `mask` at (ox, oy): shadow, outline, and a vertical gradient fill with a light top edge and a dark
+/// bottom edge.
 fn draw_text(img: &mut RgbaImage, mask: &Mask, ox: i32, oy: i32, top: [u8; 3], bottom: [u8; 3], rim: [u8; 4], base: [u8; 4]) {
     let outline = [28, 10, 38, 255];
     let shadow = [12, 4, 22, 210];
@@ -115,7 +114,7 @@ fn main() {
     let (w, h) = (300i32, 90i32);
     let mut img = RgbaImage::new(w as u32, h as u32);
 
-    // The portal glow behind the big word: a dithered purple ellipse.
+    // portal glow behind the big word: a dithered purple ellipse
     const BAYER: [[i32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
     let (cx, cy) = (w as f32 / 2.0, 58.0);
     for y in 0..h {
@@ -132,7 +131,7 @@ fn main() {
         }
     }
 
-    // ROAD TO, in silver, with gold ornaments either side.
+    // ROAD TO in silver with gold ornaments either side
     let road = text_mask("ROAD TO", 3);
     let rx = (w - road.w) / 2;
     draw_text(&mut img, &road, rx, 6, [246, 248, 255], [150, 160, 206], [255, 255, 255, 255], [96, 104, 150, 255]);
@@ -148,7 +147,7 @@ fn main() {
         }
     }
 
-    // ALFENDROF, big and golden.
+    // ALFENDROF, big and golden
     let big = text_mask("ALFENDROF", 4);
     let bx = (w - big.w) / 2;
     draw_text(&mut img, &big, bx, 42, [255, 232, 130], [226, 116, 34], [255, 250, 206, 255], [140, 58, 26, 255]);

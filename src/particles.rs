@@ -1,6 +1,6 @@
-//! Hit sparks, dust, swing streaks, charge sparkles, star trails and screen shake. They are
-//! only drawn (never part of the simulation): `emit` watches how the simulation changed since
-//! the last tick, and `update_particles` moves and fades them every rendered frame.
+//! Hit sparks, dust, swing streaks, charge sparkles, star trails and screen shake. Only drawn, never part of
+//! the simulation: `emit` watches how the state changed since the last tick and `update_particles` moves
+//! and fades them every frame.
 
 use bevy::prelude::*;
 use t2f::anim::{frame_for, Frame, CENTRE_X, FULL_H};
@@ -24,6 +24,7 @@ struct Snap {
     state: FighterState,
     health: i32,
     y: i32,
+    slamming: bool,
 }
 
 /// A comic-book word ("BAM!") that pops up and fades.
@@ -39,14 +40,14 @@ pub struct Pop {
 pub struct Seen {
     fighters: [Option<Snap>; 2],
     ready: [bool; 2],
-    /// The curse on each fighter last tick: (left half there, right half there, squeezing).
+    /// Each fighter's curse last tick: (left half there, right half there, squeezing).
     curse: [Option<(bool, bool, bool)>; 2],
-    /// Lobbed projectiles seen last tick: (owner, landing spot in pixels, splash radius in pixels).
+    /// Lobs seen last tick: (owner, landing spot in pixels, splash radius in pixels).
     lobs: Vec<(usize, i32, i32)>,
     seed: u32,
 }
 
-/// Screen shake in pixels; it decays by itself.
+/// Screen shake in pixels; decays by itself.
 #[derive(Resource, Default)]
 pub struct Shake(pub f32);
 
@@ -81,7 +82,7 @@ fn pop(commands: &mut Commands, text: &str, at: Vec2, vel: Vec2, rgb: [f32; 3], 
     ));
 }
 
-/// A burst of `n` particles flying out from `at` at speeds between `lo` and `hi` pixels a second.
+/// A burst of `n` particles flying out from `at` at between `lo` and `hi` pixels a second.
 fn burst(commands: &mut Commands, seen: &mut Seen, at: Vec2, n: usize, lo: f32, hi: f32, colors: &[Color], size: f32, life: f32, gravity: f32) {
     for k in 0..n {
         let angle = seen.range(0.0, std::f32::consts::TAU);
@@ -115,7 +116,7 @@ pub fn emit(
         let feet = Vec2::new((f.x / PX) as f32, GROUND_Y + (f.y / PX) as f32);
         let towards = if s.fighters[1 - i].x >= f.x { 1.0 } else { -1.0 };
         if let Some(prev) = seen.fighters[i] {
-            // Hits and blocks: the health dropped this tick.
+            // hits and blocks: health dropped this tick
             if f.health < prev.health {
                 let lost = prev.health - f.health;
                 let at = feet + Vec2::new(towards * 10.0, 32.0);
@@ -132,13 +133,32 @@ pub fn emit(
                 burst(&mut commands, &mut seen, feet + Vec2::new(0.0, 30.0), 36, 60.0, 240.0, &spark, 3.0, 0.7, -120.0);
                 shake.0 = 8.0;
             }
-            // Dust: the jump, the landing and walking.
+            // dust from jumping, landing and walking
             if prev.y == 0 && f.y > 0 {
                 for k in 0..6 {
                     let dir = if k % 2 == 0 { 1.0 } else { -1.0 };
                     let v = Vec2::new(dir * seen.range(20.0, 60.0), seen.range(5.0, 25.0));
                     spawn(&mut commands, feet + Vec2::new(dir * 6.0, 1.0), v, dust[k % 2], 3.0, 0.4, -20.0, true);
                 }
+            }
+            // ground pound: speed lines while plunging, a ring of rubble and a shake on landing
+            if f.slamming && s.frame % 2 == 0 {
+                for dx in [-6.0, 0.0, 6.0] {
+                    spawn(&mut commands, feet + Vec2::new(dx, 18.0 + seen.range(0.0, 18.0)), Vec2::new(0.0, 90.0), Color::srgb(1.0, 1.0, 1.0), 1.0, 0.18, 0.0, true);
+                }
+            }
+            if prev.slamming && !f.slamming && f.y == 0 {
+                for k in 0..22 {
+                    let dir = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    let v = Vec2::new(dir * seen.range(40.0, 170.0), seen.range(20.0, 90.0));
+                    spawn(&mut commands, feet + Vec2::new(dir * seen.range(2.0, 10.0), 1.0), v, dust[k % 2], seen.range(2.0, 4.0), 0.55, -260.0, true);
+                }
+                // flat shockwave along the floor
+                for k in 0..10 {
+                    let dir = if k % 2 == 0 { 1.0 } else { -1.0 };
+                    spawn(&mut commands, feet + Vec2::new(0.0, 2.0), Vec2::new(dir * 150.0, 0.0), Color::srgb(1.0, 0.95, 0.8), 3.0, 0.25, 0.0, true);
+                }
+                shake.0 = shake.0.max(5.0);
             }
             if prev.y > 0 && f.y == 0 && f.state != FighterState::Ko {
                 for k in 0..8 {
@@ -153,7 +173,7 @@ pub fn emit(
             }
         }
 
-        // The swing: streaks trailing off the front of an active hitbox.
+        // the swing: streaks trailing off the front of an active hitbox
         if let Some(b) = s.hitbox(i, data) {
             let front = if f.facing > 0 { b[2] } else { b[0] };
             let at = Vec2::new((front / PX) as f32, GROUND_Y + ((b[1] + b[3]) / 2 / PX) as f32);
@@ -172,7 +192,7 @@ pub fn emit(
             }
         }
 
-        // Charging: sparkles flow into the crescent over his head, more the longer he holds.
+        // charging: sparkles flow into the crescent over his head, more the longer he holds
         if f.state == FighterState::Attack && f.charge > 0 && !f.launched {
             if let Some(p) = &data.moves[f.attack].projectile {
                 let centre = feet + Vec2::new(f.facing as f32 * p.x as f32, p.y as f32);
@@ -188,9 +208,9 @@ pub fn emit(
             }
         }
 
-        // Resting after the finger-gun volley: grey smoke curls up from the fingertip.
+        // smoke curls up from the fingertip after the finger-gun volley
         if f.state == FighterState::Attack && data.moves[f.attack].anim == AnimKind::Volley && frame_for(f, data, false, s.frame) == Frame::Gun(4) && s.frame % 3 == 0 {
-            // The tip of the finger that fired last (column 63, row 22 of the drawing), in the world.
+            // tip of the finger that fired last (column 63, row 22 of the drawing), in the world
             let tip = Vec2::new((f.x / PX) as f32 + f.facing as f32 * (63 - CENTRE_X) as f32, GROUND_Y + (f.y / PX) as f32 + (FULL_H - 22) as f32);
             let grey = [Color::srgb(0.88, 0.88, 0.9), Color::srgb(0.7, 0.7, 0.75)];
             let off = Vec2::new(seen.range(-1.5, 1.5), 0.0);
@@ -199,7 +219,7 @@ pub fn emit(
             spawn(&mut commands, tip + off, drift, grey[(s.frame as usize / 3) % 2], size, 1.1, 0.0, false);
         }
 
-        // The curse: sparkles round the ring, shards when a half is hit, and a collapse at the end.
+        // the curse: sparkles round the ring, shards when a half is hit, a collapse at the end
         let centre = feet + Vec2::new(0.0, 38.0);
         let blue = [Color::srgb(0.45, 0.72, 1.0), Color::WHITE, Color::srgb(0.2, 0.45, 0.95)];
         if let Some(c) = f.curse {
@@ -209,7 +229,7 @@ pub fn emit(
                 spawn(&mut commands, p, Vec2::new(0.0, seen.range(6.0, 18.0)), blue[(s.frame as usize / 3) % 3], 2.0, 0.6, 0.0, true);
             }
             if c.squeeze > 0 {
-                // The ring closes in: sparks fly from it towards the middle.
+                // the ring closes in: sparks fly towards the middle
                 for _ in 0..3 {
                     let a = seen.range(0.0, std::f32::consts::TAU);
                     let k = 1.0 - c.squeeze as f32 / c.squeeze_frames.max(1) as f32;
@@ -237,7 +257,7 @@ pub fn emit(
             seen.curse[i] = None;
         }
 
-        // Guard break: the guard shatters and the hit lands in full.
+        // guard break: the guard shatters and the hit lands in full
         if let Some(prev) = seen.fighters[i] {
             if f.health < prev.health && matches!(prev.state, FighterState::Guard | FighterState::Blockstun) && f.state == FighterState::Hitstun {
                 let at = feet + Vec2::new(towards * 8.0, 34.0);
@@ -248,9 +268,13 @@ pub fn emit(
             }
         }
 
-        // The lecture: words and symbols pour out of his mouth, a blast of them when it lands, and
-        // chalk dust shakes off the raised finger.
-        if f.state == FighterState::Attack && data.moves[f.attack].anim == AnimKind::Lecture {
+        // the lecture: words and symbols pour out of his mouth, a blast of them when it lands, chalk dust off the raised finger (the collar grab only talks while he holds the enemy)
+        let talking = |mv: &t2f::sim::MoveData| match mv.anim {
+            AnimKind::Lecture => true,
+            AnimKind::Grab => f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.hit_gap,
+            _ => false,
+        };
+        if f.state == FighterState::Attack && talking(&data.moves[f.attack]) {
             let mv = &data.moves[f.attack];
             let dir = f.facing as f32;
             let mouth = feet + Vec2::new(2.0 * dir, 41.0);
@@ -261,13 +285,13 @@ pub fn emit(
                 let vel = Vec2::new(dir * seen.range(16.0, 34.0), seen.range(8.0, 22.0));
                 pop(&mut commands, g, mouth + Vec2::new(dir * 4.0, seen.range(-3.0, 6.0)), vel, rgb, 9.0);
             }
-            if s.frame % 3 == 0 {
+            if s.frame % 3 == 0 && mv.anim == AnimKind::Lecture {
                 let tip = feet + Vec2::new(dir * 20.0, 57.0);
                 let v = Vec2::new(seen.range(-12.0, 12.0), seen.range(-6.0, 10.0));
                 spawn(&mut commands, tip, v, Color::srgb(0.96, 0.96, 0.98), 2.0, 0.5, -30.0, true);
             }
-            if mv.is_active(f.state_frame) {
-                // The words land: a fan of white flecks flying out in front of him.
+            if mv.is_active(f.state_frame) && mv.anim == AnimKind::Lecture {
+                // the words land: a fan of white flecks in front of him
                 for _ in 0..5 {
                     let v = Vec2::new(dir * seen.range(70.0, 130.0), seen.range(-22.0, 22.0));
                     spawn(&mut commands, mouth + Vec2::new(dir * 6.0, seen.range(-3.0, 3.0)), v, Color::WHITE, 2.0, 0.28, 0.0, true);
@@ -275,7 +299,7 @@ pub fn emit(
             }
         }
 
-        // Runes: golden glyphs swirl round him as he pronounces, and sparks trail the wave in flight.
+        // runes: golden glyphs swirl round him as he pronounces, sparks trail the wave in flight
         let runic = |m: &t2f::sim::MoveData| m.projectile.as_ref().and_then(|p| p.image.as_deref()) == Some("runes");
         if f.state == FighterState::Attack && runic(&data.moves[f.attack]) {
             let mv = &data.moves[f.attack];
@@ -312,7 +336,7 @@ pub fn emit(
             }
         }
 
-        // The moon appearing: sparkles at the spot in the sky where it hangs.
+        // the moon appearing: sparkles where it hangs
         if let Some((mx, my, age)) = f.moon {
             let at = Vec2::new((mx / PX) as f32, GROUND_Y + (my / PX) as f32);
             if age == 1 {
@@ -323,8 +347,7 @@ pub fn emit(
             }
         }
 
-        // The fish: bubbles all over the ground where it will land (the warning), a bubbly trail, and
-        // a splash when it lands.
+        // the fish: bubbles where it will land (the warning), a bubbly trail, a splash on landing
         let blue = [Color::srgb(0.72, 0.9, 1.0), Color::WHITE, Color::srgb(0.45, 0.72, 0.98)];
         let mut lobs_now: Vec<(usize, i32, i32)> = Vec::new();
         for p in s.projectiles.iter().filter(|p| p.owner == i) {
@@ -336,7 +359,7 @@ pub fn emit(
                 let v = Vec2::new(seen.range(-3.0, 3.0), seen.range(8.0, 20.0));
                 spawn(&mut commands, Vec2::new(x, GROUND_Y + 1.0), v, blue[(seen.rand() * 3.0) as usize % 3], if seen.rand() > 0.6 { 4.0 } else { 3.0 }, 0.8, 0.0, true);
             }
-            // The edges of the zone are marked by a ring of darker bubbles on the floor.
+            // the edge of the zone is marked by a ring of darker bubbles
             for edge in [-1.0f32, 1.0] {
                 if s.frame % 3 == 0 {
                     spawn(&mut commands, Vec2::new(land as f32 + edge * radius as f32, GROUND_Y + 1.0), Vec2::new(0.0, 6.0), Color::srgb(0.3, 0.58, 0.95), 3.0, 0.6, 0.0, true);
@@ -346,7 +369,7 @@ pub fn emit(
             let v = Vec2::new(seen.range(-10.0, 10.0), seen.range(0.0, 14.0));
             spawn(&mut commands, at + Vec2::new(seen.range(-4.0, 4.0), seen.range(-3.0, 3.0)), v, blue[(s.frame as usize) % 3], 3.0, 0.4, 0.0, true);
         }
-        // Before the fish is shot, the spot it will land on is already marked with bubbles.
+        // before the fish is shot, the landing spot is already marked with bubbles
         if f.state == FighterState::Attack && !f.launched {
             if let (Some(land), Some(pd)) = (f.lob_target, data.moves[f.attack].projectile.as_ref().filter(|d| d.lob)) {
                 let (land, radius) = (land / PX, pd.splash_radius);
@@ -367,7 +390,7 @@ pub fn emit(
         seen.lobs.extend(lobs_now);
         for (_, land, radius) in landed {
             let at = Vec2::new(land as f32, GROUND_Y + 1.0);
-            // Water thrown up in a fountain.
+            // water thrown up in a fountain
             for k in 0..40 {
                 let angle = seen.range(0.35, std::f32::consts::PI - 0.35);
                 let speed = seen.range(60.0, 170.0);
@@ -375,7 +398,7 @@ pub fn emit(
                 let x = at.x + seen.range(-(radius as f32) * 0.5, radius as f32 * 0.5);
                 spawn(&mut commands, Vec2::new(x, at.y), v, blue[k % 3], if k % 4 == 0 { 3.0 } else { 2.0 }, 0.9, -260.0, true);
             }
-            // Bubbles across the whole splash zone, and a puddle that dries up.
+            // bubbles across the splash zone, and a puddle that dries up
             for k in 0..18 {
                 let x = at.x + seen.range(-(radius as f32), radius as f32);
                 spawn(&mut commands, Vec2::new(x, at.y), Vec2::new(seen.range(-6.0, 6.0), seen.range(14.0, 36.0)), blue[k % 3], 4.0, 1.1, 0.0, true);
@@ -387,8 +410,7 @@ pub fn emit(
             shake.0 = shake.0.max(4.0);
         }
 
-        // Projectiles: a burst (and a flash) when each is thrown, and a glittering trail behind it.
-        // A volley shot also gets a "BAM!" at the fingertips.
+        // projectiles: a burst and flash when thrown, a glittering trail behind; a volley shot also gets a "BAM!" at the fingertips
         for p in s.projectiles.iter().filter(|p| p.owner == i) {
             let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
             let mv = &data.moves[p.move_index];
@@ -416,7 +438,7 @@ pub fn emit(
             }
         }
 
-        // The special becoming ready: a burst of sparkles round the head, and a trickle while it is ready.
+        // the special becoming ready: a burst of sparkles round the head, then a trickle while it's ready
         let ready = f.meter >= Fighter::METER_MAX;
         let head = feet + Vec2::new(0.0, 50.0);
         if ready && !seen.ready[i] {
@@ -427,7 +449,7 @@ pub fn emit(
             spawn(&mut commands, head + off, Vec2::new(0.0, 18.0), gold[(s.frame as usize / 6) % 3], 2.0, 0.5, 0.0, true);
         }
         seen.ready[i] = ready;
-        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y });
+        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y, slamming: f.slamming });
     }
 }
 

@@ -1,5 +1,5 @@
-//! Pure game simulation. No Bevy, no floats, no unordered iteration: it must be deterministic
-//! so it can be rolled back for online play.
+//! The game simulation. No Bevy, no floats, no unordered iteration, so it stays deterministic
+//! and can be rolled back for online play.
 
 pub mod data;
 pub mod fighter;

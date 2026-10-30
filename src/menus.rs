@@ -1,7 +1,5 @@
-//! Title / mode select, character select and stage select.
-//!
-//! One cursor drives every menu. Both players' keys work on it: WASD + F/G or arrows + J/K, and
-//! Enter / Esc. In character select the first confirm picks P1's fighter and the second picks P2's.
+//! Title, character select and stage select, all driven by one cursor.
+//! Both players' keys work: WASD + F/G or arrows + J/K, Enter and Esc.
 
 use bevy::prelude::*;
 
@@ -33,14 +31,14 @@ impl Plugin for MenuPlugin {
     }
 }
 
-/// Cursor position and item count of the menu on screen.
+/// Cursor position and item count of the current menu.
 #[derive(Resource, Default)]
 struct Menu {
     cursor: usize,
     len: usize,
 }
 
-/// Which player is choosing a fighter: 0 = P1, 1 = P2.
+/// Who is picking: 0 = P1, 1 = P2.
 #[derive(Resource, Default)]
 struct Picking(usize);
 
@@ -59,20 +57,19 @@ struct Item {
     label: String,
     color: Color,
     enabled: bool,
-    /// A square picture shown to the left of the name (character select).
+    /// Square picture left of the name.
     portrait: Option<Handle<Image>>,
-    /// A smaller line under the name ("Arch-Historian").
+    /// Small line under the name.
     subtitle: Option<String>,
-    /// The subtitle glitches like corrupted text.
+    /// Draw the subtitle as glitching text.
     corrupted: bool,
 }
 
-/// A subtitle drawn as flickering, corrupted text: it keeps its true wording but letters keep
-/// turning into noise, and it jitters and changes colour.
+/// Subtitle that keeps its wording but flickers: letters turn to noise, it jitters and changes colour.
 #[derive(Component)]
 struct Glitch(String);
 
-/// A portrait next to a menu item: it grows a little while that item is selected.
+/// Portrait beside a menu item; grows while selected.
 #[derive(Component)]
 struct Portrait(usize);
 
@@ -109,7 +106,7 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     commands.entity(header).insert(Header);
     spawn_text(commands, state.clone(), hint.into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
 
-    // Items with pictures need more room: the pictures are square, as tall as their row.
+    // rows with pictures need more room
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
     let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
     let top = top_override.unwrap_or(if with_pictures { 56.0 } else { 40.0 });
@@ -126,7 +123,7 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
         }
         if let Some(image) = item.portrait {
             let size = (spacing - 4.0).min(40.0);
-            // A dark frame behind the picture, then the picture, to the left of the name.
+            // dark frame, then the picture, left of the name
             commands.spawn((
                 DespawnOnExit(state.clone()),
                 Sprite::from_color(Color::srgb(0.02, 0.02, 0.05), Vec2::splat(size + 4.0)),
@@ -142,15 +139,14 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     }
 }
 
-/// The logo bobs gently; the portal behind the town pulses.
+/// The logo bobs; the portal pulses.
 #[derive(Component)]
 struct TitleLogo;
 
 #[derive(Component)]
 struct TitlePortal;
 
-/// The start screen: Galata Tower under the torn-open portal, the pixel-art logo floating over it,
-/// and the menu underneath.
+/// Start screen: the tower under the portal, the logo over it, the menu below.
 fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res<AssetServer>) {
     let state = AppState::Title;
     for (image, z, portal) in [("backgrounds/galata/sky.png", -10.0, false), ("backgrounds/galata/portal.png", -9.0, true), ("backgrounds/galata/near.png", -8.0, false)] {
@@ -159,7 +155,7 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
             e.insert(TitlePortal);
         }
     }
-    // A dark band behind the menu so that it reads against the street, and a vignette at the top.
+    // dark band behind the menu so it reads, vignette at the top
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.82), Vec2::new(384.0, 96.0)), Transform::from_xyz(0.0, -62.0, 1.0)));
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.35), Vec2::new(384.0, 22.0)), Transform::from_xyz(0.0, 105.0, 1.0)));
     commands.spawn((
@@ -211,7 +207,7 @@ fn spawn_char_select(
             let mut item = Item::new(c.name.clone(), Color::srgb(c.color.0, c.color.1, c.color.2));
             item.subtitle = c.subtitle.clone();
             item.corrupted = c.corrupted_subtitle;
-            // portraits/<sprite folder>.png, if there is one
+            // portraits/<sprite folder>.png, if it exists
             let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
             if crate::assets_dir().join(format!("portraits/{folder}.png")).exists() {
                 item.portrait = Some(asset_server.load(format!("portraits/{folder}.png")));
@@ -280,8 +276,7 @@ fn menu_labels(menu: Res<Menu>, mut items: Query<(&MenuItem, &mut Text2d, &mut T
     }
 }
 
-/// Corrupt the glitching subtitles: every few frames some letters turn into noise, the line jitters
-/// sideways and flickers between red, violet and white.
+/// Glitch the corrupted subtitles: letters turn to noise, the line jitters and flickers red, violet and white.
 fn glitch_subtitles(time: Res<Time>, mut lines: Query<(&Glitch, &mut Text2d, &mut TextColor, &mut Transform)>) {
     let tick = (time.elapsed_secs() * 14.0) as u32;
     let noise = |n: u32| {
@@ -346,8 +341,7 @@ fn char_confirm(
     mut lobby: ResMut<crate::online::OnlineLobby>,
     mut info: ResMut<crate::online::OnlineInfo>,
 ) {
-    // Online, each player picks only their own fighter; the pick goes to the other side and the
-    // match starts once both are in (see `online::drive_lobby`).
+    // online you only pick your own fighter; the match starts when both are in (see `online::drive_lobby`)
     if *mode == Mode::Online {
         if back_pressed(&keys) {
             if let Some(l) = lobby.0.as_mut() {
@@ -378,7 +372,7 @@ fn char_confirm(
             header.0 = pick_title(1, *mode);
             menu.cursor = 0;
         } else if stages.0.len() == 1 {
-            // Nothing to choose between yet, so go straight to the fight.
+            // only one stage, so go straight to the fight
             sel.stage = 0;
             next.set(AppState::Fight);
         } else {
@@ -396,7 +390,7 @@ fn stage_confirm(keys: Res<ButtonInput<KeyCode>>, menu: Res<Menu>, mut sel: ResM
     }
 }
 
-/// Menus are drawn around the origin, so park the camera there.
+/// Menus are drawn around the origin.
 fn menu_camera(mut cam: Single<&mut Transform, With<Camera2d>>) {
     cam.translation.x = 0.0;
 }

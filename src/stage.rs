@@ -1,35 +1,33 @@
 use serde::Deserialize;
 
-/// Loaded from `assets/stages/*.ron`. Placeholder visuals until real backgrounds exist.
-/// All stages currently share the same playable width (`GameState::STAGE_HALF_WIDTH`).
+/// Loaded from `assets/stages/*.ron`. All stages share the same playable width (`GameState::STAGE_HALF_WIDTH`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct StageData {
     pub name: String,
-    /// Background colour (r, g, b) in 0..1.
+    /// Background colour (r, g, b), 0..1.
     pub sky: (f32, f32, f32),
     /// Colour of the background pillars.
     pub pillar: (f32, f32, f32),
-    /// The floor alternates between these two colours so camera movement is visible.
+    /// The floor alternates between these two colours.
     pub floor_a: (f32, f32, f32),
     pub floor_b: (f32, f32, f32),
-    /// Pixel-art background layers, back to front. When empty, plain pillars are drawn instead.
+    /// Background layers, back to front. Plain pillars when empty.
     #[serde(default)]
     pub layers: Vec<LayerData>,
-    /// Image repeated along the floor (path relative to `assets/`), instead of the two colours.
+    /// Tile repeated along the floor (path under `assets/`) instead of the two colours.
     #[serde(default)]
     pub floor_tile: Option<String>,
 }
 
-/// One parallax background layer. Images are 216 px tall and centred on the screen.
+/// One parallax layer. Images are 216 px tall, centred on the screen.
 #[derive(Clone, Debug, Deserialize)]
 pub struct LayerData {
-    /// Path relative to `assets/`.
+    /// Path under `assets/`.
     pub image: String,
-    /// How much the layer follows the camera: 1 stays fixed on screen (sky), 0 is fixed in the
-    /// world (the fence the fighters stand in front of).
+    /// How much it follows the camera: 1 stays on screen (sky), 0 stays in the world.
     pub parallax: f32,
     pub z: f32,
-    /// Make the layer slowly pulse, for things like portals and fires.
+    /// Pulses slowly (portals, fires).
     #[serde(default)]
     pub glow: bool,
 }

@@ -1,7 +1,5 @@
-//! Online play in the game: the Online screen (your address, a box for a friend's, invitations), the
-//! fighter pick that follows, and the match itself on the rollback session.
-//!
-//! The screens only drive `t2f::net::lobby::Lobby`; the match is `t2f::net`'s ggrs session.
+//! Online screens and match loop: the Online screen (your address, a friend's, invitations), the fighter pick,
+//! then the match on the rollback session. The screens drive `t2f::net::lobby::Lobby`.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::ButtonState;
@@ -32,20 +30,20 @@ impl Plugin for OnlinePlugin {
     }
 }
 
-/// The lobby socket, alive from the Online screen until the match starts.
+/// The lobby socket, from the Online screen until the match starts.
 #[derive(Resource, Default)]
 pub struct OnlineLobby(pub Option<Lobby>);
 
-/// What the screens show and remember.
+/// What the screens show.
 #[derive(Resource, Default)]
 pub struct OnlineInfo {
-    /// 0 = left fighter, 1 = right; known once an invitation is accepted.
+    /// 0 = left fighter, 1 = right; known once an invite is accepted.
     pub local: usize,
-    /// The friend's address as typed.
+    /// Friend's address as typed.
     pub typed: String,
     pub message: String,
     pub invite_from: Option<SocketAddr>,
-    /// My fighter is locked in and I am waiting for theirs.
+    /// Locked in, waiting for the other player.
     pub locked: bool,
 }
 
@@ -67,7 +65,7 @@ struct StatusText;
 #[derive(Component)]
 struct PopupText;
 
-/// Both players must have the same version and character files to be able to play.
+/// Both players need the same version and character files.
 fn build_of(roster: &Roster) -> u32 {
     let mut parts: Vec<String> = vec![env!("CARGO_PKG_VERSION").to_string()];
     for c in &roster.0 {
@@ -102,7 +100,7 @@ struct Label;
 
 fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, roster: Res<Roster>, mut info: ResMut<OnlineInfo>) {
     if lobby.0.is_none() {
-        // The usual port first, then any free one (a second copy on the same computer).
+        // the usual port first, then any free one (a second copy on this PC)
         lobby.0 = Lobby::new(DEFAULT_PORT, build_of(&roster), true).or_else(|_| Lobby::new(0, build_of(&roster), true)).ok();
         if lobby.0.is_none() {
             info.message = "Could not open a network port.".into();
@@ -129,7 +127,7 @@ fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, r
     );
 }
 
-/// Receive and send lobby messages every frame, whichever online screen is up.
+/// Poll the lobby every frame on either online screen.
 fn drive_lobby(
     mut lobby: ResMut<OnlineLobby>,
     mut info: ResMut<OnlineInfo>,
@@ -187,7 +185,7 @@ fn drive_lobby(
     }
 }
 
-/// The Online screen: typing the friend's address, inviting, and answering an invitation.
+/// The Online screen: typing an address, inviting, answering invites.
 fn online_screen(
     keys: Res<ButtonInput<KeyCode>>,
     mut typing: MessageReader<KeyboardInput>,
@@ -204,7 +202,7 @@ fn online_screen(
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let invited = matches!(lobby.0.as_ref().map(|l| l.stage), Some(Stage::Invited(_)));
 
-    // Typing the address: digits, '.', ':' (and letters for a host name are not needed).
+    // typing: digits, '.' and ':' only
     for ev in typing.read() {
         if ev.state != ButtonState::Pressed || ctrl || invited {
             continue;
@@ -271,7 +269,6 @@ fn online_screen(
         }
     }
 
-    // The texts.
     addr_text.0 = match mine {
         Some(a) => a.to_string(),
         None => "looking it up...".into(),
@@ -296,7 +293,7 @@ fn online_screen(
     };
 }
 
-/// Test helpers (see `DevOptions`): invite, accept and pick without anyone at the keyboard.
+/// Test helper (see `DevOptions`): invite, accept and pick with no one at the keyboard.
 fn dev_auto(dev: Res<crate::DevOptions>, mut lobby: ResMut<OnlineLobby>, mut info: ResMut<OnlineInfo>, mut done: Local<(bool, bool)>) {
     let Some(l) = lobby.0.as_mut() else { return };
     if let (Some(addr), false, Stage::Idle) = (&dev.invite, done.0, l.stage) {
@@ -315,7 +312,7 @@ fn dev_auto(dev: Res<crate::DevOptions>, mut lobby: ResMut<OnlineLobby>, mut inf
     }
 }
 
-/// One frame of the online match: take your keys (and, for the other side, the network's input).
+/// One frame of the online match.
 pub fn step_online(
     net: &mut NetSession,
     sim: &mut Sim,
@@ -334,7 +331,7 @@ pub fn step_online(
             _ => {}
         }
     }
-    // The faster side slows down a little so the other can keep up.
+    // the faster side slows down a little so the other can catch up
     fixed.set_timestep_hz(if net.session.frames_ahead() > 0 { 54.0 } else { 60.0 });
     if net.session.current_state() == SessionState::Running {
         let local = net.local;

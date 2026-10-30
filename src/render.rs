@@ -1,5 +1,4 @@
-//! Draws the fighters from hand-drawn whole-body frames (see `t2f::anim`), plus the summoned
-//! crescent and the shooting star.
+//! Draws the fighters from whole-body frames (see `t2f::anim`), plus the summon crescent and the star.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,11 +9,11 @@ use t2f::sim::{Fighter, FighterState, GameState, MarkKind, Phase, ProjectileData
 
 use crate::{AppState, Roster, Selection, Sim, GROUND_Y};
 
-/// The image handles of every drawing, one map per fighter, keyed by file name.
+/// Image handles of every drawing: one map per fighter, keyed by file name.
 #[derive(Resource, Default)]
 pub struct FrameHandles(pub Vec<HashMap<String, Handle<Image>>>);
 
-/// The root of one fighter, at their feet.
+/// A fighter's root, at their feet.
 #[derive(Component)]
 pub struct Body(pub usize);
 /// The sprite showing a fighter's current drawing.
@@ -22,22 +21,21 @@ pub struct Body(pub usize);
 pub struct SpriteOf(pub usize);
 #[derive(Component)]
 pub struct CrescentOf(pub usize);
-/// One of up to `STAR_SLOTS` projectile sprites of a fighter (a volley has several in flight).
+/// One of up to `STAR_SLOTS` projectile sprites per fighter (a volley has several in flight).
 #[derive(Component)]
 pub struct StarOf(pub usize, pub usize);
 pub const STAR_SLOTS: usize = 4;
-/// The overlay that shows the special meter (the glowing mark, or the hat).
+/// Overlay for the special meter (the glowing mark or the hat).
 #[derive(Component)]
 pub struct MarkOf(pub usize);
 
-/// One pixel of a whip's lash, which is drawn in the game (`animate_whips`), not an image.
+/// One pixel of a whip's lash, drawn by the game (`animate_whips`), not an image.
 #[derive(Component)]
 pub struct WhipPixel(pub usize, pub usize);
 
 const LASH_PIXELS: usize = 220;
 
-/// A fighter's raven while it is flying (it is part of the body drawing while perched), and the
-/// rose it carries or drops.
+/// A fighter's raven while it flies (when perched it's part of the body drawing), and its rose.
 #[derive(Component)]
 pub struct RavenOf(pub usize);
 #[derive(Component)]
@@ -46,18 +44,18 @@ pub struct RoseOf(pub usize);
 /// The whip layer over a fighter's body.
 #[derive(Component)]
 pub struct WhipOf(pub usize);
-/// The moon the Professor hangs in the sky (world space, not on his body), and the star beside it.
+/// The moon the Professor hangs in the sky (world space, not on his body) and the star beside it.
 #[derive(Component)]
 pub struct MoonOf(pub usize);
 #[derive(Component)]
 pub struct MoonStarOf(pub usize);
-/// A speech bubble over a lecturing fighter (world space, so the text is never mirrored).
+/// Speech bubble over a lecturing fighter (world space, so the text isn't mirrored).
 #[derive(Component)]
 pub struct BubbleOf(pub usize);
 #[derive(Component)]
 pub struct BubbleText(pub usize);
 
-/// The curse round a fighter: a root that follows them, and its four drawings.
+/// The curse round a fighter: a root that follows them and its four drawings.
 #[derive(Component)]
 pub struct CurseRoot(pub usize);
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +91,7 @@ fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool, raven
     stems
 }
 
-/// Spawn one fighter and its effects. Drawings come from `assets/sprites/<name>/`; a character
-/// without them falls back to a flat colour box so it still works before it has art.
+/// Spawn one fighter and its effects from `assets/sprites/<name>/`; without drawings it falls back to a flat colour box.
 pub fn spawn_fighter(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -124,8 +121,7 @@ pub fn spawn_fighter(
         .spawn((Body(fighter), DespawnOnExit(AppState::Fight), Transform::from_xyz(0.0, 0.0, 1.0 + fighter as f32), Visibility::default()))
         .id();
 
-    // The drawings are FRAME_W wide with the body centre off to the left of the middle, so the
-    // sprites are shifted to put the body centre on the fighter.
+    // drawings are FRAME_W wide with the body centre left of the middle, so the sprites are shifted to put the centre on the fighter
     let shift = FRAME_W as f32 / 2.0 - t2f::anim::CENTRE_X as f32;
     if let Some(image) = get("idle_0") {
         let body = commands
@@ -143,7 +139,7 @@ pub fn spawn_fighter(
             commands.entity(root).add_child(overlay);
         }
         if raven {
-            // Out of the body drawing the raven is its own sprite, flying in the world.
+            // out of the body drawing the raven is its own sprite, flying in the world
             commands.spawn((
                 RavenOf(fighter),
                 DespawnOnExit(AppState::Fight),
@@ -160,7 +156,7 @@ pub fn spawn_fighter(
             ));
         }
         if whip {
-            // The whip layer is wider than the body drawing but has the same left edge.
+            // the whip layer is wider than the body drawing but has the same left edge
             let overlay = commands
                 .spawn((
                     WhipOf(fighter),
@@ -183,7 +179,7 @@ pub fn spawn_fighter(
             }
         }
         if let Some(p) = summon.filter(|p| p.lob) {
-            // The moon and its star hang in the sky at a fixed spot, so they are not children of the body.
+            // the moon and star hang in the sky at a fixed spot, so they're not children of the body
             commands.spawn((
                 MoonOf(fighter),
                 DespawnOnExit(AppState::Fight),
@@ -200,14 +196,14 @@ pub fn spawn_fighter(
             ));
             let _ = p;
         }
-        if frames.iter().any(|f| matches!(f, Frame::Lecture(_))) {
+        if frames.iter().any(|f| matches!(f, Frame::Lecture(_) | Frame::Grab(_))) {
             let width = LECTURE_LINE.len() as f32 * 5.0 + 10.0;
             commands
                 .spawn((BubbleOf(fighter), DespawnOnExit(AppState::Fight), Transform::from_xyz(0.0, 0.0, 7.0), Visibility::Hidden))
                 .with_children(|b| {
                     b.spawn((Sprite::from_color(Color::BLACK, Vec2::new(width + 2.0, 18.0)), Transform::from_xyz(0.0, 0.0, 0.0)));
                     b.spawn((Sprite::from_color(Color::WHITE, Vec2::new(width, 16.0)), Transform::from_xyz(0.0, 0.0, 0.1)));
-                    // The tail pointing down at the speaker.
+                    // the tail pointing at the speaker
                     b.spawn((Sprite::from_color(Color::BLACK, Vec2::new(6.0, 6.0)), Transform::from_xyz(-6.0, -9.0, 0.0).with_rotation(Quat::from_rotation_z(0.785))));
                     b.spawn((Sprite::from_color(Color::WHITE, Vec2::new(4.0, 4.0)), Transform::from_xyz(-6.0, -8.0, 0.2).with_rotation(Quat::from_rotation_z(0.785))));
                     b.spawn((
@@ -251,7 +247,7 @@ pub fn spawn_fighter(
     handles.0[fighter] = map;
 }
 
-/// Whether a fighter is speaking: both at the start of a round, and the winner at the end.
+/// Whether a fighter is speaking: both at the start of a round, the winner at the end.
 fn speaking(s: &GameState, fighter: usize) -> bool {
     match s.phase {
         Phase::Fighting => s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60),
@@ -260,7 +256,7 @@ fn speaking(s: &GameState, fighter: usize) -> bool {
     }
 }
 
-/// The colour a fighter's sprites are tinted by their state, so hits and blocks read clearly.
+/// Tint for a fighter's sprites by state, so hits and blocks read clearly.
 fn tint(state: FighterState) -> Color {
     match state {
         FighterState::Hitstun => Color::srgb(1.0, 0.65, 0.65),
@@ -271,7 +267,7 @@ fn tint(state: FighterState) -> Color {
     }
 }
 
-/// Place each fighter, face them toward their opponent, and knock them over when KO'd.
+/// Place each fighter, face the opponent, and knock them over when KO'd.
 pub fn pose_bodies(sim: Res<Sim>, mut bodies: Query<(&Body, &mut Transform)>) {
     for (Body(i), mut tf) in &mut bodies {
         let f = &sim.0.fighters[*i];
@@ -287,12 +283,12 @@ pub fn animate_body(
     roster: Res<Roster>,
     sel: Res<Selection>,
     handles: Res<FrameHandles>,
-    mut sprites: Query<(&SpriteOf, &mut Sprite)>,
+    mut sprites: Query<(&SpriteOf, &mut Sprite, &mut Transform)>,
 ) {
-    for (SpriteOf(i), mut sprite) in &mut sprites {
+    for (SpriteOf(i), mut sprite, mut tf) in &mut sprites {
         let f = &sim.0.fighters[*i];
         let frame = frame_for(f, &roster.0[sel.chars[*i]], speaking(&sim.0, *i), sim.0.frame);
-        // While the raven is out flying, the body drawing without it on the shoulder is used.
+        // while the raven is out, use the body drawing without it on the shoulder
         let mut stem = frame.file_stem();
         if sim.0.ravens[*i].active {
             stem.push_str("_nr");
@@ -303,11 +299,18 @@ pub fn animate_body(
             }
         }
         sprite.color = tint(f.state);
+        // a roll spins the crouched body once round, forwards or backwards
+        tf.rotation = if f.state == FighterState::Roll {
+            let turns = f.state_frame as f32 / Fighter::ROLL_FRAMES as f32;
+            let forward = if f.move_dir * f.facing > 0 { -1.0 } else { 1.0 };
+            Quat::from_rotation_z(forward * turns.min(1.0) * std::f32::consts::TAU)
+        } else {
+            Quat::IDENTITY
+        };
     }
 }
 
-/// Show the crescent while its owner is summoning: it appears as the arms go up, twinkles, and
-/// fades once the star has been sent.
+/// Show the crescent while its owner summons: it appears as the arms go up, twinkles, and fades once the star is sent.
 pub fn animate_crescent(
     sim: Res<Sim>,
     roster: Res<Roster>,
@@ -327,7 +330,7 @@ pub fn animate_crescent(
                     sprite.image = image.clone();
                 }
                 sprite.color = Color::srgba(1.0, 1.0, 1.0, if n >= 5 { 0.5 } else { 1.0 });
-                // It swells while charging, and flashes when fully charged.
+                // swells while charging, flashes when fully charged
                 let data = &roster.0[sel.chars[*i]];
                 let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
                 let grow = if mv.charge_frames > 0 { f.charge as f32 / mv.charge_frames as f32 } else { 0.0 };
@@ -341,7 +344,7 @@ pub fn animate_crescent(
     }
 }
 
-/// Draw each projectile in flight, turned to face where it is going (or spinning, for a thrown hat).
+/// Draw each projectile in flight, turned to face where it's going (or spinning, for a thrown hat).
 pub fn animate_stars(
     sim: Res<Sim>,
     roster: Res<Roster>,
@@ -359,11 +362,14 @@ pub fn animate_stars(
                 if data.is_some_and(|d| d.spin) {
                     tf.rotation = Quat::from_rotation_z(-(p.age as f32) * 0.5 * p.vx.signum() as f32);
                     sprite.flip_y = false;
+                } else if data.is_some_and(|d| d.upright) {
+                    tf.rotation = Quat::IDENTITY;
+                    sprite.flip_y = false;
                 } else {
                     tf.rotation = Quat::from_rotation_z((p.vy as f32).atan2(p.vx as f32));
                     sprite.flip_y = p.vx < 0;
                 }
-                // A charged star is bigger.
+                // a charged star is bigger
                 tf.scale = Vec3::splat(p.power as f32 / 100.0);
                 let flicker = (p.age / 3 % STAR_FRAMES as u32) as usize;
                 let base = data.map_or("star", |d| d.image_name());
@@ -376,8 +382,7 @@ pub fn animate_stars(
     }
 }
 
-/// The special meter shown on the fighter: a mark on the skin that fades in and then glows, or a
-/// hat that appears on the head once the special is ready.
+/// The special meter on the fighter: a mark on the skin that fades in then glows, or a hat that appears once the special is ready.
 pub fn animate_marks(
     sim: Res<Sim>,
     roster: Res<Roster>,
@@ -412,8 +417,7 @@ pub fn animate_marks(
     }
 }
 
-/// The last lash a fighter threw, so that it can stay on screen a little after the move: it holds
-/// still for a moment, then slackens and is drawn back in.
+/// The last lash a fighter threw, kept so it stays on screen a little after the move: it holds, then slackens and is drawn back in.
 #[derive(Clone, Copy)]
 pub struct LashMemory {
     hand: (f32, f32),
@@ -424,7 +428,7 @@ pub struct LashMemory {
 const LASH_HOLD: u32 = 8;
 const LASH_FADE: u32 = 14;
 
-/// Fly each raven that is out of its owner's shoulder, and show the rose it carries or drops.
+/// Fly each raven that's off its owner's shoulder, and show the rose it carries or drops.
 pub fn animate_ravens(
     sim: Res<Sim>,
     roster: Res<Roster>,
@@ -466,9 +470,9 @@ pub fn animate_ravens(
     }
 }
 
-/// Show the whip layer of the move being thrown, if it has one. The held end is in the body's
-/// drawing; while the whip lashes out the rest is generated here, a curve of pixels from the hand to
-/// the enemy (to the end of its reach if they are further away), so it always meets them.
+/// Show the whip layer of the move being thrown, if it has one. The held end is in the body drawing;
+/// while the whip lashes out the rest is generated here, a curve of pixels from the hand to the enemy
+/// (or the end of its reach), so it always meets them.
 pub fn animate_whips(
     mut memory: Local<[Option<LashMemory>; 2]>,
     sim: Res<Sim>,
@@ -483,7 +487,7 @@ pub fn animate_whips(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let layer = t2f::anim::whip_layer(f, data);
-        // A lashing pose: the image is not drawn; the lash is generated instead.
+        // lashing pose: no image, the lash is generated instead
         let lash = layer.as_deref().and_then(|name| t2f::anim::lash_hand(name));
         let mut path: Vec<(i32, i32)> = Vec::new();
         if let Some(hand) = lash {
@@ -494,7 +498,7 @@ pub fn animate_whips(
             let foe = &sim.0.fighters[1 - *i];
             let ahead = ((foe.x - f.x) * f.facing) as f32 / PX as f32;
             let tip_fwd = if ahead > 0.0 { (ahead - 6.0).clamp(24.0, natural) } else { natural };
-            // Height above the feet: the special keeps its fixed high or low line, the others go for the enemy's body.
+            // height above the feet: the special keeps its fixed high or low line, the others go for the enemy's body
             let (lo, hi) = (hb.y as f32, (hb.y + hb.h) as f32);
             let tip_up = if special {
                 (lo + hi) / 2.0 - if mv.world_y { f.y as f32 / PX as f32 } else { 0.0 }
@@ -503,14 +507,14 @@ pub fn animate_whips(
                 foe_mid.clamp(lo - mv.assist as f32, hi + mv.assist as f32)
             }
             .max(3.0);
-            // The lash snaps out over its first frames.
+            // the lash snaps out over its first frames
             let ext = (f.state_frame.saturating_sub(mv.startup) as f32 / 3.0).clamp(0.35, 1.0);
             let tip_full = (t2f::anim::CENTRE_X as f32 + tip_fwd, FULL_H as f32 - tip_up);
             let tip = (hand.0 + (tip_full.0 - hand.0) * ext, hand.1 + (tip_full.1 - hand.1) * ext);
             path = lash_path(hand, tip, sim.0.frame as f32 * 0.9, 2.4 - 1.6 * ext);
             memory[*i] = Some(LashMemory { hand, tip: tip_full, age: 0 });
         } else if let Some(mem) = memory[*i].as_mut() {
-            // After the lash: it hangs out for a moment, then droops and is drawn back in.
+            // after the lash: it hangs for a moment, then droops and is drawn back in
             let other_layer = layer.as_deref().is_some_and(|n| !n.starts_with("hard_3") && !n.starts_with("summon_5"));
             mem.age += 1;
             if other_layer || mem.age > LASH_HOLD + LASH_FADE || matches!(f.state, FighterState::Hitstun | FighterState::Ko) {
@@ -553,8 +557,8 @@ pub fn animate_whips(
     }
 }
 
-/// The pixels of a whip from `hand` to `tip` (picture pixels): a quadratic curve with a ripple
-/// running down it. `ripple` is how far the lash wobbles sideways; `phase` moves the ripple along.
+/// The pixels of a whip from `hand` to `tip` (picture pixels): a quadratic curve with a ripple running
+/// down it. `ripple` is how far it wobbles sideways, `phase` moves the ripple along.
 fn lash_path(hand: (f32, f32), tip: (f32, f32), phase: f32, ripple: f32) -> Vec<(i32, i32)> {
     let (dx, dy) = (tip.0 - hand.0, tip.1 - hand.1);
     let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -575,14 +579,14 @@ fn lash_path(hand: (f32, f32), tip: (f32, f32), phase: f32, ripple: f32) -> Vec<
         }
     }
     path.truncate(LASH_PIXELS - 8);
-    // The handle is a little thicker: its first pixels are doubled just below.
+    // thicker handle: its first pixels are doubled just below
     let thick: Vec<(i32, i32)> = path.iter().take(8).map(|&(x, y)| (x, y + 1)).collect();
     path.extend(thick);
     path
 }
 
-/// Dark leather with a lighter glint every few pixels and a pale cracker at the tip; the doubled
-/// handle pixels at the end of the list are dark.
+/// Dark leather with a lighter glint every few pixels and a pale cracker at the tip; the doubled handle
+/// pixels at the end are dark.
 fn lash_colour(index: usize, len: usize, tint: Color) -> Color {
     let body = len.saturating_sub(8);
     let c = if index >= body {
@@ -600,7 +604,7 @@ fn lash_colour(index: usize, len: usize, tint: Color) -> Color {
     if tint == Color::WHITE { base } else { base.mix(&tint, 0.5) }
 }
 
-/// The moon and its star hang in the sky where the special was summoned, and fade away after a while.
+/// The moon and its star hang where the special was summoned and fade after a while.
 pub fn animate_moons(
     sim: Res<Sim>,
     handles: Res<FrameHandles>,
@@ -657,10 +661,10 @@ pub fn animate_bubbles(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        // A grab says it while he holds the enemy (after the pull); the others while they wind up.
+        // a grab says it while he holds the enemy (after the pull); the others while they wind up
         let grabbing = mv.hits > 1;
         let lecturing = f.state == FighterState::Attack
-            && mv.anim == t2f::sim::AnimKind::Lecture
+            && matches!(mv.anim, t2f::sim::AnimKind::Lecture | t2f::sim::AnimKind::Grab)
             && f.state_frame + 3 < mv.total_frames()
             && (!grabbing || f.state_frame > mv.startup);
         *visibility = if lecturing { Visibility::Inherited } else { Visibility::Hidden };
@@ -682,7 +686,7 @@ pub fn animate_bubbles(
     }
 }
 
-/// Spawn the (hidden) curse drawings for both fighters; whoever is cursed shows them.
+/// Spawn the hidden curse drawings for both fighters; whoever is cursed shows them.
 pub fn spawn_curses(commands: &mut Commands, asset_server: &AssetServer) {
     for fighter in 0..2usize {
         let root = commands
@@ -702,8 +706,8 @@ pub fn spawn_curses(commands: &mut Commands, asset_server: &AssetServer) {
     }
 }
 
-/// Show the curse round the cursed fighter: the petal glow of each half disappears when that half
-/// has been hit, and once both are gone the ring squeezes shut.
+/// Show the curse on the cursed fighter: each half's glow disappears when that half is hit, and with both
+/// gone the ring squeezes shut.
 pub fn animate_curses(
     sim: Res<Sim>,
     time: Res<Time>,
@@ -720,7 +724,7 @@ pub fn animate_curses(
                 let grow = (c.age as f32 / 14.0).min(1.0);
                 let pulse = 1.0 + 0.03 * (time.elapsed_secs() * 5.0).sin();
                 let squeeze = if c.squeeze > 0 { c.squeeze as f32 / c.squeeze_frames.max(1) as f32 } else { 0.0 };
-                // The ring compresses towards the middle (never quite to nothing).
+                // the ring compresses towards the middle (never quite to nothing)
                 let s = grow * pulse * (1.0 - 0.9 * squeeze * squeeze);
                 tf.scale = Vec3::new(s, s, 1.0);
             }
@@ -742,7 +746,7 @@ pub fn animate_curses(
         sprite.color = match part {
             CursePart::PetalsLeft | CursePart::PetalsRight => Color::srgba(1.0, 1.0, 1.0, glow),
             _ => {
-                // The ring goes white-hot as it squeezes shut.
+                // the ring goes white-hot as it squeezes shut
                 let squeeze = if c.squeeze > 0 { c.squeeze as f32 / c.squeeze_frames.max(1) as f32 } else { 0.0 };
                 Color::srgb(1.0 + squeeze, 1.0 + squeeze * 0.6, 1.0 + squeeze * 0.2)
             }
@@ -750,7 +754,7 @@ pub fn animate_curses(
     }
 }
 
-/// One of the three squares under a fighter's feet that show their light-attack combo.
+/// One of the three squares under a fighter's feet showing their light combo.
 #[derive(Component)]
 pub struct ComboSquare(pub usize, pub usize);
 /// The broken-shield icon over a fighter whose block is disabled.
@@ -777,8 +781,8 @@ pub fn spawn_combo_ui(commands: &mut Commands, asset_server: &AssetServer) {
     }
 }
 
-/// The three combo squares fill as light attacks connect (the third lights up when the finisher lands, and
-/// flashes while it is ready to be thrown); the broken shield shows while the block is disabled.
+/// The combo squares fill as lights connect (the third lights up when the finisher lands and flashes while
+/// it's ready to be thrown); the broken shield shows while block is disabled.
 pub fn animate_combo_ui(
     sim: Res<Sim>,
     time: Res<Time>,
@@ -792,7 +796,7 @@ pub fn animate_combo_ui(
         sprite.color = if lit {
             if *k == 2 { Color::srgb(1.0, 0.4, 0.15) } else { Color::srgb(1.0, 0.85, 0.25) }
         } else if *k == 2 && f.combo == 2 {
-            // The finisher is next: the last square flashes.
+            // the finisher is next: the last square flashes
             let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 14.0).sin();
             Color::srgb(0.25 + 0.75 * pulse, 0.12 + 0.2 * pulse, 0.1)
         } else {
@@ -802,7 +806,7 @@ pub fn animate_combo_ui(
     for (BlockIcon(i), mut sprite, mut tf, mut visibility) in &mut icons {
         let f = &sim.0.fighters[*i];
         let disabled = f.block_disabled > 0;
-        // It blinks for the last stretch, so you can see the guard is about to come back.
+        // blinks near the end so you can see the guard is coming back
         let blinking_off = f.block_disabled < 40 && (f.block_disabled / 5) % 2 == 0;
         *visibility = if disabled && !blinking_off { Visibility::Inherited } else { Visibility::Hidden };
         tf.translation.x = (f.x / PX) as f32;
@@ -811,7 +815,7 @@ pub fn animate_combo_ui(
     }
 }
 
-/// One of a fighter's summoned goblins (up to `MINION_SLOTS` per fighter).
+/// One of a fighter's summoned goblins (up to `MINION_SLOTS` each).
 #[derive(Component)]
 pub struct MinionSprite(pub usize, pub usize);
 pub const MINION_SLOTS: usize = 4;
@@ -830,8 +834,7 @@ pub fn spawn_minion_sprites(commands: &mut Commands) {
     }
 }
 
-/// Draw each summoned goblin: bobbing while it waits beside its summoner, running at the opponent,
-/// snapping its jaws at them, and running home.
+/// Draw each goblin: bobbing beside its summoner, running at the opponent, snapping its jaws, running home.
 pub fn animate_minions(
     sim: Res<Sim>,
     handles: Res<FrameHandles>,
@@ -849,7 +852,7 @@ pub fn animate_minions(
                 if m.bit && m.timer < 8 {
                     4
                 } else if (foe_x - m.x).abs() < 30 * PX {
-                    // On top of the enemy and snapping at them.
+                    // on top of the enemy and snapping at them
                     ((sim.0.frame / 8) % 2) as usize * 4
                 } else {
                     2 + ((sim.0.frame / 5) % 2) as usize
@@ -864,7 +867,7 @@ pub fn animate_minions(
         sprite.flip_x = m.facing < 0;
         tf.translation.x = (m.x / PX) as f32;
         tf.translation.y = GROUND_Y + 12.0;
-        // It fades out in its last half second.
+        // fades out in its last half second
         let left = 480u32.saturating_sub(m.age);
         let alpha = if left < 30 { left as f32 / 30.0 } else { 1.0 };
         sprite.color = if m.hurt > 0 { Color::srgba(1.0, 0.35, 0.35, alpha) } else { Color::srgba(1.0, 1.0, 1.0, alpha) };

@@ -1,13 +1,12 @@
-//! The step before a match: finding your public address, inviting a friend (or being invited),
-//! and both choosing a fighter. Everything is peer to peer over one UDP socket; there is no host.
+//! Before a match: finding your public address, inviting a friend (or being invited) and both picking
+//! a fighter, peer to peer over one UDP socket, no host.
 //!
-//! Packets can get lost, so each message is simply repeated every few hundred milliseconds until
-//! the other side's answer shows it arrived.
+//! Packets can get lost, so each message is repeated every few hundred milliseconds until the answer
+//! shows it arrived.
 //!
-//! Connecting through two routers: if you have opened your port (UPnP does that automatically on
-//! many routers) the friend's invitation reaches you. If not, both of you enter the other's address
-//! and invite at the same moment: each side's packets open the way for the other's. Two invitations
-//! that cross are treated as accepted by both.
+//! Through two routers: if your port is open (UPnP does it on many routers) the invite reaches you. If
+//! not, both of you enter the other's address and invite at the same moment; each side's packets open
+//! the way for the other's. Two invitations that cross count as accepted by both.
 
 use std::net::SocketAddr;
 use std::sync::mpsc::Receiver;
@@ -22,9 +21,9 @@ use super::upnp::{self, Mapping};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LobbyMsg {
-    /// "Play with me." `nonce` settles who is player 0 if two invitations cross.
+    /// "Play with me." `nonce` decides who is player 0 if two invitations cross.
     Invite { build: u32, nonce: u64 },
-    /// My fighter (an index into the roster) and whether I have locked it in. Also the answer to an invitation.
+    /// My fighter (roster index) and whether it's locked in. Also the answer to an invitation.
     Pick { build: u32, index: u8, ready: bool, player: u8 },
     Decline,
     Leave,
@@ -33,11 +32,11 @@ pub enum LobbyMsg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Idle,
-    /// I have invited this address and wait for the answer.
+    /// I invited this address and am waiting for an answer.
     Inviting(SocketAddr),
-    /// This address has invited me.
+    /// This address invited me.
     Invited(SocketAddr),
-    /// Both sides are choosing fighters.
+    /// Both sides are picking fighters.
     Picking(SocketAddr),
 }
 
@@ -46,9 +45,9 @@ pub enum Event {
     /// Someone invites you: accept or decline.
     Invited(SocketAddr),
     Declined,
-    /// The other side runs a different version or different character files.
+    /// The other side has a different version or character files.
     BuildMismatch,
-    /// Both sides agreed; pick a fighter. `player` is 0 (left) or 1 (right).
+    /// Both agreed; pick a fighter. `player` is 0 (left) or 1 (right).
     Picking { player: usize },
     PeerPicked { index: u8, ready: bool },
     PeerLeft,
@@ -64,7 +63,7 @@ pub struct Lobby {
     stun_servers: Vec<SocketAddr>,
     last_stun: Option<Instant>,
     upnp: Option<Mutex<Receiver<Mapping>>>,
-    /// The address the internet sees for this socket (what a friend types), once known.
+    /// Your address as the internet sees it (what a friend types), once known.
     pub public: Option<SocketAddr>,
     pub mapping: Mapping,
     pub stage: Stage,
@@ -76,7 +75,7 @@ pub struct Lobby {
 }
 
 fn random_bytes<const N: usize>() -> [u8; N] {
-    // Not secret, just different on each run: the clock and the process id, stirred.
+    // not secret, just different on each run
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(1);
     let mut x = (t as u64) ^ ((std::process::id() as u64) << 32) ^ 0x9E37_79B9_7F4A_7C15;
     let mut out = [0u8; N];
@@ -90,8 +89,8 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 }
 
 impl Lobby {
-    /// Open the socket on `port` (0 = any) and start looking up the public address and asking the router
-    /// to forward the port. `build` identifies the version and character files; both sides must match.
+    /// Open the socket on `port` (0 = any), look up the public address and ask the router to forward the
+    /// port. `build` identifies the version and character files; both sides must match.
     pub fn new(port: u16, build: u32, with_router: bool) -> std::io::Result<Self> {
         let transport = Transport::bind(port)?;
         let port = transport.port();
@@ -127,7 +126,7 @@ impl Lobby {
         self.last_send = Instant::now() - Duration::from_secs(10);
     }
 
-    /// Accept the invitation that is pending.
+    /// Accept the pending invitation.
     pub fn accept(&mut self) -> Option<Event> {
         if let Stage::Invited(from) = self.stage {
             self.stage = Stage::Picking(from);
@@ -148,13 +147,13 @@ impl Lobby {
         self.stage = Stage::Idle;
     }
 
-    /// Choose a fighter (`ready` locks it in).
+    /// Pick a fighter (`ready` locks it in).
     pub fn pick(&mut self, index: u8, ready: bool) {
         self.mine = (index, ready);
         self.last_send = Instant::now() - Duration::from_secs(10);
     }
 
-    /// Give the invitation up, or leave the pick screen.
+    /// Give up the invitation or leave the pick screen.
     pub fn leave(&mut self) {
         match self.stage {
             Stage::Inviting(to) | Stage::Picking(to) => self.transport.send_lobby(&LobbyMsg::Leave, to),
@@ -180,7 +179,7 @@ impl Lobby {
                 Packet::Game(_) => {}
             }
         }
-        // Resend whatever the stage needs.
+        // resend what the stage needs
         if self.last_send.elapsed() >= Duration::from_millis(300) {
             match self.stage {
                 Stage::Inviting(to) => {
@@ -204,7 +203,7 @@ impl Lobby {
     }
 
     fn poll_router(&mut self) {
-        // Ask the STUN servers until one answers (a packet may be lost).
+        // ask the STUN servers until one answers (a packet may be lost)
         if self.public.is_none() && self.last_stun.map_or(true, |t| t.elapsed() >= Duration::from_millis(1500)) {
             for server in &self.stun_servers {
                 self.transport.send_raw(&stun::request(self.txid), *server);
@@ -236,7 +235,7 @@ impl Lobby {
                         self.stage = Stage::Invited(from);
                         events.push(Event::Invited(from));
                     }
-                    // Both invited each other: that counts as accepted. The higher number is player 0.
+                    // both invited each other: that counts as accepted; the higher number is player 0
                     Stage::Inviting(to) if to == from => {
                         self.player = if self.nonce > nonce { 0 } else { 1 };
                         self.stage = Stage::Picking(from);
@@ -255,8 +254,7 @@ impl Lobby {
                     return;
                 }
                 match self.stage {
-                    // The answer to my invitation.
-                    // (their pick says which player they are, so crossed invitations cannot disagree)
+                    // the answer to my invitation (their pick says which player they are, so crossed invitations can't disagree)
                     Stage::Inviting(to) if to == from => {
                         self.player = 1 - (player as usize).min(1);
                         self.stage = Stage::Picking(from);
@@ -293,8 +291,8 @@ impl Lobby {
         }
     }
 
-    /// The match starts: hand the socket to the game. Until the other side's game starts talking, the
-    /// last pick keeps being resent so that they cannot be left waiting for it.
+    /// The match starts: hand the socket to the game. The last pick keeps being resent until the other
+    /// side's game starts talking, so they can't be left waiting.
     pub fn into_game(self) -> (GameSocket, SocketAddr, usize) {
         let peer = match self.stage {
             Stage::Picking(p) => p,

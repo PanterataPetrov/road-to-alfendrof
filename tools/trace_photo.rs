@@ -1,27 +1,21 @@
-//! Traces the lane photo into the stage's pixel-art background.
+//! Turns the lane photo into the stage background (near.png).
 //!
-//! `tools/lane_photo.png` is the user's photo of Galata Tower over a street. Only its upper part
-//! is used (no people or vehicles are in it). It is reduced to a small flat palette and then to
-//! chunky half-resolution cells (each becomes 2 x 2 game pixels). The buildings are continued
-//! upward by mirroring, to leave sky above the tower for the portal; the sky is cut out so it can
-//! scroll behind; and the sides are extended by mirroring so the stage is wider than the photo.
+//! The photo (`tools/lane_photo.png`) is shrunk to 40% so one picture pixel is one game pixel, reduced to a
+//! flat palette and put 54 pixels down from the top so the portal has room above the spire. The buildings
+//! continue upwards by reflecting their top rows, and the sky is cut out so the sky and portal layers show
+//! through.
 //!
 //! `cargo run --bin trace_photo -- <assets dir> <preview.png>`
 
 use std::path::Path;
 
-/// The traced picture's size in half-resolution cells (640 x 216 game pixels).
-const OUT_W: usize = 200;
-const OUT_H: usize = 108;
-/// The photo's own width in cells; the rest of the stage is mirrored sides.
-const PHOTO_W: usize = 200;
-/// Rows above the photo's top edge, filled by repeating a short strip of its top rows.
-const TOP: usize = 25;
-const PHOTO_H: usize = OUT_H - TOP;
-const PALETTE: usize = 32;
-/// How many of the photo's top rows are repeated to continue the buildings upward. Kept short so
-/// the tower's spire (a few rows down) is not repeated into the sky.
-const TOP_TILE: usize = 3;
+const OUT_W: usize = 400;
+const OUT_H: usize = 216;
+/// How far down the photo starts, so the spire's tip sits at row 62 under the portal.
+const SHIFT: usize = 54;
+/// The photo is drawn at this fraction of its size.
+const SCALE: f32 = 0.4;
+const PALETTE: usize = 56;
 
 type Rgb = [f32; 3];
 
@@ -29,7 +23,7 @@ fn dist2(a: &Rgb, b: &Rgb) -> f32 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
 }
 
-/// k-means with k-means++ starting points, deterministic.
+/// Deterministic k-means with k-means++ starting points.
 fn kmeans(points: &[Rgb], k: usize, iterations: usize) -> Vec<Rgb> {
     let mut state = 12_345u64;
     let mut next = move || {
@@ -91,91 +85,65 @@ fn main() {
     let preview = args.next();
 
     let photo = image::open(concat!(env!("CARGO_MANIFEST_DIR"), "/tools/lane_photo.png")).unwrap().to_rgb8();
-    let (pw, ph) = (photo.width() as usize, photo.height() as usize);
-    // Square cells: the photo's width spread over PHOTO_W cells, and only as many rows as fit.
-    // Cells are 5 photo pixels wide and 6.8 tall: the photo is squashed a little so that its whole
-    // height (down to just above the tiny people at the very bottom) fits under the sky.
-    let cell = pw as f32 / PHOTO_W as f32;
-    let cell_h = 6.8f32;
-    let used_rows = ((PHOTO_H as f32 * cell_h) as usize).min(ph);
-
-    // A flat palette from a sample of the part of the photo that is used.
-    let sample: Vec<Rgb> = photo
-        .enumerate_pixels()
-        .filter(|(_, y, _)| (*y as usize) < used_rows)
-        .step_by(7)
-        .map(|(_, _, p)| [p[0] as f32, p[1] as f32, p[2] as f32])
-        .collect();
-    let palette = kmeans(&sample, PALETTE, 12);
-
-    // Every used photo pixel becomes its nearest palette colour.
-    let mut indexed = vec![0u8; pw * used_rows];
-    for y in 0..used_rows {
-        for x in 0..pw {
-            let p = photo.get_pixel(x as u32, y as u32);
-            indexed[y * pw + x] = nearest(&palette, &[p[0] as f32, p[1] as f32, p[2] as f32]) as u8;
-        }
-    }
-
-    // Each cell takes the palette colour most common in its patch of the photo, which keeps edges
-    // crisp (averaging would blur them).
-    let mut photo_cells = vec![0u8; PHOTO_W * PHOTO_H];
-    for cy in 0..PHOTO_H {
-        for cx in 0..PHOTO_W {
-            let mut counts = [0u32; PALETTE];
-            for y in (cy as f32 * cell_h) as usize..(((cy + 1) as f32 * cell_h) as usize).min(used_rows) {
-                for x in (cx as f32 * cell) as usize..(((cx + 1) as f32 * cell) as usize).min(pw) {
-                    counts[indexed[y * pw + x] as usize] += 1;
+    // average the photo down to picture size
+    let rows = OUT_H - SHIFT;
+    let step = 1.0 / SCALE;
+    let mut small = vec![[0.0f32; 3]; OUT_W * rows];
+    for y in 0..rows {
+        for x in 0..OUT_W {
+            let (x0, x1) = ((x as f32 * step) as u32, (((x + 1) as f32 * step) as u32).min(photo.width()));
+            let (y0, y1) = ((y as f32 * step) as u32, (((y + 1) as f32 * step) as u32).min(photo.height()));
+            let mut sum = [0.0f32; 3];
+            let mut n = 0.0;
+            for py in y0..y1.max(y0 + 1) {
+                for px in x0..x1.max(x0 + 1) {
+                    let p = photo.get_pixel(px.min(photo.width() - 1), py.min(photo.height() - 1));
+                    for c in 0..3 {
+                        sum[c] += p[c] as f32;
+                    }
+                    n += 1.0;
                 }
             }
-            photo_cells[cy * PHOTO_W + cx] = counts.iter().enumerate().max_by_key(|&(_, &n)| n).map(|(i, _)| i as u8).unwrap();
+            small[y * OUT_W + x] = [sum[0] / n, sum[1] / n, sum[2] / n];
         }
     }
-    // Above the photo's top edge, continue the buildings by repeating a short strip of its top
-    // rows (sky stays sky).
-    let mut cells = vec![0u8; PHOTO_W * OUT_H];
+    // full picture: the photo's top rows reflected above it
+    let mut full = vec![[0.0f32; 3]; OUT_W * OUT_H];
     for r in 0..OUT_H {
-        let source_row = if r >= TOP { r - TOP } else { (TOP - 1 - r) % TOP_TILE };
-        cells[r * PHOTO_W..(r + 1) * PHOTO_W].copy_from_slice(&photo_cells[source_row * PHOTO_W..(source_row + 1) * PHOTO_W]);
+        let source = if r >= SHIFT { r - SHIFT } else { (SHIFT - 1 - r).min(rows - 1) };
+        full[r * OUT_W..(r + 1) * OUT_W].copy_from_slice(&small[source * OUT_W..(source + 1) * OUT_W]);
     }
 
-    // Clean up speckle: a cell changes to the colour most of its neighbours share, if that is a
-    // clear majority.
-    let mut cleaned = cells.clone();
-    for y in 1..OUT_H - 1 {
-        for x in 1..PHOTO_W - 1 {
-            let mut counts = [0u8; PALETTE];
-            for dy in 0..3 {
-                for dx in 0..3 {
-                    counts[cells[(y + dy - 1) * PHOTO_W + x + dx - 1] as usize] += 1;
-                }
-            }
-            let (best, n) = counts.iter().enumerate().max_by_key(|&(_, &n)| n).map(|(i, &n)| (i, n)).unwrap();
-            if n >= 6 {
-                cleaned[y * PHOTO_W + x] = best as u8;
-            }
-        }
-    }
-    let cells = cleaned;
+    let sample: Vec<Rgb> = full.iter().step_by(5).cloned().collect();
+    let palette = kmeans(&sample, PALETTE, 14);
+    let colours: Vec<usize> = full.iter().map(|p| nearest(&palette, p)).collect();
 
-    // The sky: bright palette colours that are blue, lavender or white (not warm like the walls),
-    // connected to the top edge. The tower's darker grey-blue cone is not bright enough.
-    let is_sky_colour = |i: usize| {
-        let c = palette[i];
-        let luma = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
-        c[2] >= c[0] - 4.0 && luma > 160.0
+    // the sky: bright blue, lavender or white (not warm walls), connected to the top edge
+    // the tower (needle, cone, shaft at column 186) is never sky, even where its pale roof is as bright as a cloud
+    let tower = |x: usize, y: usize| {
+        let off = (x as i32 - 186).abs();
+        (60..84).contains(&y) && off <= 2 || (84..=142).contains(&y) && off <= (y as i32 - 84) * 27 / 58 + 1 || (143..=158).contains(&y) && off <= 30
     };
-    let mut sky = vec![false; PHOTO_W * OUT_H];
-    let mut stack: Vec<(usize, usize)> = (0..PHOTO_W).filter(|&x| is_sky_colour(cells[x] as usize)).map(|x| (x, 0)).collect();
+    let is_sky = |i: usize| {
+        if tower(i % OUT_W, i / OUT_W) {
+            return false;
+        }
+        let c = palette[colours[i]];
+        let luma = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+        c[2] >= c[0] - 4.0 && luma > 150.0
+    };
+    let mut sky = vec![false; OUT_W * OUT_H];
+    let mut stack: Vec<(usize, usize)> = (0..OUT_W).filter(|&x| is_sky(x)).map(|x| (x, 0)).collect();
     while let Some((x, y)) = stack.pop() {
-        if sky[y * PHOTO_W + x] || !is_sky_colour(cells[y * PHOTO_W + x] as usize) {
+        let i = y * OUT_W + x;
+        if sky[i] || !is_sky(i) {
             continue;
         }
-        sky[y * PHOTO_W + x] = true;
+        sky[i] = true;
         if x > 0 {
             stack.push((x - 1, y));
         }
-        if x + 1 < PHOTO_W {
+        if x + 1 < OUT_W {
             stack.push((x + 1, y));
         }
         if y > 0 {
@@ -185,29 +153,34 @@ fn main() {
             stack.push((x, y + 1));
         }
     }
-
-    // The photo covers the whole stage width, so every column comes straight from it.
-    let margin = (OUT_W - PHOTO_W) / 2;
-    let source = |c: usize| -> usize { c - margin };
-    let mut near = image::RgbaImage::new((OUT_W * 2) as u32, (OUT_H * 2) as u32);
-    let mut shown = image::RgbaImage::new((OUT_W * 4) as u32, (OUT_H * 4) as u32);
-    for y in 0..OUT_H {
-        for c in 0..OUT_W {
-            let s = y * PHOTO_W + source(c);
-            let col = palette[cells[s] as usize];
-            let rgb = [col[0].round() as u8, col[1].round() as u8, col[2].round() as u8];
-            for dy in 0..4u32 {
-                for dx in 0..4u32 {
-                    shown.put_pixel(c as u32 * 4 + dx, y as u32 * 4 + dy, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+    // one more pixel of sky around the edge so no pale halo is left on the buildings
+    let edge = sky.clone();
+    for y in 1..OUT_H - 1 {
+        for x in 1..OUT_W - 1 {
+            let i = y * OUT_W + x;
+            if !edge[i] && !tower(x, y) && (edge[i - 1] || edge[i + 1] || edge[i - OUT_W] || edge[i + OUT_W]) {
+                let c = palette[colours[i]];
+                if 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2] > 120.0 && c[2] >= c[0] - 12.0 {
+                    sky[i] = true;
                 }
             }
-            if sky[s] {
-                continue;
-            }
+        }
+    }
+
+    let mut near = image::RgbaImage::new(OUT_W as u32, OUT_H as u32);
+    let mut shown = image::RgbaImage::new((OUT_W * 2) as u32, (OUT_H * 2) as u32);
+    for y in 0..OUT_H {
+        for x in 0..OUT_W {
+            let i = y * OUT_W + x;
+            let c = palette[colours[i]];
+            let rgb = [c[0].round() as u8, c[1].round() as u8, c[2].round() as u8];
             for dy in 0..2u32 {
                 for dx in 0..2u32 {
-                    near.put_pixel(c as u32 * 2 + dx, y as u32 * 2 + dy, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+                    shown.put_pixel(x as u32 * 2 + dx, y as u32 * 2 + dy, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
                 }
+            }
+            if !sky[i] {
+                near.put_pixel(x as u32, y as u32, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
             }
         }
     }
@@ -217,14 +190,5 @@ fn main() {
     if let Some(path) = preview {
         shown.save(Path::new(&path)).unwrap();
     }
-
-    // Where the spire's tip is, for the portal: the highest non-sky cell near the tower's column.
-    let tower_col = ((465.0 / cell) as usize).min(PHOTO_W - 1);
-    let tip = (0..OUT_H).find(|&y| (tower_col.saturating_sub(3)..=tower_col + 3).any(|x| !sky[y * PHOTO_W + x]));
-    println!(
-        "palette colours: {PALETTE}; tower at canvas column {}, spire tip at row {:?}; wrote {}",
-        margin + tower_col,
-        tip,
-        folder.join("near.png").display()
-    );
+    println!("wrote {}", folder.join("near.png").display());
 }
