@@ -175,7 +175,7 @@ mod tests {
 
     fn chars() -> [CharacterData; 2] {
         [
-            CharacterData::from_ron(include_str!("../assets/characters/ayz.ron")).unwrap(),
+            CharacterData::from_ron(include_str!("sim/classic_fighter.ron")).unwrap(),
             CharacterData::from_ron(include_str!("../assets/characters/evilayz.ron")).unwrap(),
         ]
     }

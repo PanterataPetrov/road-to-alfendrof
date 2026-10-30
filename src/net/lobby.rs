@@ -11,6 +11,7 @@
 
 use std::net::SocketAddr;
 use std::sync::mpsc::Receiver;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ pub struct Lobby {
     txid: [u8; 12],
     stun_servers: Vec<SocketAddr>,
     last_stun: Option<Instant>,
-    upnp: Option<Receiver<Mapping>>,
+    upnp: Option<Mutex<Receiver<Mapping>>>,
     /// The address the internet sees for this socket (what a friend types), once known.
     pub public: Option<SocketAddr>,
     pub mapping: Mapping,
@@ -101,7 +102,7 @@ impl Lobby {
             txid: random_bytes::<12>(),
             stun_servers: if with_router { stun::resolve_servers() } else { Vec::new() },
             last_stun: None,
-            upnp: with_router.then(|| upnp::open_port(port)),
+            upnp: with_router.then(|| Mutex::new(upnp::open_port(port))),
             public: None,
             mapping: if with_router { Mapping::Working } else { Mapping::Unavailable("off".into()) },
             stage: Stage::Idle,
@@ -211,7 +212,8 @@ impl Lobby {
             self.last_stun = Some(Instant::now());
         }
         if let Some(rx) = &self.upnp {
-            if let Ok(m) = rx.try_recv() {
+            let answer = rx.lock().expect("router lookup").try_recv();
+            if let Ok(m) = answer {
                 if let Mapping::Opened(addr) = &m {
                     self.public.get_or_insert(*addr);
                 }

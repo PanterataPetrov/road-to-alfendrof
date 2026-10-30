@@ -855,10 +855,14 @@ fn leg_layer(parts: &Parts, legs: &Legs) -> Grid {
 }
 
 /// A whole-body drawing (upright, even for the KO), legs first, then the torso leaned and dropped over them.
-fn drawing_upright(parts: &Parts, frame: Frame) -> Grid {
+fn drawing_upright(parts: &Parts, frame: Frame, raven: bool) -> Grid {
     let spec = spec(frame);
     let mut canvas = leg_layer(parts, &spec.legs);
-    let upper = torso(parts, spec.arms, spec.mouth, spec.finger);
+    let mut upper = torso(parts, spec.arms, spec.mouth, spec.finger);
+    if raven {
+        // The raven perches on his front shoulder and leans with the torso.
+        stamp_raven(&mut upper, &raven_perched(), RAVEN_PERCH.0, RAVEN_PERCH.1);
+    }
     for cy in 0..UPPER_H {
         // The lean pivots at the hips, so the head moves furthest.
         let r = (cy - OY).clamp(0, UPPER_LAST_ROW);
@@ -877,7 +881,11 @@ fn drawing_upright(parts: &Parts, frame: Frame) -> Grid {
 /// The drawing with the scar left off, and the scar alone as a white mask (the game tints it, to
 /// fade it in while the special charges and to make it glow when it is ready).
 fn drawing_and_mark(parts: &Parts, frame: Frame) -> (Grid, Grid) {
-    let upright = drawing_upright(parts, frame);
+    drawing_and_mark_with(parts, frame, false)
+}
+
+fn drawing_and_mark_with(parts: &Parts, frame: Frame, raven: bool) -> (Grid, Grid) {
+    let upright = drawing_upright(parts, frame, raven);
     let mut body = upright.clone();
     let mut mark = Grid::blank(FRAME_W, FULL_H);
     for y in 0..FULL_H {
@@ -1122,15 +1130,19 @@ fn invert(img: &image::RgbaImage) -> image::RgbaImage {
 }
 
 /// Every drawing of Ayz as (file name, image).
-fn all_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
+fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
     let parts = split(default);
     let mut frames = Vec::new();
     let mut every = Frame::all();
     every.extend((0..t2f::anim::LECTURE_FRAMES).map(Frame::Lecture));
     every.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
     for f in every {
-        let (body, mark) = drawing_and_mark(&parts, f);
+        let (body, mark) = drawing_and_mark_with(&parts, f, raven);
         frames.push((f.file_stem(), body.to_png()));
+        if raven {
+            // The same pose with the raven gone from the shoulder (while it is out flying).
+            frames.push((format!("{}_nr", f.file_stem()), drawing_and_mark_with(&parts, f, false).0.to_png()));
+        }
         frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
     }
     for v in 0..t2f::anim::CRESCENT_FRAMES {
@@ -1142,6 +1154,244 @@ fn all_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
         frames.push((format!("fish_{v}"), fish(v).to_png()));
     }
     frames
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// The Professor's raven (black with a blue sheen, like his hair), the rose it drops, and the
+// words ("uh", "meh") he speaks at the enemy. The shapes are drawn from ellipses and polygons so
+// that the perched, flying, pecking and clawing drawings all match.
+// ---------------------------------------------------------------------------------------------
+
+/// Where the perched raven's feet are in the torso drawing (x centre, y bottom row).
+const RAVEN_PERCH: (i32, i32) = (48, 22);
+
+fn rv_ellipse(g: &mut Grid, cx: f32, cy: f32, rx: f32, ry: f32, ch: char) {
+    for y in 0..g.h as i32 {
+        for x in 0..g.w as i32 {
+            let (dx, dy) = ((x as f32 + 0.5 - cx) / rx, (y as f32 + 0.5 - cy) / ry);
+            if dx * dx + dy * dy <= 1.0 {
+                g.set(x, y, ch);
+            }
+        }
+    }
+}
+
+fn rv_poly(g: &mut Grid, pts: &[(f32, f32)], ch: char) {
+    for y in 0..g.h as i32 {
+        for x in 0..g.w as i32 {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut inside = false;
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                if (a.1 > py) != (b.1 > py) && px < (b.0 - a.0) * (py - a.1) / (b.1 - a.1) + a.0 {
+                    inside = !inside;
+                }
+            }
+            if inside {
+                g.set(x, y, ch);
+            }
+        }
+    }
+}
+
+/// The raven's body and head, facing right, with its beak and eye. (`head` is the centre of the
+/// head, `beak` the tip of the beak.)
+fn rv_body(g: &mut Grid, body: (f32, f32, f32, f32), head: (f32, f32), beak: (f32, f32)) {
+    rv_ellipse(g, body.0, body.1, body.2, body.3, 'k');
+    rv_ellipse(g, head.0, head.1, 2.6, 2.4, 'k');
+    // The beak: a wedge from the head to its tip (the upper edge lighter).
+    rv_poly(g, &[(head.0 + 1.5, head.1 - 1.2), (beak.0, beak.1), (head.0 + 1.5, head.1 + 1.0)], 'g');
+    g.set((head.0 + 1.0) as i32, (head.1 - 0.9) as i32, 'Z');
+    // The eye.
+    g.set((head.0 + 0.6) as i32, (head.1 - 0.6) as i32, 'u');
+    // A blue sheen along the back.
+    for k in 0..3 {
+        g.set((body.0 - 1.5 + k as f32 * 1.5) as i32, (body.1 - body.3 + 0.8 + k as f32 * 0.2) as i32, 'l');
+    }
+}
+
+fn rv_tail(g: &mut Grid, from: (f32, f32), tip: (f32, f32)) {
+    rv_poly(g, &[(from.0, from.1 - 1.4), (tip.0, tip.1 - 0.8), (tip.0 + 0.5, tip.1 + 1.4), (from.0, from.1 + 1.4)], 'k');
+}
+
+/// Sitting on the shoulder, facing right (14 x 11).
+fn raven_perched() -> Grid {
+    let mut g = Grid::blank(14, 11);
+    rv_body(&mut g, (6.5, 6.4, 5.0, 3.3), (10.6, 3.0), (14.0, 3.9));
+    rv_tail(&mut g, (3.0, 7.4), (0.0, 10.0));
+    // The wing folded over the body, a darker line for it.
+    for x in 3..=8 {
+        g.set(x, 7 + (x - 3) / 3, 'g');
+    }
+    for x in [6, 8] {
+        g.set(x, 10, 'g');
+    }
+    g
+}
+
+/// In the air, a wing up or down (0 up, 1 down), facing right (24 x 16).
+fn raven_flying(flap: usize) -> Grid {
+    let mut g = Grid::blank(24, 16);
+    rv_body(&mut g, (11.5, 9.0, 5.2, 2.9), (17.5, 6.9), (22.5, 7.9));
+    rv_tail(&mut g, (7.0, 9.6), (1.0, 12.0));
+    if flap == 0 {
+        rv_poly(&mut g, &[(8.0, 8.0), (14.0, 8.0), (6.0, 0.5), (2.5, 2.0)], 'k');
+        for (x, y) in [(5, 3), (6, 4), (7, 5)] {
+            g.set(x, y, 'l');
+        }
+    } else {
+        rv_poly(&mut g, &[(8.0, 10.0), (14.0, 10.0), (7.0, 15.5), (3.0, 14.0)], 'k');
+        for (x, y) in [(6, 13), (7, 12), (8, 11)] {
+            g.set(x, y, 'l');
+        }
+    }
+    g
+}
+
+/// Pecking: the body leans, the head cocked back (0) or thrust forward and down (1). (24 x 16)
+fn raven_pecking(strike: usize) -> Grid {
+    let mut g = Grid::blank(24, 16);
+    if strike == 0 {
+        rv_body(&mut g, (10.0, 9.4, 5.2, 3.2), (15.5, 5.0), (19.0, 6.0));
+    } else {
+        rv_body(&mut g, (10.0, 9.4, 5.2, 3.2), (16.0, 8.6), (21.5, 11.8));
+    }
+    rv_tail(&mut g, (6.0, 10.2), (1.0, 12.5));
+    for x in [8, 11] {
+        g.set(x, 13, 'g');
+        g.set(x, 14, 'g');
+    }
+    g
+}
+
+/// Clawing: wings up and the talons thrust forward and down. (24 x 16)
+fn raven_clawing(flap: usize) -> Grid {
+    let mut g = raven_flying(flap);
+    for k in 0..5 {
+        g.set(12 + k, 12 + k / 2, 'Z');
+        g.set(10 + k, 12 + k / 2, 'Z');
+    }
+    for (x, y) in [(17, 14), (18, 14), (17, 15), (15, 14)] {
+        g.set(x, y, 'u');
+    }
+    g
+}
+
+/// The rose the raven drops (8 x 12), with a glint in the second drawing.
+fn rose(variant: usize) -> Grid {
+    let mut g = Grid::blank(8, 12);
+    rv_poly(&mut g, &[(3.5, 7.0), (3.5, 11.8), (4.5, 11.8), (4.5, 7.0)], 'à');
+    rv_poly(&mut g, &[(4.5, 8.5), (7.5, 7.0), (6.0, 10.0)], 'è');
+    rv_ellipse(&mut g, 4.0, 3.5, 3.2, 3.0, 'C');
+    rv_ellipse(&mut g, 4.0, 4.6, 2.2, 1.8, 'B');
+    for (x, y) in [(3, 2), (4, 2), (3, 3)] {
+        g.set(x, y, '-');
+    }
+    g.set(4, 3, 'B');
+    g.set(5, 4, 'C');
+    if variant == 1 {
+        g.set(1, 0, 'W');
+        g.set(6, 1, 'W');
+    }
+    g
+}
+
+/// Stamp a sprite with its feet (bottom middle) at (x, y).
+fn stamp_raven(canvas: &mut Grid, sprite: &Grid, x: i32, y: i32) {
+    for sy in 0..sprite.h as i32 {
+        for sx in 0..sprite.w as i32 {
+            let ch = sprite.get(sx, sy);
+            if ch != '.' {
+                canvas.set(x - sprite.w as i32 / 2 + sx, y - sprite.h as i32 + 1 + sy, ch);
+            }
+        }
+    }
+}
+
+/// A word in a tiny 3 x 5 pixel font (m is 5 wide), white with a dark outline; the second drawing
+/// wobbles a pixel up.
+fn word_art(word: &str, variant: usize) -> Grid {
+    let glyph = |c: char| -> Vec<&'static str> {
+        match c {
+            'u' => vec!["x.x", "x.x", "x.x", "x.x", "xxx"],
+            'h' => vec!["x..", "x..", "xxx", "x.x", "x.x"],
+            'm' => vec!["x...x", "xx.xx", "x.x.x", "x...x", "x...x"],
+            'e' => vec!["xxx", "x..", "xxx", "x..", "xxx"],
+            _ => vec!["...", "...", "...", "...", "..."],
+        }
+    };
+    let glyphs: Vec<Vec<&str>> = word.chars().map(glyph).collect();
+    let width: usize = glyphs.iter().map(|g| g[0].len()).sum::<usize>() + glyphs.len() - 1;
+    let mut g = Grid::blank(width as i32 + 4, 9);
+    let mut x0 = 2;
+    for rows in &glyphs {
+        for (y, row) in rows.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                if c == 'x' {
+                    let (px, py) = (x0 + x as i32, 2 + y as i32 - variant as i32);
+                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
+                        if g.get(px + dx, py + dy) == '.' {
+                            g.set(px + dx, py + dy, 'g');
+                        }
+                    }
+                }
+            }
+        }
+        x0 += rows[0].len() as i32 + 1;
+    }
+    let mut x0 = 2;
+    for rows in &glyphs {
+        for (y, row) in rows.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                if c == 'x' {
+                    g.set(x0 + x as i32, 2 + y as i32 - variant as i32, 'W');
+                }
+            }
+        }
+        x0 += rows[0].len() as i32 + 1;
+    }
+    g
+}
+
+/// Every effect drawing of the Professor's new moves, by file name.
+fn raven_effects() -> Vec<(String, image::RgbaImage)> {
+    let mut out = Vec::new();
+    for v in 0..2 {
+        out.push((format!("raven_fly_{v}"), raven_flying(v).to_png()));
+        out.push((format!("raven_peck_{v}"), raven_pecking(v).to_png()));
+        out.push((format!("raven_claw_{v}"), raven_clawing(v).to_png()));
+        out.push((format!("rose_{v}"), rose(v).to_png()));
+        out.push((format!("word_uh_{v}"), word_art("uh", v).to_png()));
+        out.push((format!("word_meh_{v}"), word_art("meh", v).to_png()));
+    }
+    out
+}
+
+/// The raven and the words, big, on a pale background, for a quick look (`--raven <out.png>`).
+fn raven_sheet() -> image::RgbaImage {
+    let items: Vec<(String, image::RgbaImage)> = {
+        let mut v = vec![("perched".to_string(), raven_perched().to_png())];
+        v.extend(raven_effects());
+        v
+    };
+    let scale = 10u32;
+    let cols = 5u32;
+    let (cw, ch) = (26 * scale, 18 * scale);
+    let rows = (items.len() as u32 + cols - 1) / cols;
+    let mut sheet = image::RgbaImage::from_pixel(cols * cw, rows * ch, image::Rgba([186, 214, 238, 255]));
+    for (i, (_, img)) in items.iter().enumerate() {
+        let (ox, oy) = ((i as u32 % cols) * cw + scale, (i as u32 / cols) * ch + scale);
+        for y in 0..img.height() * scale {
+            for x in 0..img.width() * scale {
+                let p = img.get_pixel(x / scale, y / scale);
+                if p[3] > 0 {
+                    sheet.put_pixel(ox + x, oy + y, *p);
+                }
+            }
+        }
+    }
+    sheet
 }
 
 /// A contact sheet of every whole-body drawing, then the two effects.
@@ -4081,7 +4331,13 @@ fn main() {
         for (name, negative) in [("ayz", false), ("evilayz", true)] {
             let folder = assets.join("sprites").join(name);
             std::fs::create_dir_all(&folder).unwrap();
-            for (frame, img) in all_frames(&default) {
+            // The Professor has a raven (perched on every pose, and the flying drawings, the rose
+            // and the words); the negative twin keeps his old drawings.
+            let mut every = all_frames(&default, !negative);
+            if !negative {
+                every.extend(raven_effects());
+            }
+            for (frame, img) in every {
                 // The scar overlay stays white: the game tints it.
                 let img = if negative && !frame.ends_with("_mark") { invert(&img) } else { img };
                 img.save(folder.join(format!("{frame}.png"))).unwrap();
@@ -4188,6 +4444,14 @@ fn main() {
     if first == "--junkhead-whip" {
         let out = args.next().unwrap_or_else(|| "junkhead_whip.png".into());
         jh_whip_sheet(&jh_default()).save(&out).unwrap();
+        println!("wrote {out}");
+        return;
+    }
+
+    // `--raven <out.png>`: the raven (perched, flying, pecking, clawing), the rose and the words, big.
+    if first == "--raven" {
+        let out = args.next().unwrap_or_else(|| "raven.png".into());
+        raven_sheet().save(&out).unwrap();
         println!("wrote {out}");
         return;
     }

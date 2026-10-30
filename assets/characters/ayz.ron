@@ -1,19 +1,19 @@
-// The Professor (Ayz): the all-rounder. A big man with long black hair and a bald top, glasses and a moustache,
-// in a tight white shirt and orange trousers. Evilayz is the same drawings in negative colours.
+// The Professor (Ayz): a ranged fighter with a raven on his shoulder. A big man with long black hair
+// and a bald top, glasses and a moustache, in a tight white shirt and orange trousers. Evilayz is
+// the same drawings in negative colours (with his own, older moves).
 //
-// anim picks the drawings: Soft (2), Hard (4) or Summon (6); crouching moves use crouching drawings.
-// air: true = used in the air (Light/Heavy while jumping, once per jump).
-// charge_frames: hold the button at the end of the startup to charge, up to this many frames;
-//   charge_bonus_pct: extra damage at full charge.
-// walk_pct: percent of walk speed kept while the move plays (0 = rooted).
-// hitbox: x = distance in front of the body centre, y = height above the feet, in pixels.
-//   A width of 0 means no melee hit (the Summon).
-// guard_hits: blocked hits needed to break a guard (default: never for Light, 1 otherwise).
-// lob: the projectile comes from the moon (hung in the sky where the move was started) and
-//   lands where the opponent stood, splashing splash_radius pixels around.
-// projectile: launched on the first active frame, aimed at the opponent. x, y = where it
-//   appears (the crescent above his head), aim_y = height on the opponent it flies to.
-// Fighters are about 55 px tall and 34 px wide.
+// Light: he speaks at the enemy: "uh", then "meh" (each word flies out and hits), and as the third
+//        hit of the combo the raven flies in quickly and claws them. (If the raven is away, the
+//        combo starts again with a word.) Crouching Light is a low word; in the air a word aimed
+//        at the opponent.
+// Heavy: "Here's the Thing...": if the enemy is in range he summons them, pulling them next to
+//        him, grabs them by the collar and says the phrase, then shoves them away for the damage.
+// Special (the scar glows when the meter is full): the raven flies off after the enemy wherever
+//        they are on the map and pecks them three times (from the left, then the right, then the
+//        left again), then flies back above him and drops a rose on him, healing him by 5%.
+//
+// See cowboy.ron / junkhead.ron for the whip and pull fields, and src/sim/data.rs for combo_step,
+// raven, raven_move and hit_overrides.
 (
     name: "The Professor",
     subtitle: Some("Probably not a real professor..."),
@@ -21,29 +21,44 @@
     color: (1.0, 0.60, 0.10),
     walk_speed: 200,
     jump_speed: 1050,
+    // The CPU plays him as a ranged fighter: it keeps its distance and speaks from afar.
+    keeps_distance: true,
+    // The raven perches on his front shoulder (home: pixels in front of him and above his feet).
+    raven: Some((home: (15, 46), speed: 14)),
     special_mark: Some(Scar(color: (0.78, 0.52, 0.42), glow: (1.0, 0.88, 0.25))),
     moves: [
-        (name: "Jab", button: Light, crouching: false, anim: Punch, walk_pct: 60,
-         startup: 4, active: 3, recovery: 7, damage: 30, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 14, y: 29, w: 25, h: 11)),
-        (name: "Low Jab", button: Light, crouching: true, anim: Soft, walk_pct: 0,
-         startup: 5, active: 3, recovery: 8, damage: 25, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 14, y: 0, w: 26, h: 12)),
-        (name: "Lecture", button: Heavy, crouching: false, anim: Lecture, walk_pct: 0,
-         startup: 26, active: 6, recovery: 18, damage: 70, hitstun: 22, blockstun: 14, knockback: 4, hitstop: 8,
-         hitbox: (x: 6, y: 16, w: 48, h: 38)),
-        (name: "Uppercut", button: Heavy, crouching: true, anim: Hard, walk_pct: 0,
-         startup: 7, active: 5, recovery: 22, damage: 70, hitstun: 24, blockstun: 12, knockback: 3, hitstop: 8,
-         hitbox: (x: 6, y: 10, w: 26, h: 46)),
-        (name: "Air Kick", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
-         startup: 4, active: 8, recovery: 8, damage: 35, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 8, y: 0, w: 28, h: 22)),
-        (name: "Air Slam", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
-         startup: 9, active: 7, recovery: 10, damage: 65, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
-         hitbox: (x: 6, y: -4, w: 30, h: 34)),
-        (name: "Crescent Call", button: Special, crouching: false, anim: Summon, walk_pct: 0,
-         startup: 60, active: 3, recovery: 24, damage: 110, hitstun: 26, blockstun: 16, knockback: 5, hitstop: 10,
+        (name: "Uh", button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(0),
+         startup: 8, active: 1, recovery: 12, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 20, y: 60, aim_y: 0, travel_frames: 8, lifetime: 40, size: (16, 10), image: Some("fish"), lob: true, splash_radius: 54, moon_height: 100, lock_frame: 12))),
+         projectile: Some((x: 16, y: 45, aim_y: 45, travel_frames: 1, lifetime: 60, size: (12, 8), image: Some("word_uh"), summon_image: Some("none"), speed: 6))),
+        (name: "Meh", button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(1),
+         startup: 8, active: 1, recovery: 14, damage: 28, hitstun: 13, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 16, y: 45, aim_y: 45, travel_frames: 1, lifetime: 60, size: (16, 8), image: Some("word_meh"), summon_image: Some("none"), speed: 5))),
+        // The third hit: the raven flies in fast and claws.
+        (name: "Raven Claw", button: Light, crouching: false, anim: Soft, walk_pct: 0, finisher_move: true,
+         raven_move: Some(Claw),
+         startup: 9, active: 1, recovery: 14, damage: 46, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 6,
+         hitbox: (x: 0, y: 0, w: 0, h: 0)),
+        (name: "Low Uh", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 9, active: 1, recovery: 12, damage: 22, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 18, y: 12, aim_y: 12, travel_frames: 1, lifetime: 60, size: (12, 8), image: Some("word_uh"), summon_image: Some("none"), speed: 6))),
+        (name: "Air Meh", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 6, active: 1, recovery: 12, damage: 26, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 14, y: 30, aim_y: 30, travel_frames: 14, lifetime: 60, size: (16, 8), image: Some("word_meh"), summon_image: Some("none"), aimed: true))),
+        // The grab: the first window pulls the enemy in and holds them (no damage, a long stun while
+        // he talks); the second shoves them away for the damage.
+        (name: "Here's the Thing", button: Heavy, crouching: false, anim: Lecture, walk_pct: 0,
+         pull_foe: true, pull_gap: 26, hits: 2, hit_gap: 80,
+         hit_overrides: [(damage: 0, hitstun: 100, knockback: 0), (damage: 95, hitstun: 26, knockback: 10)],
+         startup: 22, active: 4, recovery: 24, damage: 95, hitstun: 26, blockstun: 14, knockback: 10, hitstop: 6,
+         hitbox: (x: 6, y: 8, w: 150, h: 48)),
+        // The raven's storm: it does the pecking (the damage is per peck) and the rose.
+        (name: "Raven Storm", button: Special, crouching: false, anim: Summon, walk_pct: 0,
+         raven_move: Some(Storm(pecks: 3, heal_pct: 5)), guard_hits: Some(3),
+         startup: 28, active: 1, recovery: 22, damage: 42, hitstun: 16, blockstun: 10, knockback: 1, hitstop: 4,
+         hitbox: (x: 0, y: 0, w: 0, h: 0)),
     ],
 )

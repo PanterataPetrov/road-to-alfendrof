@@ -33,6 +33,9 @@ pub struct CharacterData {
     /// The character's moves have whip layers drawn over the body (`anim::whip_layer`).
     #[serde(default)]
     pub whip: bool,
+    /// A raven that sits on the character's shoulder and can be sent out by moves with `raven_move`.
+    #[serde(default)]
+    pub raven: Option<RavenData>,
     /// The CPU plays this character as a zoner: it backs away to keep its distance and shoots.
     #[serde(default)]
     pub keeps_distance: bool,
@@ -95,6 +98,8 @@ pub enum AnimKind {
     Lecture,
     /// The hard attack as a volley of shots, alternating hands (the Gunslinger's finger guns).
     Volley,
+    /// Speaking at the opponent: the speaking drawings (2): he draws breath, then the word comes out.
+    Speak,
 }
 
 /// A projectile a move launches (a shooting star). It is aimed at the opponent when it
@@ -167,6 +172,33 @@ pub struct MinionData {
     pub reach: i32,
     /// Damage a minion can take before it dies; the opponent's attacks hit it like they would a fighter.
     pub health: i32,
+}
+
+/// A raven that perches on a shoulder: where (pixels in front of the body centre and above the
+/// feet) and how fast it flies (pixels a frame).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct RavenData {
+    pub home: (i32, i32),
+    pub speed: i32,
+}
+
+/// What a move sends the raven to do. It is away from the shoulder until it is back.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub enum RavenMove {
+    /// Fly at the opponent, claw them once (the move's damage and stun) and fly back.
+    Claw,
+    /// Fly to the opponent, peck them `pecks` times (the move's damage each), switching sides
+    /// between pecks (left, right, left...), then back above its owner to drop a rose that heals
+    /// the owner by `heal_pct` percent of their health, then home.
+    Storm { pecks: u32, heal_pct: i32 },
+}
+
+/// What one hit window of a multi-hit move does instead of the move's own numbers.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct HitOverride {
+    pub damage: i32,
+    pub hitstun: u32,
+    pub knockback: i32,
 }
 
 /// A curse: it has a left half and a right half. Hitting the cursed fighter from the left removes
@@ -272,6 +304,17 @@ pub struct MoveData {
     /// that lashes at the opponent on the floor).
     #[serde(default)]
     pub world_y: bool,
+    /// A standing light move used at this step of the light combo (0 = the first, 1 = the second;
+    /// the third is the `finisher_move`).
+    #[serde(default)]
+    pub combo_step: Option<u8>,
+    /// Sends the character's raven out (see `RavenMove`) when the startup is over.
+    #[serde(default)]
+    pub raven_move: Option<RavenMove>,
+    /// What each hit window of a multi-hit move does, instead of `damage`, `hitstun` and
+    /// `knockback` (a grab first, then a shove).
+    #[serde(default)]
+    pub hit_overrides: Vec<HitOverride>,
 }
 
 impl MoveData {
@@ -281,6 +324,21 @@ impl MoveData {
 
     pub fn total_frames(&self) -> u32 {
         self.startup + (self.hits.max(1) - 1) * self.hit_gap + self.active + self.recovery
+    }
+
+    /// The move as it hits in window `k`: with that window's own damage, stun and knockback, if it
+    /// has them.
+    pub fn for_window(&self, k: Option<u32>) -> std::borrow::Cow<'_, MoveData> {
+        match k.and_then(|k| self.hit_overrides.get(k as usize)) {
+            Some(o) => {
+                let mut m = self.clone();
+                m.damage = o.damage;
+                m.hitstun = o.hitstun;
+                m.knockback = o.knockback;
+                std::borrow::Cow::Owned(m)
+            }
+            None => std::borrow::Cow::Borrowed(self),
+        }
     }
 
     /// `frame` counts from 1 on the first frame of the move.
@@ -305,6 +363,19 @@ impl CharacterData {
     /// The light move thrown as the third hit of a combo, if the character has one.
     pub fn find_finisher(&self) -> Option<usize> {
         self.moves.iter().position(|m| m.finisher_move)
+    }
+
+    /// The standing light move for a combo that has `combo` hits so far: the finisher on the third
+    /// (when it can be thrown), else the `combo_step` move for that hit. `None` if the character has
+    /// no stepped light moves (the ordinary light attack is used).
+    pub fn find_combo_move(&self, combo: u8, finisher_ok: bool) -> Option<usize> {
+        if combo == 2 && finisher_ok {
+            if let Some(i) = self.find_finisher() {
+                return Some(i);
+            }
+        }
+        let step = if combo == 1 { 1 } else { 0 };
+        self.moves.iter().position(|m| m.button == Button::Light && !m.air && !m.crouching && m.combo_step == Some(step))
     }
 
     /// The move triggered by `button`, preferring a crouching version when Down is held. Air

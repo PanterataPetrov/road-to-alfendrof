@@ -1,4 +1,5 @@
 mod menus;
+mod online;
 mod particles;
 mod render;
 
@@ -31,6 +32,8 @@ pub enum AppState {
     Title,
     CharSelect,
     StageSelect,
+    /// The online screen: your address, a friend's, invitations.
+    Online,
     Fight,
 }
 
@@ -38,6 +41,7 @@ pub enum AppState {
 pub enum Mode {
     #[default]
     VsCpu,
+    Online,
 }
 
 /// Every character found in `assets/characters`, in file-name order.
@@ -119,6 +123,13 @@ struct DevOptions {
     fight: bool,
     /// `--charselect`: start on the character select screen (with `--screenshot`, to look at it).
     charselect: bool,
+    /// `--online`: start on the online screen.
+    online: bool,
+    /// For testing two copies on one computer: `--invite 127.0.0.1:7777` invites at once, `--autoaccept`
+    /// accepts any invitation, `--pick N` locks in roster index N on the online pick screen.
+    invite: Option<String>,
+    autoaccept: bool,
+    online_pick: Option<usize>,
     cpu: bool,
     debug: bool,
     screenshot: Option<String>,
@@ -137,7 +148,11 @@ impl DevOptions {
         let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
         DevOptions {
             charselect: args.iter().any(|a| a == "--charselect"),
-            fight: (args.iter().any(|a| a == "--fight") || args.iter().any(|a| a == "--screenshot")) && !args.iter().any(|a| a == "--charselect") && !args.iter().any(|a| a == "--title"),
+            online: args.iter().any(|a| a == "--online"),
+            invite: value("--invite"),
+            autoaccept: args.iter().any(|a| a == "--autoaccept"),
+            online_pick: value("--pick").and_then(|v| v.parse().ok()),
+            fight: (args.iter().any(|a| a == "--fight") || args.iter().any(|a| a == "--screenshot")) && !args.iter().any(|a| a == "--charselect") && !args.iter().any(|a| a == "--title") && !args.iter().any(|a| a == "--online"),
             cpu: args.iter().any(|a| a == "--cpu"),
             debug: args.iter().any(|a| a == "--debug"),
             screenshot: value("--screenshot"),
@@ -225,9 +240,13 @@ fn main() {
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
         .add_plugins(menus::MenuPlugin)
+        .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(AppState::Fight), spawn_fight)
-        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>| clear.0 = MENU_BACKGROUND)
+        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>| {
+            clear.0 = MENU_BACKGROUND;
+            fixed.set_timestep_hz(60.0);
+        })
         .add_systems(FixedUpdate, (step_sim, particles::emit).chain().run_if(in_state(AppState::Fight)))
         .add_systems(
             Update,
@@ -238,6 +257,7 @@ fn main() {
                 render::animate_stars,
                 render::animate_marks,
                 render::animate_whips,
+                render::animate_ravens,
                 render::animate_moons,
                 render::animate_bubbles,
                 render::animate_curses,
@@ -260,6 +280,9 @@ fn main() {
         let last = app.world().resource::<Roster>().0.len() - 1;
         app.insert_resource(Selection { chars: dev.picks.map(|p| p.min(last)), stage: 0 });
         app.insert_state(AppState::Fight);
+    } else if dev.online {
+        app.insert_resource(Mode::Online);
+        app.insert_state(AppState::Online);
     } else if dev.charselect {
         app.insert_state(AppState::CharSelect);
     } else {
@@ -428,7 +451,7 @@ fn spawn_fight(
             effects.push("goblin".to_string());
         }
         let frames = t2f::anim::frames_for(c);
-        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip);
+        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip, c.raven.is_some());
     }
     render::spawn_curses(&mut commands, &asset_server);
     render::spawn_combo_ui(&mut commands, &asset_server);
@@ -462,9 +485,26 @@ fn step_sim(
     roster: Res<Roster>,
     sel: Res<Selection>,
     dev: Res<DevOptions>,
+    mode: Res<Mode>,
+    net: Option<ResMut<online::NetSession>>,
+    mut fixed: ResMut<Time<Fixed>>,
+    mut next: ResMut<NextState<AppState>>,
+    mut info: ResMut<online::OnlineInfo>,
+    mut commands: Commands,
 ) {
     let mut player = read_input(&keys);
     player.0 |= dev.hold;
+    // Online: the other player's buttons come over the network (see `online::step_online`).
+    if *mode == Mode::Online {
+        if let Some(mut net) = net {
+            if let Some(problem) = online::step_online(&mut net, &mut sim, &roster, &sel, player, &mut fixed) {
+                info.message = problem;
+                commands.remove_resource::<online::NetSession>();
+                next.set(AppState::Online);
+            }
+        }
+        return;
+    }
     let inputs = [player, cpu_input(&sim.0, 1, &roster.0[sel.chars[1]])];
     sim.0.step(inputs, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
 }
@@ -584,9 +624,23 @@ fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugView>) {
     }
 }
 
-fn restart_match(keys: Res<ButtonInput<KeyCode>>, mut sim: ResMut<Sim>, roster: Res<Roster>, sel: Res<Selection>) {
+fn restart_match(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut sim: ResMut<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    mode: Res<Mode>,
+    mut next: ResMut<NextState<AppState>>,
+    mut commands: Commands,
+) {
     if keys.just_pressed(KeyCode::Enter) && sim.0.phase == Phase::MatchOver {
-        *sim = fresh_sim(&roster, &sel);
+        if *mode == Mode::Online {
+            // A rematch online is a new invitation: leave the finished match.
+            commands.remove_resource::<online::NetSession>();
+            next.set(AppState::Online);
+        } else {
+            *sim = fresh_sim(&roster, &sel);
+        }
     }
 }
 
@@ -597,8 +651,9 @@ fn fresh_sim(roster: &Roster, sel: &Selection) -> Sim {
     sim
 }
 
-fn leave_fight(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>) {
+fn leave_fight(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>, mut commands: Commands) {
     if keys.just_pressed(KeyCode::Escape) {
+        commands.remove_resource::<online::NetSession>();
         next.set(AppState::Title);
     }
 }

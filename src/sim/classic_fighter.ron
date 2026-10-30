@@ -1,0 +1,49 @@
+// The Professor (Ayz): the all-rounder. A big man with long black hair and a bald top, glasses and a moustache,
+// in a tight white shirt and orange trousers. Evilayz is the same drawings in negative colours.
+//
+// anim picks the drawings: Soft (2), Hard (4) or Summon (6); crouching moves use crouching drawings.
+// air: true = used in the air (Light/Heavy while jumping, once per jump).
+// charge_frames: hold the button at the end of the startup to charge, up to this many frames;
+//   charge_bonus_pct: extra damage at full charge.
+// walk_pct: percent of walk speed kept while the move plays (0 = rooted).
+// hitbox: x = distance in front of the body centre, y = height above the feet, in pixels.
+//   A width of 0 means no melee hit (the Summon).
+// guard_hits: blocked hits needed to break a guard (default: never for Light, 1 otherwise).
+// lob: the projectile comes from the moon (hung in the sky where the move was started) and
+//   lands where the opponent stood, splashing splash_radius pixels around.
+// projectile: launched on the first active frame, aimed at the opponent. x, y = where it
+//   appears (the crescent above his head), aim_y = height on the opponent it flies to.
+// Fighters are about 55 px tall and 34 px wide.
+(
+    name: "The Professor",
+    subtitle: Some("Probably not a real professor..."),
+    sprites: Some("ayz"),
+    color: (1.0, 0.60, 0.10),
+    walk_speed: 200,
+    jump_speed: 1050,
+    special_mark: Some(Scar(color: (0.78, 0.52, 0.42), glow: (1.0, 0.88, 0.25))),
+    moves: [
+        (name: "Jab", button: Light, crouching: false, anim: Punch, walk_pct: 60,
+         startup: 4, active: 3, recovery: 7, damage: 30, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 14, y: 29, w: 25, h: 11)),
+        (name: "Low Jab", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 5, active: 3, recovery: 8, damage: 25, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 14, y: 0, w: 26, h: 12)),
+        (name: "Lecture", button: Heavy, crouching: false, anim: Lecture, walk_pct: 0,
+         startup: 26, active: 6, recovery: 18, damage: 70, hitstun: 22, blockstun: 14, knockback: 4, hitstop: 8,
+         hitbox: (x: 6, y: 16, w: 48, h: 38)),
+        (name: "Uppercut", button: Heavy, crouching: true, anim: Hard, walk_pct: 0,
+         startup: 7, active: 5, recovery: 22, damage: 70, hitstun: 24, blockstun: 12, knockback: 3, hitstop: 8,
+         hitbox: (x: 6, y: 10, w: 26, h: 46)),
+        (name: "Air Kick", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 4, active: 8, recovery: 8, damage: 35, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 8, y: 0, w: 28, h: 22)),
+        (name: "Air Slam", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
+         startup: 9, active: 7, recovery: 10, damage: 65, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
+         hitbox: (x: 6, y: -4, w: 30, h: 34)),
+        (name: "Crescent Call", button: Special, crouching: false, anim: Summon, walk_pct: 0,
+         startup: 60, active: 3, recovery: 24, damage: 110, hitstun: 26, blockstun: 16, knockback: 5, hitstop: 10,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 20, y: 60, aim_y: 0, travel_frames: 8, lifetime: 40, size: (16, 10), image: Some("fish"), lob: true, splash_radius: 54, moon_height: 100, lock_frame: 12))),
+    ],
+)

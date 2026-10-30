@@ -108,6 +108,8 @@ pub struct Fighter {
     pub quick: u8,
     pub quick_timer: u32,
     pub fast: bool,
+    /// This fighter's raven is away from the shoulder (set by the game state each frame).
+    pub raven_away: bool,
 }
 
 /// The input flag of a move's button.
@@ -185,6 +187,7 @@ impl Fighter {
             quick: 0,
             quick_timer: 0,
             fast: false,
+            raven_away: false,
         }
     }
 
@@ -458,9 +461,14 @@ impl Fighter {
             (Input::LIGHT, Button::Light),
         ] {
             if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
-                // The third light attack of a combo may be a move of its own.
-                let finisher = if button == Button::Light && !crouching && self.combo == 2 { data.find_finisher() } else { None };
-                if let Some(index) = finisher.or_else(|| data.find_move(button, crouching, false)) {
+                // The light combo may have a move of its own for each hit (the third is the finisher,
+                // which needs the raven at home if it is the raven's claw).
+                let stepped = if button == Button::Light && !crouching { data.find_combo_move(self.combo, !self.raven_away) } else { None };
+                if let Some(index) = stepped.or_else(|| data.find_move(button, crouching, false)) {
+                    // A raven that is away cannot be sent again.
+                    if data.moves[index].raven_move.is_some() && self.raven_away {
+                        continue;
+                    }
                     self.begin_attack(index, &data.moves[index]);
                     return;
                 }

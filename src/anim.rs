@@ -4,7 +4,7 @@
 //! This module is pure (no Bevy) so the generator and the game agree on the sizes and file
 //! names, and so the frame choice can be tested.
 
-use crate::sim::{AnimKind, CharacterData, Fighter, FighterState};
+use crate::sim::{AnimKind, CharacterData, Fighter, FighterState, Raven, RavenMove};
 
 /// Every drawing is this wide and this tall. The fighter's body centre is at column `CENTRE_X`,
 /// which leaves room on the right for outstretched arms and on the left for the long hair. The
@@ -165,6 +165,31 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     }
 }
 
+/// Every drawing of a raven that flies, and of the rose it carries, for a character with a raven.
+/// (Each body drawing also has a `_nr` version without the raven on the shoulder.)
+pub fn raven_stems() -> Vec<String> {
+    let mut v = Vec::new();
+    for base in ["raven_fly", "raven_peck", "raven_claw", "rose"] {
+        v.extend((0..2).map(|i| format!("{base}_{i}")));
+    }
+    v
+}
+
+/// The drawing of a raven that is out of its owner's shoulder: flapping, clawing on its way to
+/// the opponent, or pecking (cocked, then the strike). `None` while it is perched.
+pub fn raven_frame(r: &Raven, data: &CharacterData, tick: u32) -> Option<String> {
+    if !r.active {
+        return None;
+    }
+    let flap = (tick / 4) % 2;
+    let kind = data.moves.get(r.move_index).and_then(|m| m.raven_move);
+    Some(match kind {
+        Some(RavenMove::Claw) if r.step == 0 => format!("raven_claw_{flap}"),
+        Some(RavenMove::Storm { pecks, .. }) if r.step < 2 * pecks && r.step % 2 == 1 => format!("raven_peck_{}", (r.timer >= 4) as usize),
+        _ => format!("raven_fly_{flap}"),
+    })
+}
+
 /// Width of a whip layer; its left edge lines up with the body drawing's (see `render`).
 pub const WHIP_W: i32 = 176;
 
@@ -291,6 +316,7 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
                 Frame::Gun(f.shots.min(3) as usize)
             }
         }
+        AnimKind::Speak => Frame::Speak(if frame <= mv.startup { 0 } else { 1 }),
         AnimKind::Soft => Frame::Soft(if frame <= mv.startup { 0 } else { 1 }),
         AnimKind::Hard => {
             let half = (startup / 2).max(1);
@@ -319,7 +345,7 @@ mod tests {
     use super::*;
 
     fn ayz() -> CharacterData {
-        CharacterData::from_ron(include_str!("../assets/characters/ayz.ron")).unwrap()
+        CharacterData::from_ron(include_str!("sim/classic_fighter.ron")).unwrap()
     }
 
     fn attacking(move_name: &str, frame: u32) -> (Fighter, CharacterData) {
@@ -419,6 +445,51 @@ mod tests {
         assert_eq!(layer("Whip Storm", 38, false).as_deref(), Some("summon_4_whip_hi"));
         assert_eq!(layer("Air Whip Storm", 20, false).map(|s| s.starts_with("whip_ring_")), Some(true), "the air special spins too");
         assert!(layer("Whip Spin", 7, false).unwrap().starts_with("air_soft_1_whip"));
+    }
+
+    fn professor() -> CharacterData {
+        CharacterData::from_ron(include_str!("../assets/characters/ayz.ron")).unwrap()
+    }
+
+    #[test]
+    fn the_raven_has_a_drawing_for_each_thing_it_does() {
+        let p = professor();
+        let storm = p.moves.iter().position(|m| m.name == "Raven Storm").unwrap();
+        let claw = p.moves.iter().position(|m| m.name == "Raven Claw").unwrap();
+        let mut r = Raven::idle();
+        assert_eq!(raven_frame(&r, &p, 0), None, "perched: it is part of the body drawing");
+        r.active = true;
+        r.move_index = claw;
+        assert_eq!(raven_frame(&r, &p, 0).as_deref(), Some("raven_claw_0"), "flying in to claw");
+        r.step = 1;
+        assert_eq!(raven_frame(&r, &p, 4).as_deref(), Some("raven_fly_1"), "flying home");
+        r.move_index = storm;
+        r.step = 1;
+        r.timer = 1;
+        assert_eq!(raven_frame(&r, &p, 0).as_deref(), Some("raven_peck_0"), "cocked");
+        r.timer = 6;
+        assert_eq!(raven_frame(&r, &p, 0).as_deref(), Some("raven_peck_1"), "the strike");
+        r.step = 2;
+        assert_eq!(raven_frame(&r, &p, 0).as_deref(), Some("raven_fly_0"), "between pecks it flies");
+        for name in raven_stems() {
+            assert!(!name.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_professors_moves_have_their_drawings() {
+        let p = professor();
+        let at = |name: &str, frame: u32| {
+            let mut f = Fighter::new(0, 1);
+            f.state = FighterState::Attack;
+            f.attack = p.moves.iter().position(|m| m.name == name).unwrap();
+            f.state_frame = frame;
+            frame_for(&f, &p, false, 0)
+        };
+        assert_eq!(at("Uh", 3), Frame::Speak(0), "breath");
+        assert_eq!(at("Uh", 12), Frame::Speak(1), "the word comes out");
+        assert!(matches!(at("Here's the Thing", 10), Frame::Lecture(_)));
+        assert!(matches!(at("Raven Storm", 10), Frame::Summon(_)));
     }
 
     #[test]

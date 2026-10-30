@@ -36,6 +36,13 @@ pub struct WhipPixel(pub usize, pub usize);
 
 const LASH_PIXELS: usize = 220;
 
+/// A fighter's raven while it is flying (it is part of the body drawing while perched), and the
+/// rose it carries or drops.
+#[derive(Component)]
+pub struct RavenOf(pub usize);
+#[derive(Component)]
+pub struct RoseOf(pub usize);
+
 /// The whip layer over a fighter's body.
 #[derive(Component)]
 pub struct WhipOf(pub usize);
@@ -64,11 +71,15 @@ pub enum CursePart {
 pub struct CurseOf(pub usize);
 
 /// What the lecturing fighter says.
-pub const LECTURE_LINE: &str = "so here's the thing...";
+pub const LECTURE_LINE: &str = "here's the thing...";
 
 /// Every drawing's file name for a character.
-fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool) -> Vec<String> {
+fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool, raven: bool) -> Vec<String> {
     let mut stems: Vec<String> = frames.iter().map(|f| f.file_stem()).collect();
+    if raven {
+        stems.extend(frames.iter().map(|f| format!("{}_nr", f.file_stem())));
+        stems.extend(t2f::anim::raven_stems());
+    }
     if whip {
         stems.extend(t2f::anim::whip_stems());
     }
@@ -97,12 +108,13 @@ pub fn spawn_fighter(
     frames: &[Frame],
     mark: bool,
     whip: bool,
+    raven: bool,
 ) {
     let folder = name.to_lowercase();
     let has_art = assets_dir.join(format!("sprites/{folder}/idle_0.png")).exists();
     let mut map = HashMap::new();
     if has_art {
-        for stem in all_stems(frames, effects, mark, whip) {
+        for stem in all_stems(frames, effects, mark, whip, raven) {
             map.insert(stem.clone(), asset_server.load(format!("sprites/{folder}/{stem}.png")));
         }
     }
@@ -129,6 +141,23 @@ pub fn spawn_fighter(
                 ))
                 .id();
             commands.entity(root).add_child(overlay);
+        }
+        if raven {
+            // Out of the body drawing the raven is its own sprite, flying in the world.
+            commands.spawn((
+                RavenOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("raven_fly_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 2.6),
+                Visibility::Hidden,
+            ));
+            commands.spawn((
+                RoseOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("rose_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 2.7),
+                Visibility::Hidden,
+            ));
         }
         if whip {
             // The whip layer is wider than the body drawing but has the same left edge.
@@ -263,7 +292,12 @@ pub fn animate_body(
     for (SpriteOf(i), mut sprite) in &mut sprites {
         let f = &sim.0.fighters[*i];
         let frame = frame_for(f, &roster.0[sel.chars[*i]], speaking(&sim.0, *i), sim.0.frame);
-        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&frame.file_stem())) {
+        // While the raven is out flying, the body drawing without it on the shoulder is used.
+        let mut stem = frame.file_stem();
+        if sim.0.ravens[*i].active {
+            stem.push_str("_nr");
+        }
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&stem)) {
             if sprite.image != *image {
                 sprite.image = image.clone();
             }
@@ -389,6 +423,48 @@ pub struct LashMemory {
 
 const LASH_HOLD: u32 = 8;
 const LASH_FADE: u32 = 14;
+
+/// Fly each raven that is out of its owner's shoulder, and show the rose it carries or drops.
+pub fn animate_ravens(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    handles: Res<FrameHandles>,
+    mut ravens: Query<(&RavenOf, &mut Sprite, &mut Transform, &mut Visibility), Without<RoseOf>>,
+    mut roses: Query<(&RoseOf, &mut Sprite, &mut Transform, &mut Visibility), Without<RavenOf>>,
+) {
+    for (RavenOf(i), mut sprite, mut tf, mut visibility) in &mut ravens {
+        let r = &sim.0.ravens[*i];
+        let name = t2f::anim::raven_frame(r, &roster.0[sel.chars[*i]], sim.0.frame);
+        match name.and_then(|n| handles.0.get(*i).and_then(|m| m.get(&n))) {
+            Some(image) => {
+                if sprite.image != *image {
+                    sprite.image = image.clone();
+                }
+                tf.translation.x = (r.x / PX) as f32;
+                tf.translation.y = GROUND_Y + (r.y / PX) as f32;
+                tf.scale.x = r.facing as f32;
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+    for (RoseOf(i), mut sprite, mut tf, mut visibility) in &mut roses {
+        match sim.0.ravens[*i].rose {
+            Some(rose) => {
+                if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("rose_{}", (sim.0.frame / 6) % 2))) {
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
+                }
+                tf.translation.x = (rose.x / PX) as f32;
+                tf.translation.y = GROUND_Y + (rose.y / PX) as f32;
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
 
 /// Show the whip layer of the move being thrown, if it has one. The held end is in the body's
 /// drawing; while the whip lashes out the rest is generated here, a curve of pixels from the hand to
@@ -581,12 +657,21 @@ pub fn animate_bubbles(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        let lecturing = f.state == FighterState::Attack && mv.anim == t2f::sim::AnimKind::Lecture && f.state_frame + 3 < mv.total_frames();
+        // A grab says it while he holds the enemy (after the pull); the others while they wind up.
+        let grabbing = mv.hits > 1;
+        let lecturing = f.state == FighterState::Attack
+            && mv.anim == t2f::sim::AnimKind::Lecture
+            && f.state_frame + 3 < mv.total_frames()
+            && (!grabbing || f.state_frame > mv.startup);
         *visibility = if lecturing { Visibility::Inherited } else { Visibility::Hidden };
         tf.translation.x = (f.x / PX) as f32;
         tf.translation.y = GROUND_Y + (f.y / PX) as f32 + 84.0;
         if lecturing {
-            let progress = (f.state_frame as f32 / (mv.startup as f32 * 0.85).max(1.0)).min(1.0);
+            let progress = if grabbing {
+                (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
+            } else {
+                (f.state_frame as f32 / (mv.startup as f32 * 0.85).max(1.0)).min(1.0)
+            };
             let shown = ((LECTURE_LINE.len() as f32 * progress).ceil() as usize).min(LECTURE_LINE.len());
             for (BubbleText(owner), mut text) in &mut texts {
                 if owner == i && text.0.len() != shown {

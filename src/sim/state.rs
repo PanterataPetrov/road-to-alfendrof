@@ -60,6 +60,40 @@ pub struct Minion {
     pub hurt: u32,
 }
 
+/// A raven sent out by a move (see `RavenMove`). While `active` it is flying a script, one `step`
+/// at a time; otherwise it is on its owner's shoulder.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Raven {
+    pub active: bool,
+    /// The move that sent it (an index into the owner's moves) and where it is in its script.
+    pub move_index: usize,
+    pub step: u32,
+    /// Frames spent in this step.
+    pub timer: u32,
+    /// Position in subpixels, and 1 if it faces right.
+    pub x: i32,
+    pub y: i32,
+    pub facing: i32,
+    /// 100, or 150 if it was sent by a combo finisher.
+    pub power: i32,
+    /// The rose it carries or has dropped.
+    pub rose: Option<Rose>,
+}
+
+impl Raven {
+    pub fn idle() -> Self {
+        Raven { active: false, move_index: 0, step: 0, timer: 0, x: 0, y: 0, facing: 1, power: 100, rose: None }
+    }
+}
+
+/// A rose: carried by the raven, or falling onto its owner.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Rose {
+    pub x: i32,
+    pub y: i32,
+    pub falling: bool,
+}
+
 /// The whole simulation. `Clone` + `Hash` make rollback save/restore and desync checks cheap.
 /// Character data is not part of the state: it is constant and passed to `step`.
 #[derive(Clone, Hash, Debug)]
@@ -70,6 +104,8 @@ pub struct GameState {
     pub projectiles: Vec<Projectile>,
     /// Every summoned minion on the field.
     pub minions: Vec<Minion>,
+    /// Each fighter's raven (see `Raven`).
+    pub ravens: [Raven; 2],
     /// Frames left on the round clock.
     pub timer: u32,
     pub wins: [u8; 2],
@@ -95,6 +131,7 @@ impl GameState {
             fighters: Self::starting_fighters(),
             projectiles: Vec::new(),
             minions: Vec::new(),
+            ravens: [Raven::idle(); 2],
             timer: Self::ROUND_FRAMES,
             wins: [0; 2],
             round: 1,
@@ -122,6 +159,7 @@ impl GameState {
         let inputs = if fighting { inputs } else { [Input::default(); 2] };
 
         for i in 0..2 {
+            self.fighters[i].raven_away = self.ravens[i].active;
             self.fighters[i].step(inputs[i], chars[i]);
         }
 
@@ -135,6 +173,8 @@ impl GameState {
                 self.apply_curses(chars);
                 self.summon_minions(chars);
                 self.update_minions(chars, inputs);
+                self.launch_ravens(chars);
+                self.update_ravens(chars, inputs);
                 self.resolve_hits(inputs, chars);
                 self.update_curses();
                 self.move_projectiles(inputs, chars);
@@ -186,6 +226,7 @@ impl GameState {
         self.set_health(health);
         self.projectiles.clear();
         self.minions.clear();
+        self.ravens = [Raven::idle(); 2];
         self.timer = Self::ROUND_FRAMES;
         self.round += 1;
         self.phase = Phase::Fighting;
@@ -273,7 +314,10 @@ impl GameState {
             if !landed[a] {
                 continue;
             }
-            let mv = &chars[a].moves[self.fighters[a].attack];
+            let base = &chars[a].moves[self.fighters[a].attack];
+            // A multi-hit move may hit differently in each window (a grab, then a shove).
+            let adjusted = base.for_window(base.window(self.fighters[a].state_frame));
+            let mv = &*adjusted;
             let dir = self.fighters[a].facing;
             self.fighters[a].hit_done = true;
             self.fighters[a].hitstop = mv.hitstop;
@@ -299,6 +343,185 @@ impl GameState {
             }
         }
         any
+    }
+
+    /// A move that sends the raven out does so when its startup is over (if the raven is home); the
+    /// special spends the meter.
+    fn launch_ravens(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            if f.state != FighterState::Attack || self.ravens[owner].active {
+                continue;
+            }
+            let (Some(rd), mv) = (chars[owner].raven, &chars[owner].moves[f.attack]) else { continue };
+            if mv.raven_move.is_none() || f.state_frame != mv.startup + 1 {
+                continue;
+            }
+            self.ravens[owner] = Raven {
+                active: true,
+                move_index: f.attack,
+                step: 0,
+                timer: 0,
+                x: f.x + f.facing * rd.home.0 * PX,
+                y: f.y + rd.home.1 * PX,
+                facing: f.facing,
+                power: if f.finisher { 150 } else { 100 },
+                rose: None,
+            };
+            if mv.button == super::data::Button::Special {
+                self.fighters[owner].meter = 0;
+            }
+        }
+    }
+
+    /// Fly each raven along its script: the claw (out to the opponent, one hit, home), or the storm
+    /// (to the left of the opponent, a peck, to the right, a peck, left again, a peck, then above
+    /// its owner to drop a rose, then home). A raven always goes home when the opponent is beaten.
+    fn update_ravens(&mut self, chars: [&CharacterData; 2], inputs: [Input; 2]) {
+        for owner in 0..2 {
+            let mut r = self.ravens[owner];
+            if !r.active {
+                continue;
+            }
+            let (Some(rd), Some(kind)) = (chars[owner].raven, chars[owner].moves[r.move_index].raven_move) else {
+                self.ravens[owner] = Raven::idle();
+                continue;
+            };
+            let (me, foe) = (&self.fighters[owner], &self.fighters[1 - owner]);
+            let speed = rd.speed * PX;
+            let home = (me.x + me.facing * rd.home.0 * PX, me.y + rd.home.1 * PX);
+            let home_step = match kind {
+                super::data::RavenMove::Claw => 1,
+                super::data::RavenMove::Storm { pecks, .. } => 2 * pecks + 2,
+            };
+            if (foe.health <= 0 || self.phase != Phase::Fighting) && r.step < home_step {
+                r.step = home_step;
+                r.timer = 0;
+                r.rose = None;
+            }
+            r.timer += 1;
+            let mut hit: Option<i32> = None;
+            let mut heal = 0;
+            match kind {
+                super::data::RavenMove::Claw => {
+                    if r.step == 0 {
+                        if Self::raven_toward(&mut r, (foe.x, foe.y + 30 * PX), speed) {
+                            hit = Some(if r.x <= foe.x { 1 } else { -1 });
+                            r.step = 1;
+                            r.timer = 0;
+                        }
+                    } else if Self::raven_toward(&mut r, home, speed) {
+                        r = Raven::idle();
+                    }
+                }
+                super::data::RavenMove::Storm { pecks, heal_pct } => {
+                    if r.step < 2 * pecks {
+                        if r.step % 2 == 0 {
+                            // Fly to the side the next peck comes from: left, right, left...
+                            let side = if (r.step / 2) % 2 == 0 { -1 } else { 1 };
+                            if Self::raven_toward(&mut r, (foe.x + side * 26 * PX, foe.y + 38 * PX), speed) {
+                                r.step += 1;
+                                r.timer = 0;
+                            }
+                        } else {
+                            // Peck: it faces the opponent, strikes after a few frames and stays a moment.
+                            if foe.x != r.x {
+                                r.facing = if foe.x > r.x { 1 } else { -1 };
+                            }
+                            if r.timer == 4 {
+                                hit = Some(if r.x <= foe.x { 1 } else { -1 });
+                            }
+                            if r.timer >= 10 {
+                                r.step += 1;
+                                r.timer = 0;
+                            }
+                        }
+                    } else if r.step == 2 * pecks {
+                        // Back above its owner, with a rose in its beak.
+                        r.rose.get_or_insert(Rose { x: r.x, y: r.y, falling: false });
+                        if Self::raven_toward(&mut r, (me.x, me.y + 100 * PX), speed) {
+                            r.step += 1;
+                            r.timer = 0;
+                        }
+                    } else if r.step == 2 * pecks + 1 {
+                        // It lets go of the rose and waits for it to land on its owner.
+                        if r.timer == 1 {
+                            if let Some(rose) = r.rose.as_mut() {
+                                rose.falling = true;
+                            }
+                        }
+                        if r.rose.is_none() || r.timer > 60 {
+                            r.step += 1;
+                            r.timer = 0;
+                        }
+                    } else if Self::raven_toward(&mut r, home, speed) {
+                        r = Raven::idle();
+                    }
+                    // The rose: carried under the raven, then falling onto its owner's head.
+                    if let Some(mut rose) = r.rose {
+                        if rose.falling {
+                            rose.x = me.x;
+                            rose.y -= 4 * PX;
+                            if rose.y <= me.y + 56 * PX {
+                                heal = self.fighters[owner].max_health * heal_pct / 100;
+                                r.rose = None;
+                            } else {
+                                r.rose = Some(rose);
+                            }
+                        } else if r.active {
+                            rose.x = r.x;
+                            rose.y = r.y - 6 * PX;
+                            r.rose = Some(rose);
+                        }
+                    }
+                }
+            }
+            // A rose that is still falling when the raven goes home keeps falling on its own.
+            self.ravens[owner] = r;
+            if heal > 0 {
+                let f = &mut self.fighters[owner];
+                f.health = (f.health + heal).min(f.max_health);
+            }
+            if let Some(dir) = hit {
+                let mv = &chars[owner].moves[r.move_index];
+                let defender = 1 - owner;
+                let blocked = self.can_block(defender, inputs[defender]);
+                let blocked = self.apply_hit(defender, mv, dir, blocked, r.power);
+                self.gain_meter(owner, mv, mv.damage * r.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
+                self.register_light_hit_as(owner, mv, blocked, r.power == 150);
+            }
+        }
+    }
+
+    /// The integer square root (no floats in the simulation).
+    fn isqrt(n: u64) -> u64 {
+        if n < 2 {
+            return n;
+        }
+        let mut x = n;
+        let mut y = (x + 1) / 2;
+        while y < x {
+            x = y;
+            y = (x + n / x) / 2;
+        }
+        x
+    }
+
+    /// Fly `r` towards a point at `speed` subpixels a frame; true once it is there.
+    fn raven_toward(r: &mut Raven, target: (i32, i32), speed: i32) -> bool {
+        let (dx, dy) = ((target.0 - r.x) as i64, (target.1 - r.y) as i64);
+        let dist = Self::isqrt((dx * dx + dy * dy) as u64) as i64;
+        if dx != 0 {
+            r.facing = if dx > 0 { 1 } else { -1 };
+        }
+        if dist <= speed as i64 {
+            r.x = target.0;
+            r.y = target.1;
+            return true;
+        }
+        r.x += (dx * speed as i64 / dist) as i32;
+        r.y += (dy * speed as i64 / dist) as i32;
+        false
     }
 
     /// A move with a `low_hitbox` picks, as it starts, whether it goes high or low at random (from
@@ -589,10 +812,16 @@ impl GameState {
     /// A light attack that connects (hit or blocked) advances the attacker's combo; the third one is
     /// the finisher. A finisher that is blocked stuns whoever threw it.
     fn register_light_hit(&mut self, attacker: usize, mv: &MoveData, blocked: bool) {
+        let was_finisher = self.fighters[attacker].finisher;
+        self.register_light_hit_as(attacker, mv, blocked, was_finisher);
+    }
+
+    /// `register_light_hit`, told whether the hit was a finisher (the raven's claw lands some time
+    /// after the move that sent it).
+    fn register_light_hit_as(&mut self, attacker: usize, mv: &MoveData, blocked: bool, was_finisher: bool) {
         if mv.button != super::data::Button::Light {
             return;
         }
-        let was_finisher = self.fighters[attacker].finisher;
         {
             let f = &mut self.fighters[attacker];
             f.combo = if was_finisher { 3 } else { (f.combo + 1).min(2) };
@@ -702,7 +931,7 @@ mod tests {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
     fn ayz() -> CharacterData {
-        CharacterData::from_ron(include_str!("../../assets/characters/ayz.ron")).unwrap()
+        CharacterData::from_ron(include_str!("classic_fighter.ron")).unwrap()
     }
 
     fn evilayz() -> CharacterData {
@@ -1982,5 +2211,188 @@ mod tests {
             used += (s.fighters[0].air_count > before) as u32;
         }
         assert_eq!(used, 1, "the cowboy gets a single air attack");
+    }
+
+    fn professor() -> CharacterData {
+        CharacterData::from_ron(include_str!("../../assets/characters/ayz.ron")).unwrap()
+    }
+
+    fn pstep(s: &mut GameState, a: u16, b: u16) {
+        s.step([Input(a), Input(b)], [&professor(), &evilayz()]);
+    }
+
+    #[test]
+    fn the_professors_light_combo_is_uh_then_meh_then_the_ravens_claw() {
+        let p = professor();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 90 * PX;
+        let mut names = Vec::new();
+        let mut taken = Vec::new();
+        for _ in 0..3 {
+            let before = s.fighters[1].health;
+            pstep(&mut s, Input::LIGHT, 0);
+            names.push(p.moves[s.fighters[0].attack].name.clone());
+            for _ in 0..70 {
+                pstep(&mut s, 0, 0);
+            }
+            taken.push(before - s.fighters[1].health);
+            // The words push the opponent back a little: put them where they were.
+            s.fighters[1].x = 90 * PX;
+        }
+        assert_eq!(names, ["Uh", "Meh", "Raven Claw"]);
+        assert_eq!(taken, [24, 28, 69], "the claw is the finisher: 46 x 150%");
+        assert!(!s.ravens[0].active, "the raven is back on his shoulder");
+    }
+
+    #[test]
+    fn while_the_raven_is_away_the_claw_and_the_storm_cannot_be_sent_again() {
+        let p = professor();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 150 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        pstep(&mut s, Input::SPECIAL, 0);
+        for _ in 0..40 {
+            pstep(&mut s, 0, 0);
+        }
+        assert!(s.ravens[0].active, "the raven is out");
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.fighters[0].combo = 2;
+        pstep(&mut s, Input::LIGHT, 0);
+        assert_ne!(p.moves[s.fighters[0].attack].name, "Raven Claw", "no claw while the raven is away");
+        for _ in 0..30 {
+            pstep(&mut s, 0, 0);
+        }
+        let before = s.ravens[0].move_index;
+        pstep(&mut s, Input::SPECIAL, 0);
+        assert!(s.fighters[0].state != FighterState::Attack || s.fighters[0].attack != before || s.ravens[0].step > 0, "no second storm");
+        assert_eq!(s.ravens[0].move_index, before);
+    }
+
+    #[test]
+    fn here_is_the_thing_pulls_the_enemy_in_holds_them_and_then_shoves_them_away_for_the_damage() {
+        let p = professor();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 130 * PX;
+        pstep(&mut s, Input::HEAVY, 0);
+        assert_eq!(p.moves[s.fighters[0].attack].name, "Here's the Thing");
+        // Pulled in and held, with no damage yet.
+        for _ in 0..60 {
+            pstep(&mut s, 0, 0);
+        }
+        let gap = (s.fighters[1].x - s.fighters[0].x) / PX;
+        assert!((22..=30).contains(&gap), "pulled next to him, gap {gap}");
+        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "no damage while he is held");
+        assert_eq!(s.fighters[1].state, FighterState::Hitstun, "held");
+        // Then the shove.
+        for _ in 0..90 {
+            pstep(&mut s, 0, 0);
+        }
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 95);
+        let gap = (s.fighters[1].x - s.fighters[0].x) / PX;
+        assert!(gap > 70, "shoved away, gap {gap}");
+    }
+
+    #[test]
+    fn here_is_the_thing_does_nothing_if_the_enemy_is_out_of_range() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -30 * PX;
+        s.fighters[1].x = 150 * PX; // 180 px apart: beyond the 167 px the grab reaches
+        pstep(&mut s, Input::HEAVY, 0);
+        for _ in 0..150 {
+            pstep(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH);
+        assert_eq!(s.fighters[1].x, 150 * PX, "not moved an inch");
+    }
+
+    #[test]
+    fn the_ravens_storm_pecks_from_the_left_then_the_right_then_the_left_and_drops_a_healing_rose() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -150 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].health = 500;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        pstep(&mut s, Input::SPECIAL, 0);
+        let mut sides = Vec::new();
+        let mut last = s.fighters[1].health;
+        let mut rose_seen = false;
+        let mut longest_away = 0;
+        let mut away = 0;
+        for _ in 0..400 {
+            pstep(&mut s, 0, 0);
+            let (r, foe) = (&s.ravens[0], &s.fighters[1]);
+            if foe.health < last {
+                sides.push(if r.x < foe.x { "left" } else { "right" });
+                last = foe.health;
+            }
+            rose_seen |= r.rose.is_some();
+            away = if r.active { away + 1 } else { 0 };
+            longest_away = longest_away.max(away);
+        }
+        assert_eq!(sides, ["left", "right", "left"], "three pecks, switching sides");
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 3 * 42);
+        assert!(rose_seen, "it carried a rose");
+        assert_eq!(s.fighters[0].health, 550, "the rose heals 5% of his 1000 health");
+        assert_eq!(s.fighters[0].meter, 0, "the special spent the meter");
+        assert!(!s.ravens[0].active, "and the raven came home");
+        assert!(longest_away > 60, "it was away for a good while, {longest_away} frames");
+    }
+
+    #[test]
+    fn the_ravens_storm_reaches_an_enemy_anywhere_on_the_map() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -180 * PX;
+        s.fighters[1].x = 180 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        pstep(&mut s, Input::SPECIAL, 0);
+        for _ in 0..400 {
+            pstep(&mut s, 0, 0);
+        }
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 3 * 42, "all three pecks landed across the whole stage");
+    }
+
+    #[test]
+    fn the_healing_rose_never_goes_over_full_health() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -100 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].health = 990;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        pstep(&mut s, Input::SPECIAL, 0);
+        for _ in 0..400 {
+            pstep(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[0].health, 1000);
+    }
+
+    #[test]
+    fn the_professor_with_a_raven_still_plays_deterministically() {
+        let run = |seed: u64| {
+            let p = professor();
+            let mut s = GameState::new();
+            let mut seed = seed;
+            for _ in 0..4_000 {
+                let a = lcg(&mut seed) & 0xff;
+                let b = lcg(&mut seed) & 0x7f;
+                s.step([Input(a), Input(b)], [&p, &evilayz()]);
+            }
+            hash(&s)
+        };
+        assert_eq!(run(5), run(5));
+    }
+
+    #[test]
+    fn here_is_the_thing_works_from_the_distance_the_fighters_start_a_round_at() {
+        let mut s = GameState::new();
+        let gap_at_start = (s.fighters[1].x - s.fighters[0].x) / PX;
+        pstep(&mut s, Input::HEAVY, 0);
+        for _ in 0..60 {
+            pstep(&mut s, 0, 0);
+        }
+        let gap = (s.fighters[1].x - s.fighters[0].x) / PX;
+        assert!(gap < gap_at_start - 60, "pulled in from {gap_at_start} px to {gap} px");
     }
 }

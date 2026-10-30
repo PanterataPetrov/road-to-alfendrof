@@ -173,8 +173,7 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
 
     let white = Color::WHITE;
-    let mut online = Item::new("Online (coming soon)", Color::srgb(0.72, 0.72, 0.8));
-    online.enabled = false;
+    let online = Item::new("Online", white);
     spawn_menu(
         &mut commands,
         &mut menu,
@@ -235,6 +234,7 @@ fn pick_title(player: usize, mode: Mode) -> String {
     match (player, mode) {
         (0, _) => "Choose your fighter".into(),
         (_, Mode::VsCpu) => "Choose the CPU's fighter".into(),
+        (_, Mode::Online) => "Choose your fighter".into(),
     }
 }
 
@@ -322,10 +322,15 @@ fn title_confirm(
         exit.write(AppExit::Success);
     } else if confirm_pressed(&keys) {
         match menu.cursor {
-            0 => *mode = Mode::VsCpu,
-            _ => return, // Online is not built yet.
+            0 => {
+                *mode = Mode::VsCpu;
+                next.set(AppState::CharSelect);
+            }
+            _ => {
+                *mode = Mode::Online;
+                next.set(AppState::Online);
+            }
         }
-        next.set(AppState::CharSelect);
     }
 }
 
@@ -338,7 +343,27 @@ fn char_confirm(
     stages: Res<Stages>,
     mut header: Single<&mut Text2d, With<Header>>,
     mut next: ResMut<NextState<AppState>>,
+    mut lobby: ResMut<crate::online::OnlineLobby>,
+    mut info: ResMut<crate::online::OnlineInfo>,
 ) {
+    // Online, each player picks only their own fighter; the pick goes to the other side and the
+    // match starts once both are in (see `online::drive_lobby`).
+    if *mode == Mode::Online {
+        if back_pressed(&keys) {
+            if let Some(l) = lobby.0.as_mut() {
+                l.leave();
+            }
+            info.locked = false;
+            next.set(AppState::Online);
+        } else if confirm_pressed(&keys) && !info.locked {
+            if let Some(l) = lobby.0.as_mut() {
+                l.pick(menu.cursor as u8, true);
+                info.locked = true;
+                header.0 = "Waiting for your friend to pick...".into();
+            }
+        }
+        return;
+    }
     if back_pressed(&keys) {
         if picking.0 == 1 {
             picking.0 = 0;
