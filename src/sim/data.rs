@@ -11,6 +11,10 @@ pub struct CharacterData {
     /// The subtitle is drawn as glitching, corrupted text (the Negaprofessor).
     #[serde(default)]
     pub corrupted_subtitle: bool,
+    /// A connected heavy or special can be cancelled into Light at once, and the next three lights
+    /// are quick (Junkhead).
+    #[serde(default)]
+    pub light_after_heavy: bool,
     /// Folder under `assets/sprites/` holding this character's drawings (the lower-cased name if left out).
     #[serde(default)]
     pub sprites: Option<String>,
@@ -219,6 +223,10 @@ pub struct MoveData {
     pub hits: u32,
     #[serde(default)]
     pub hit_gap: u32,
+    /// Aim assist for a melee hitbox, in pixels: it reaches this much further forward, grows this much
+    /// taller above and below, and slides up to twice this far towards the opponent's height.
+    #[serde(default)]
+    pub assist: i32,
     /// A curse the move puts on the opponent instead of hitting them (the move's damage is dealt
     /// when the curse is completed).
     #[serde(default)]

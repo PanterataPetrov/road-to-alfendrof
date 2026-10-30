@@ -221,7 +221,25 @@ impl GameState {
             (f.x - (r.x + w) * PX, f.x - r.x * PX)
         };
         let base = if mv.world_y { 0 } else { f.y };
-        Some([x0, base + r.y * PX, x1, base + (r.y + r.h) * PX])
+        let (mut x0, mut x1, mut y0, mut y1) = (x0, x1, base + r.y * PX, base + (r.y + r.h) * PX);
+        if mv.assist > 0 {
+            let a = mv.assist * PX;
+            if f.facing > 0 {
+                x1 += a;
+            } else {
+                x0 -= a;
+            }
+            // A move with a high and a low version (the special) keeps its height, so that crouching
+            // and jumping still dodge it.
+            if mv.low_hitbox.is_none() {
+                let foe = &self.fighters[1 - attacker];
+                let foe_mid = foe.y + foe.height() * PX / 2;
+                let slide = (foe_mid - (y0 + y1) / 2).clamp(-2 * a, 2 * a);
+                y0 += slide - a;
+                y1 += slide + a;
+            }
+        }
+        Some([x0, y0, x1, y1])
     }
 
     /// World-space box `[x0, y0, x1, y1]` in subpixel units.
@@ -1145,6 +1163,56 @@ mod tests {
         assert!(bitten >= 3, "they should bite several times on their own, bit {bitten}");
         assert!(s.minions.is_empty(), "and leave after about eight seconds");
         assert_eq!(s.fighters[0].meter, 0, "the summon spends the meter");
+    }
+
+    #[test]
+    fn junkheads_heavy_whip_follows_a_jumping_opponent_a_little() {
+        let j = junkhead();
+        let mut s = GameState::new();
+        // Far out of reach, so only the shape of the lash is looked at; the opponent's feet are
+        // 45 px up, above where the plain lash (22..38 px) reaches.
+        s.fighters[1].x = s.fighters[0].x + 300 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&j, &evilayz()]);
+        let mut found = None;
+        for _ in 0..30 {
+            s.fighters[1].y = 45 * PX;
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+            if let Some(h) = s.hitbox(0, &j) {
+                found = Some(h);
+                break;
+            }
+        }
+        let h = found.expect("the lash should become active");
+        assert!(h[3] > 45 * PX, "the lash should have followed them up: {h:?}");
+        assert!(h[3] < 45 * PX + 60 * PX, "but only a little");
+    }
+
+    #[test]
+    fn after_a_connected_heavy_light_comes_out_at_once_and_the_next_lights_are_quick() {
+        let e = junkhead();
+        let mut s = GameState::new();
+        s.fighters[1].x = s.fighters[0].x + 60 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&e, &ayz()]);
+        for _ in 0..60 {
+            if s.fighters[0].hit_done {
+                break;
+            }
+            s.step([Input(0), Input(0)], [&e, &ayz()]);
+        }
+        assert!(s.fighters[0].hit_done, "the heavy should connect");
+        let heavy = s.fighters[0].attack;
+        // the very next frame the light button is pressed it must start (no recovery to wait out)
+        s.step([Input(Input::LIGHT), Input(0)], [&e, &ayz()]);
+        for _ in 0..15 {
+            if s.fighters[0].attack != heavy {
+                break;
+            }
+            s.step([Input(Input::LIGHT), Input(0)], [&e, &ayz()]);
+        }
+        let f = &s.fighters[0];
+        assert!(f.attack != heavy && f.state == FighterState::Attack, "light should have cancelled the heavy");
+        assert!(f.fast, "and be a quick one");
+        assert_eq!(f.quick, 2, "leaving two more quick lights");
     }
 
     #[test]

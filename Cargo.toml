@@ -28,6 +28,8 @@ serde = { version = "1", features = ["derive"] }
 ron = "0.12"
 # Only used by tools/gen_sprites.rs to write the placeholder PNGs.
 image = { version = "0.25", default-features = false, features = ["png"] }
+bincode = "1"
+igd-next = "0.18.0"
 
 [features]
 # Faster incremental builds during development: `cargo run --features dev`

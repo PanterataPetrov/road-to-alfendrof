@@ -62,6 +62,11 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
 
     // Keep pressing forward during an attack: moves that allow it will advance with the hit.
     if m.state == FighterState::Attack {
+        // Junkhead: once a heavy (the pull) or the special (the drag) has connected, go straight into
+        // light attacks (tapped fast, so that each press registers).
+        if data.light_after_heavy && m.hit_done && data.moves[m.attack].button != Button::Light {
+            return Input(if state.frame % 2 == 0 { Input::LIGHT } else { 0 });
+        }
         // A move that connected can be cancelled into a heavier one: build a combo.
         if m.hit_done && m.hitstop == 0 && roll < 55 {
             return Input(if roll < 40 { Input::HEAVY } else { Input::SPECIAL });
@@ -122,6 +127,11 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
 
     // Buttons go down on one frame only.
     let button = |flag: u16| Input(if first_frame { flag } else { 0 });
+    // Junkhead keeps tapping Light while the quick lights after a heavy or special last, or a light
+    // combo is going, as long as the opponent is in front of him.
+    if data.light_after_heavy && (m.quick > 0 || m.combo > 0) && dist <= data.ai_range.unwrap_or(ATTACK_RANGE) + 10 {
+        return Input(if state.frame % 2 == 0 { Input::LIGHT } else { 0 });
+    }
     // A long-reach fighter starts attacking from further away, and a whip that just got its extra
     // reach is used from that distance.
     let light = data.find_move(Button::Light, false, false).map(|i| &data.moves[i]);
@@ -132,11 +142,11 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
     if dist > range {
         // A lash that drags the opponent in, or pulls the fighter to them, works from a distance.
         let special = data.find_move(Button::Special, false, false).map(|i| &data.moves[i]);
-        if special.is_some_and(|s| s.pull_foe && dist <= reach(s, false) - 25) && m.meter >= Fighter::METER_MAX && roll < 40 {
+        if special.is_some_and(|s| s.pull_foe && dist <= reach(s, false) - 25) && m.meter >= Fighter::METER_MAX && roll < 60 {
             return button(Input::SPECIAL);
         }
         let heavy = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]);
-        if heavy.is_some_and(|h| h.pull_self && dist <= reach(h, false) - 15) && roll < 30 {
+        if heavy.is_some_and(|h| h.pull_self && dist <= reach(h, false) - 15) && roll < 50 {
             return button(Input::HEAVY);
         }
         let hop = if roll < 10 && dist > 70 { Input::UP } else { 0 };
@@ -279,5 +289,18 @@ mod tests {
             }
         }
         assert!(s.wins.iter().sum::<u8>() > 0, "no round was ever finished");
+    }
+
+    #[test]
+    fn junkhead_taps_light_right_after_his_heavy_connects() {
+        let j = CharacterData::from_ron(include_str!("../assets/characters/junkhead.ron")).unwrap();
+        let mut s = GameState::new();
+        s.frame = 10;
+        s.fighters[1].state = FighterState::Attack;
+        s.fighters[1].attack = j.find_move(Button::Heavy, false, false).unwrap();
+        s.fighters[1].hit_done = true;
+        assert!(cpu_input(&s, 1, &j).has(Input::LIGHT), "light on an even frame");
+        s.frame = 11;
+        assert!(!cpu_input(&s, 1, &j).has(Input::LIGHT), "and released on the next so that it counts as a new press");
     }
 }

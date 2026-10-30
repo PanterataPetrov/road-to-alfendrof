@@ -133,6 +133,12 @@ fn color(ch: char) -> Option<[u8; 3]> {
         'ä' => [86, 52, 30],
         'ö' => [128, 80, 46],
         'ü' => [182, 128, 78],
+        // Graypersona's gothic dress: black, its fold shadow and highlight, grey and silver lace.
+        'ê' => [22, 20, 28],
+        'ï' => [10, 10, 14],
+        'î' => [52, 50, 66],
+        'ô' => [96, 94, 112],
+        'û' => [186, 186, 200],
         // The fedora's purple magic.
         '9' => [176, 70, 226],
         '0' => [112, 34, 168],
@@ -1377,6 +1383,184 @@ fn soul_with_hair(hair: bool) -> Grid {
     let top = (0..g.h).find(|&y| g.row(y).iter().any(|&c| c != '.')).unwrap_or(0);
     let rows: Vec<Vec<char>> = (top..g.h).map(|y| g.row(y)).collect();
     Grid::from_rows(rows)
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Graypersona: the Gunslinger's slim body and face (the original's own pixels), with dark brown
+// curly hair, a feminine face, and a gothic dress: a black laced corset, silver choker and lace,
+// long sleeves and a flared skirt with a lace hem, over black boots.
+// ---------------------------------------------------------------------------------------------
+
+fn gp_default() -> Grid {
+    let mut g = soul_default();
+    let w = g.w as i32;
+    // No hat, and none of the Gunslinger's straight hair.
+    for y in 0..=9 {
+        for x in 0..w {
+            if "ZXVQY".contains(g.get(x, y)) {
+                g.set(x, y, '.');
+            }
+        }
+    }
+    for y in 0..=33 {
+        for x in (0..=10).chain(21..w) {
+            if "cfi".contains(g.get(x, y)) {
+                g.set(x, y, '.');
+            }
+        }
+    }
+    // The forehead's brim shadow goes.
+    for x in 11..=20 {
+        if g.get(x, 8) == 'b' {
+            g.set(x, 8, 'a');
+        }
+    }
+
+    // ---- The face: lashes and liner, dark red lips -------------------------------------------
+    for (x, y) in [(12, 9), (13, 9), (14, 9), (17, 9), (18, 9), (19, 9)] {
+        g.set(x, y, 'V');
+    }
+    for x in 15..=17 {
+        g.set(x, 14, 'C');
+        g.set(x, 15, 'B');
+    }
+
+    // ---- The dress ----------------------------------------------------------------------------
+    // The olive blazer becomes black: sleeves, body, folds.
+    for y in 16..g.h as i32 {
+        for x in 0..w {
+            match g.get(x, y) {
+                'S' => g.set(x, y, 'ê'),
+                's' => g.set(x, y, 'ï'),
+                'T' => g.set(x, y, 'î'),
+                _ => {}
+            }
+        }
+    }
+    // Long sleeves end in a silver lace cuff (the blazer's white cuff).
+    for y in 21..=36 {
+        for x in (0..9).chain(23..w) {
+            if g.get(x, y) == 'w' {
+                g.set(x, y, if (x + y) % 2 == 0 { 'û' } else { 'ô' });
+            }
+        }
+    }
+    // Skin shows at the neck and chest; a silver choker; a lace neckline; then the laced corset.
+    for y in 17..=19 {
+        for x in 10..=16 {
+            g.set(x, y, if x < 14 { 'a' } else { 'b' });
+        }
+    }
+    for x in 11..=16 {
+        g.set(x, 17, 'û');
+    }
+    g.set(13, 18, 'û');
+    g.set(13, 19, 'ô');
+    for x in 10..=16 {
+        g.set(x, 20, if x % 2 == 0 { 'û' } else { 'ô' });
+    }
+    for y in 21..=36 {
+        for x in 10..=16 {
+            g.set(x, y, if x == 10 || x == 16 { 'î' } else { 'ê' });
+        }
+        // Lacing: a silver cord down the middle with a cross-over every fourth row.
+        if y % 2 == 1 {
+            g.set(13, y, 'û');
+        }
+        if y % 4 == 2 {
+            g.set(12, y, 'ô');
+            g.set(14, y, 'ô');
+        }
+    }
+    // What is left of the trousers at the waist.
+    for x in 0..w {
+        if "mnhj".contains(g.get(x, 35)) {
+            g.set(x, 35, 'ê');
+        }
+    }
+    // The flared skirt: the trousers' outline with the gap between the legs filled in, black with
+    // fan-shaped folds, down to a silver lace hem; the legs below it are black tights.
+    let trousers = "mnhj";
+    for y in 36..=47 {
+        let xs: Vec<i32> = (0..w).filter(|&x| trousers.contains(g.get(x, y))).collect();
+        let (Some(&lo), Some(&hi)) = (xs.first(), xs.last()) else { continue };
+        for x in lo..=hi {
+            let spread = (y - 35) as f32 / 12.0;
+            let fold = [-9.0f32, -5.0, -1.0, 3.0, 7.0].iter().any(|k| (13.0 + k * spread * 1.4).round() as i32 == x);
+            let shade = [-9.0f32, -5.0, -1.0, 3.0, 7.0].iter().any(|k| (14.0 + k * spread * 1.4).round() as i32 == x);
+            let ch = if y == 47 {
+                if x % 2 == 0 { 'û' } else { 'ô' }
+            } else if x <= lo + 1 && y > 37 {
+                'î'
+            } else if x >= hi - 1 {
+                'ï'
+            } else if fold {
+                'î'
+            } else if shade {
+                'ï'
+            } else {
+                'ê'
+            };
+            g.set(x, y, ch);
+        }
+    }
+    for y in 48..=49 {
+        for x in 0..w {
+            if trousers.contains(g.get(x, y)) {
+                let left = !trousers.contains(g.get(x - 1, y));
+                g.set(x, y, if left { 'î' } else { 'ê' });
+            }
+        }
+    }
+    // The mustard cuffs above the boots are black too.
+    for y in 48..=51 {
+        for x in 0..w {
+            if trousers.contains(g.get(x, y)) {
+                g.set(x, y, 'ê');
+            }
+        }
+    }
+    // Scalloped lace drops from the hem between the legs.
+    for x in 0..w {
+        if g.get(x, 47) == 'û' && g.get(x, 48) == '.' {
+            g.set(x, 48, 'û');
+        }
+    }
+
+    // ---- Dark brown curly hair --------------------------------------------------------------------
+    // A big rounded crown, curtain bangs either side of a middle part, and ringlets over the
+    // shoulders, each row a span per side (mirrored about the middle of the face). Wavy edges and
+    // a lighter curl and a deep shadow scattered through it.
+    let spans: [(i32, i32, i32); 31] = [
+        (1, 11, 20), (2, 9, 22), (3, 7, 24), (4, 6, 25), (5, 5, 26), (6, 5, 26), (7, 5, 26), (8, 5, 26),
+        (9, 5, 12), (10, 5, 11), (11, 5, 10), (12, 4, 10), (13, 5, 10), (14, 4, 10), (15, 5, 10),
+        (16, 4, 10), (17, 5, 10), (18, 4, 9), (19, 5, 9), (20, 4, 9), (21, 5, 9), (22, 4, 9),
+        (23, 5, 9), (24, 4, 9), (25, 5, 9), (26, 4, 8), (27, 5, 8), (28, 4, 8), (29, 5, 7), (30, 4, 7), (31, 5, 6),
+    ];
+    for &(y, x0, x1) in &spans {
+        for x in x0..=x1 {
+            for xx in [x, 31 - x] {
+                // The face and the arm are in front of the hair below the bangs.
+                if y >= 9 && "abde".contains(g.get(xx, y)) && (11..=20).contains(&xx) {
+                    continue;
+                }
+                let ch = if (xx + 2 * y) % 7 == 0 {
+                    'c'
+                } else if (2 * xx + y) % 11 == 0 {
+                    '4'
+                } else {
+                    'i'
+                };
+                g.set(xx, y, ch);
+            }
+        }
+    }
+    // The middle part: a thin line of scalp down the crown.
+    for y in 2..=8 {
+        g.set(15, y, 'b');
+    }
+    g
 }
 
 /// A sprite read back from a PNG as letters, by exact colour.
@@ -3983,6 +4167,22 @@ fn main() {
         return;
     }
 
+    // `--junkhead-hands`: where his whip hand is in each lashing pose (image pixels, for src/anim.rs).
+    if first == "--junkhead-hands" {
+        for (name, frame, left) in [
+            ("punch_1", Frame::Punch(1), false),
+            ("punch_3", Frame::Punch(3), true),
+            ("crouch_soft_1", Frame::CrouchSoft(1), false),
+            ("hard_2", Frame::Hard(2), false),
+            ("air_hard_1", Frame::AirHard(1), false),
+            ("summon_4", Frame::Summon(4), false),
+        ] {
+            let h = jh_hand_xy(frame, left);
+            println!("{name} {} {}", h.0 as f32 + 3.0, h.1 as f32 + 0.5);
+        }
+        return;
+    }
+
     // `--junkhead-whip <out.png>`: his whip poses (the body and the whip layer together), no files
     // are written to the game.
     if first == "--junkhead-whip" {
@@ -3999,6 +4199,23 @@ fn main() {
         let one = cb_default().to_png();
         one.save(&out).unwrap();
         println!("wrote {out} ({}x{})", one.width(), one.height());
+        return;
+    }
+
+    // `--graypersona <out.png>`: her default pose (12x, white background) and the 1x file
+    // (`<out>_1x.png`, transparent) for editing by hand. No other poses are drawn.
+    if first == "--graypersona" {
+        let out = args.next().unwrap_or_else(|| "graypersona_default.png".into());
+        let g = gp_default();
+        g.render(12).save(&out).unwrap();
+        let mut one = g.render(1);
+        for p in one.pixels_mut() {
+            if p.0 == [255, 255, 255, 255] {
+                *p = image::Rgba([0, 0, 0, 0]);
+            }
+        }
+        one.save(Path::new(&out).with_file_name("graypersona_default_1x.png")).unwrap();
+        println!("wrote {out}");
         return;
     }
 
@@ -4028,7 +4245,7 @@ fn main() {
 
     // `--junkhead-frames <assets dir> <contact sheet.png>`: Junkhead is the Cowboy From Hell with a
     // black tank top (for now). His folder gets every cowboy drawing with the tank top's browns
-    // (body, dark rib, pale rib) swapped for blacks, and his portrait is the cowboy's, recoloured.
+    // (body, dark rib, pale rib) swapped for blacks, (his portrait is his own photo, made by hand: this does not write it).
     if first == "--junkhead-frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
         let blacken = junkhead_recolour;
@@ -4039,13 +4256,6 @@ fn main() {
             blacken(&mut img);
             img.save(folder.join(format!("{frame}.png"))).unwrap();
         }
-        // His portrait: the top of his default pose (head and chest) on a 40x40 canvas.
-        let mut full = default.to_png();
-        blacken(&mut full);
-        let mut portrait = image::RgbaImage::new(40, 40);
-        let top = image::imageops::crop_imm(&full, 0, 0, full.width(), 40.min(full.height())).to_image();
-        image::imageops::overlay(&mut portrait, &top, ((40 - full.width() as i64) / 2).max(0), 0);
-        portrait.save(assets.join("portraits/junkhead.png")).unwrap();
         if let Some(sheet) = args.next() {
             let (a, b) = (cb_default().to_png(), {
                 let mut j = default.to_png();

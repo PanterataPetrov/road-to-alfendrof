@@ -30,6 +30,12 @@ pub const STAR_SLOTS: usize = 4;
 #[derive(Component)]
 pub struct MarkOf(pub usize);
 
+/// One pixel of a whip's lash, which is drawn in the game (`animate_whips`), not an image.
+#[derive(Component)]
+pub struct WhipPixel(pub usize, pub usize);
+
+const LASH_PIXELS: usize = 220;
+
 /// The whip layer over a fighter's body.
 #[derive(Component)]
 pub struct WhipOf(pub usize);
@@ -135,6 +141,17 @@ pub fn spawn_fighter(
                 ))
                 .id();
             commands.entity(root).add_child(overlay);
+            for index in 0..LASH_PIXELS {
+                let pixel = commands
+                    .spawn((
+                        WhipPixel(fighter, index),
+                        Sprite::from_color(Color::WHITE, Vec2::ONE),
+                        Transform::from_xyz(0.0, 0.0, 0.07),
+                        Visibility::Hidden,
+                    ))
+                    .id();
+                commands.entity(root).add_child(pixel);
+            }
         }
         if let Some(p) = summon.filter(|p| p.lob) {
             // The moon and its star hang in the sky at a fixed spot, so they are not children of the body.
@@ -361,28 +378,150 @@ pub fn animate_marks(
     }
 }
 
-/// Show the whip layer of the move being thrown, if it has one.
+/// The last lash a fighter threw, so that it can stay on screen a little after the move: it holds
+/// still for a moment, then slackens and is drawn back in.
+#[derive(Clone, Copy)]
+pub struct LashMemory {
+    hand: (f32, f32),
+    tip: (f32, f32),
+    age: u32,
+}
+
+const LASH_HOLD: u32 = 8;
+const LASH_FADE: u32 = 14;
+
+/// Show the whip layer of the move being thrown, if it has one. The held end is in the body's
+/// drawing; while the whip lashes out the rest is generated here, a curve of pixels from the hand to
+/// the enemy (to the end of its reach if they are further away), so it always meets them.
 pub fn animate_whips(
+    mut memory: Local<[Option<LashMemory>; 2]>,
     sim: Res<Sim>,
     roster: Res<Roster>,
     sel: Res<Selection>,
     handles: Res<FrameHandles>,
-    mut whips: Query<(&WhipOf, &mut Sprite, &mut Visibility)>,
+    mut whips: Query<(&WhipOf, &mut Sprite, &mut Visibility), Without<WhipPixel>>,
+    mut pixels: Query<(&WhipPixel, &mut Sprite, &mut Transform, &mut Visibility), Without<WhipOf>>,
 ) {
+    let shift = FRAME_W as f32 / 2.0 - t2f::anim::CENTRE_X as f32;
     for (WhipOf(i), mut sprite, mut visibility) in &mut whips {
         let f = &sim.0.fighters[*i];
-        let layer = t2f::anim::whip_layer(f, &roster.0[sel.chars[*i]]);
-        match layer.and_then(|name| handles.0.get(*i).and_then(|m| m.get(&name))) {
-            Some(image) => {
-                if sprite.image != *image {
-                    sprite.image = image.clone();
-                }
-                sprite.color = tint(f.state);
-                *visibility = Visibility::Inherited;
+        let data = &roster.0[sel.chars[*i]];
+        let layer = t2f::anim::whip_layer(f, data);
+        // A lashing pose: the image is not drawn; the lash is generated instead.
+        let lash = layer.as_deref().and_then(|name| t2f::anim::lash_hand(name));
+        let mut path: Vec<(i32, i32)> = Vec::new();
+        if let Some(hand) = lash {
+            let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+            let special = mv.anim == t2f::sim::AnimKind::Summon;
+            let hb = if f.aim_low { mv.low_hitbox.unwrap_or(mv.hitbox) } else { mv.hitbox };
+            let natural = (hb.x + hb.w + if f.boosted { mv.boost_reach } else { 0 } + mv.assist) as f32;
+            let foe = &sim.0.fighters[1 - *i];
+            let ahead = ((foe.x - f.x) * f.facing) as f32 / PX as f32;
+            let tip_fwd = if ahead > 0.0 { (ahead - 6.0).clamp(24.0, natural) } else { natural };
+            // Height above the feet: the special keeps its fixed high or low line, the others go for the enemy's body.
+            let (lo, hi) = (hb.y as f32, (hb.y + hb.h) as f32);
+            let tip_up = if special {
+                (lo + hi) / 2.0 - if mv.world_y { f.y as f32 / PX as f32 } else { 0.0 }
+            } else {
+                let foe_mid = (foe.y + foe.height() * PX / 2) as f32 / PX as f32 - f.y as f32 / PX as f32;
+                foe_mid.clamp(lo - mv.assist as f32, hi + mv.assist as f32)
             }
-            None => *visibility = Visibility::Hidden,
+            .max(3.0);
+            // The lash snaps out over its first frames.
+            let ext = (f.state_frame.saturating_sub(mv.startup) as f32 / 3.0).clamp(0.35, 1.0);
+            let tip_full = (t2f::anim::CENTRE_X as f32 + tip_fwd, FULL_H as f32 - tip_up);
+            let tip = (hand.0 + (tip_full.0 - hand.0) * ext, hand.1 + (tip_full.1 - hand.1) * ext);
+            path = lash_path(hand, tip, sim.0.frame as f32 * 0.9, 2.4 - 1.6 * ext);
+            memory[*i] = Some(LashMemory { hand, tip: tip_full, age: 0 });
+        } else if let Some(mem) = memory[*i].as_mut() {
+            // After the lash: it hangs out for a moment, then droops and is drawn back in.
+            let other_layer = layer.as_deref().is_some_and(|n| !n.starts_with("hard_3") && !n.starts_with("summon_5"));
+            mem.age += 1;
+            if other_layer || mem.age > LASH_HOLD + LASH_FADE || matches!(f.state, FighterState::Hitstun | FighterState::Ko) {
+                memory[*i] = None;
+            } else {
+                let back = mem.age.saturating_sub(LASH_HOLD) as f32 / LASH_FADE as f32;
+                let ext = 1.0 - back;
+                let tip = (mem.hand.0 + (mem.tip.0 - mem.hand.0) * ext, mem.hand.1 + (mem.tip.1 - mem.hand.1) * ext + back * 14.0);
+                path = lash_path(mem.hand, tip, sim.0.frame as f32 * 0.9, 0.8 + 1.8 * back);
+            }
+        }
+        if lash.is_some() || !path.is_empty() {
+            *visibility = Visibility::Hidden;
+        } else {
+            match layer.and_then(|name| handles.0.get(*i).and_then(|m| m.get(&name))) {
+                Some(image) => {
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
+                    sprite.color = tint(f.state);
+                    *visibility = Visibility::Inherited;
+                }
+                None => *visibility = Visibility::Hidden,
+            }
+        }
+        for (WhipPixel(owner, index), mut px_sprite, mut tf, mut vis) in &mut pixels {
+            if owner != i {
+                continue;
+            }
+            match path.get(*index) {
+                Some(&(x, y)) => {
+                    px_sprite.color = lash_colour(*index, path.len(), tint(f.state));
+                    tf.translation.x = shift - FRAME_W as f32 / 2.0 + x as f32 + 0.5;
+                    tf.translation.y = FULL_H as f32 - y as f32 - 0.5;
+                    *vis = Visibility::Inherited;
+                }
+                None => *vis = Visibility::Hidden,
+            }
         }
     }
+}
+
+/// The pixels of a whip from `hand` to `tip` (picture pixels): a quadratic curve with a ripple
+/// running down it. `ripple` is how far the lash wobbles sideways; `phase` moves the ripple along.
+fn lash_path(hand: (f32, f32), tip: (f32, f32), phase: f32, ripple: f32) -> Vec<(i32, i32)> {
+    let (dx, dy) = (tip.0 - hand.0, tip.1 - hand.1);
+    let len = (dx * dx + dy * dy).sqrt().max(1.0);
+    let (nx, ny) = (-dy / len, dx / len);
+    let mid = ((hand.0 + tip.0) / 2.0, (hand.1 + tip.1) / 2.0 - 3.0);
+    let mut path: Vec<(i32, i32)> = Vec::new();
+    let steps = (len * 4.0) as usize + 4;
+    for k in 0..=steps {
+        let t = k as f32 / steps as f32;
+        let (a, b, c) = ((1.0 - t) * (1.0 - t), 2.0 * (1.0 - t) * t, t * t);
+        let (mut x, mut y) = (a * hand.0 + b * mid.0 + c * tip.0, a * hand.1 + b * mid.1 + c * tip.1);
+        let wave = (t * 9.0 - phase).sin() * ripple * (t * 3.0).min(1.0) * (1.0 - t * 0.5);
+        x += nx * wave;
+        y += ny * wave;
+        let p = (x.round() as i32, y.round() as i32);
+        if path.last() != Some(&p) {
+            path.push(p);
+        }
+    }
+    path.truncate(LASH_PIXELS - 8);
+    // The handle is a little thicker: its first pixels are doubled just below.
+    let thick: Vec<(i32, i32)> = path.iter().take(8).map(|&(x, y)| (x, y + 1)).collect();
+    path.extend(thick);
+    path
+}
+
+/// Dark leather with a lighter glint every few pixels and a pale cracker at the tip; the doubled
+/// handle pixels at the end of the list are dark.
+fn lash_colour(index: usize, len: usize, tint: Color) -> Color {
+    let body = len.saturating_sub(8);
+    let c = if index >= body {
+        [86, 52, 30]
+    } else if index + 3 >= body {
+        [236, 218, 180]
+    } else if index % 5 == 2 {
+        [182, 128, 78]
+    } else if index % 5 == 4 {
+        [128, 80, 46]
+    } else {
+        [86, 52, 30]
+    };
+    let base = Color::srgb_u8(c[0], c[1], c[2]);
+    if tint == Color::WHITE { base } else { base.mix(&tint, 0.5) }
 }
 
 /// The moon and its star hang in the sky where the special was summoned, and fade away after a while.

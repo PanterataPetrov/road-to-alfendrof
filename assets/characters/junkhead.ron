@@ -1,4 +1,4 @@
-// Junkhead: a whip fighter. Looks are the Cowboy From Hell's with a black tank top, red tattoo, plain
+// Junkhead: a whip fighter.
 // shoes and his own head; his drawings for the moves below are still the cowboy's placeholders.
 //
 // Light: whip from the right, whip from the left (the arms alternate while you spam it), and as
@@ -27,6 +27,8 @@
     ai_range: Some(65),
     // His moves have whip layers drawn over the body.
     whip: true,
+    // A connected heavy or special cancels into Light at once, and the next three lights are quick.
+    light_after_heavy: true,
     // Up to three air attacks per jump: air lights chain, and the air heavy can end the chain.
     air_chain: Some(3),
     // A third less health than the others (667 of their 1000).
@@ -49,7 +51,7 @@
         (name: "Whip Pull", button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
          pull_self: true, pull_gap: 24, guard_hits: Some(2),
          startup: 14, active: 4, recovery: 26, damage: 60, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
-         hitbox: (x: 10, y: 22, w: 105, h: 16)),
+         hitbox: (x: 10, y: 22, w: 125, h: 16), assist: 12),
         (name: "Whip Spin", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
          hover: true, hits: 2, hit_gap: 8,
          startup: 5, active: 5, recovery: 10, damage: 26, hitstun: 14, blockstun: 8, knockback: 0, hitstop: 3,
@@ -58,21 +60,21 @@
         (name: "Air Whip Pull", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
          pull_self: true, pull_gap: 24, guard_hits: Some(2),
          startup: 12, active: 4, recovery: 18, damage: 55, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
-         hitbox: (x: 10, y: -80, w: 105, h: 110)),
+         hitbox: (x: 10, y: -80, w: 125, h: 110), assist: 12),
         // The special works in the air too: he hangs there while he spins, and the lash goes high or
         // low at the ground (heights are measured from the floor), so it is crouched or jumped like
         // the ground one.
         (name: "Air Whip Storm", button: Special, crouching: false, air: true, anim: Summon, walk_pct: 0,
          hover: true, world_y: true, pull_foe: true, pull_gap: 22,
-         startup: 36, active: 4, recovery: 28, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
-         hitbox: (x: 8, y: 42, w: 120, h: 12),
-         low_hitbox: Some((x: 8, y: 0, w: 120, h: 12))),
+         startup: 32, active: 8, recovery: 24, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
+         hitbox: (x: 8, y: 42, w: 140, h: 12), assist: 30,
+         low_hitbox: Some((x: 8, y: 0, w: 140, h: 12))),
         (name: "Whip Storm", button: Special, crouching: false, anim: Summon, walk_pct: 0,
          pull_foe: true, pull_gap: 22,
-         startup: 36, active: 4, recovery: 28, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
+         startup: 32, active: 8, recovery: 24, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
          // High: head and chest (a crouching fighter, 40 px tall, is under it).
-         hitbox: (x: 8, y: 42, w: 120, h: 12),
+         hitbox: (x: 8, y: 42, w: 140, h: 12), assist: 30,
          // Low: the legs (a fighter in the air is over it).
-         low_hitbox: Some((x: 8, y: 0, w: 120, h: 12))),
+         low_hitbox: Some((x: 8, y: 0, w: 140, h: 12))),
     ],
 )

@@ -102,6 +102,12 @@ pub struct Fighter {
     pub air_count: u8,
     /// The current move is hanging in the air (see `MoveData::hover`).
     pub hovering: bool,
+    /// After a heavy attack or a special connects there is no cooldown for Light, and the next
+    /// `quick` light attacks (for `quick_timer` more frames) start and recover faster. `fast` is set
+    /// while such a light attack is being thrown.
+    pub quick: u8,
+    pub quick_timer: u32,
+    pub fast: bool,
 }
 
 /// The input flag of a move's button.
@@ -124,6 +130,8 @@ impl Fighter {
     pub const COMBO_DISPLAY: u32 = 30;
     /// A broken guard cannot block again for 2.4 seconds.
     pub const BLOCK_DISABLED_FRAMES: u32 = 144;
+    /// Frames after a connected heavy or special in which the next three light attacks are quick.
+    pub const QUICK_WINDOW: u32 = 90;
     /// A blocked combo finisher stuns whoever threw it for 1.2 seconds.
     pub const FINISHER_STUN: u32 = 72;
     pub const GRAVITY: i32 = PX / 2;
@@ -174,6 +182,9 @@ impl Fighter {
             aim_low: false,
             air_count: 0,
             hovering: false,
+            quick: 0,
+            quick_timer: 0,
+            fast: false,
         }
     }
 
@@ -220,6 +231,12 @@ impl Fighter {
         } else {
             self.finisher = false;
         }
+        // The quick lights that follow a connected heavy or special skip a third of their startup
+        // (and a third of their recovery, see `step`).
+        self.fast = mv.button == Button::Light && self.quick > 0;
+        if self.fast {
+            self.quick -= 1;
+        }
         // A move with extra reach spends the boost a finisher earned.
         if mv.boost_reach > 0 {
             self.boosted = self.whip_boost;
@@ -233,7 +250,7 @@ impl Fighter {
             self.since_punch = 0;
         }
         self.set_state(FighterState::Attack);
-        self.state_frame = 0;
+        self.state_frame = if self.fast { mv.startup / 3 } else { 0 };
         self.attack = index;
         self.hit_done = false;
         self.launched = false;
@@ -264,6 +281,12 @@ impl Fighter {
         self.state_frame += 1;
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
+        if self.quick_timer > 0 {
+            self.quick_timer -= 1;
+            if self.quick_timer == 0 {
+                self.quick = 0;
+            }
+        }
         if self.combo > 0 {
             self.combo_timer += 1;
             if self.combo_timer > if self.combo >= 3 { Self::COMBO_DISPLAY } else { Self::COMBO_WINDOW } {
@@ -326,6 +349,24 @@ impl Fighter {
                         }
                     }
                 }
+                // A connected heavy or special has no cooldown for Light: it can be cancelled into a
+                // light attack at once, and the next three lights are quick.
+                if data.light_after_heavy && self.hit_done && mv.button != Button::Light {
+                    self.quick = 3;
+                    self.quick_timer = Self::QUICK_WINDOW;
+                    if pressed.has(Input::LIGHT) {
+                        let air = !self.grounded();
+                        if let Some(index) = data.find_move(Button::Light, input.has(Input::DOWN) && !air, air) {
+                            let vx = self.vx;
+                            self.begin_attack(index, &data.moves[index]);
+                            if air {
+                                self.vx = vx;
+                                self.air_used = true;
+                            }
+                            return self.finish_step();
+                        }
+                    }
+                }
                 // Air combos: a connected air light attack can go straight into another one, or into
                 // the air heavy (which ends the chain).
                 let air_chain = data.air_chain.unwrap_or(1);
@@ -348,7 +389,7 @@ impl Fighter {
                     self.charge += 1;
                     self.state_frame -= 1;
                 }
-                if self.state_frame > mv.total_frames() {
+                if self.state_frame > mv.total_frames() - if self.fast { mv.recovery / 3 } else { 0 } {
                     self.set_state(if self.grounded() { FighterState::Idle } else { FighterState::Jump });
                 }
             }

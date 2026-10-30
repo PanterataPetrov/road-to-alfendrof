@@ -186,6 +186,21 @@ pub fn whip_stems() -> Vec<String> {
     v
 }
 
+/// Where Junkhead's whip hand is in the poses where the whip lashes out (pixels of the drawing,
+/// from its left edge and from the top). The lash itself is not an image: the game draws it from
+/// here to the enemy. `layer` is the name `whip_layer` gives.
+pub fn lash_hand(layer: &str) -> Option<(f32, f32)> {
+    match layer.split("_whip").next()? {
+        "punch_1" => Some((72.0, 27.5)),
+        "punch_3" => Some((60.0, 26.5)),
+        "crouch_soft_1" => Some((67.0, 47.5)),
+        "hard_2" => Some((75.0, 26.5)),
+        "air_hard_1" => Some((73.0, 29.5)),
+        "summon_4" => Some((72.0, 24.5)),
+        _ => None,
+    }
+}
+
 /// The whip layer to show over the body now, if any. The layer is named after the body drawing
 /// (`punch_1` -> `punch_1_whip`): cocked back while winding up, out straight on the strike (the
 /// `x` one is the longer whip after a combo finisher), and slack in recovery. The spin overhead
