@@ -1,7 +1,11 @@
+// no console window in release builds on Windows
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+
 mod menus;
 mod online;
 mod particles;
 mod render;
+mod update;
 
 use std::path::PathBuf;
 
@@ -108,8 +112,10 @@ pub fn pixel_font(size: f32) -> TextFont {
 
 /// The assets folder: next to the working directory if there is one, otherwise the project's own.
 fn assets_dir() -> PathBuf {
+    // next to the exe (an installed game), then in the working directory, then the project's own copy
+    let beside_exe = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("assets")));
     let here = std::env::current_dir().unwrap_or_default().join("assets");
-    if here.is_dir() { here } else { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets") }
+    [beside_exe, Some(here)].into_iter().flatten().find(|dir| dir.is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"))
 }
 
 /// Parse every `.ron` file in `assets/<sub>`, sorted by file name.
@@ -227,6 +233,11 @@ fn dev_screenshot(
 }
 
 fn main() {
+    // `--backend dx12|vulkan|gl` picks the graphics API, for PCs whose default one draws wrongly
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(backend) = args.iter().position(|a| a == "--backend").and_then(|i| args.get(i + 1)) {
+        std::env::set_var("WGPU_BACKEND", backend);
+    }
     let dev = DevOptions::from_args();
     let mut app = App::new();
     app
@@ -268,6 +279,7 @@ fn main() {
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
         .add_plugins(menus::MenuPlugin)
+        .add_plugins(update::UpdatePlugin)
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar).chain())

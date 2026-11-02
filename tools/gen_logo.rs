@@ -1,7 +1,7 @@
 //! Draws the logo: `cargo run --bin gen_logo -- assets/ui/logo.png assets/ui/emblem.png`.
 //! The wordmark: "ROAD TO" in silver over a big golden "ALFENDROF", in a chunky 5 x 7 font with a bevel,
-//! outline and drop shadow, over a dithered purple glow. The emblem: a red Templar cross (a cross pattée)
-//! on a white heater shield with a gold rim.
+//! outline and drop shadow, over a dithered purple glow. The emblem: a red Templar cross (a cross potent,
+//! its arms ending in crossbars) on a white heater shield with a gold rim.
 
 use image::{Rgba, RgbaImage};
 
@@ -167,13 +167,13 @@ fn emblem() -> RgbaImage {
             put(&mut img, x, y, c);
         }
     }
-    // the cross pattée: arms narrow at the centre and flaring to straight ends
-    let (ccx, ccy) = (34.0f32, 34.0f32);
-    let (arm_h, arm_v) = (22.0f32, 27.0f32);
-    let flare = |d: f32, len: f32| 3.6 + (d / len) * 6.2;
+    // the cross: a bar down and a bar across, each ending in a short crossbar (a cross potent), drawn on a
+    // 7 x 7 grid of 7-pixel cells
+    const CROSS: [&str; 7] = ["..###..", "...#...", "#..#..#", "#######", "#..#..#", "...#...", "..###.."];
+    let (cell, ox, oy) = (7, 10, 10);
     let in_cross = |x: i32, y: i32| -> bool {
-        let (dx, dy) = ((x as f32 + 0.5 - ccx).abs(), (y as f32 + 0.5 - ccy).abs());
-        (dx <= arm_h && dy <= flare(dx, arm_h)) || (dy <= arm_v && dx <= flare(dy, arm_v))
+        let (gx, gy) = ((x - ox).div_euclid(cell), (y - oy).div_euclid(cell));
+        (0..7).contains(&gx) && (0..7).contains(&gy) && x >= ox && y >= oy && CROSS[gy as usize].as_bytes()[gx as usize] == b'#'
     };
     for y in 0..h {
         for x in 0..w {
