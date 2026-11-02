@@ -49,6 +49,10 @@ pub enum Frame {
     Point(usize),
     /// Collar grab: beckon, pull, hold (talking), hold (quiet), shove, recover.
     Grab(usize),
+    /// Reading a scroll: unrolling it, reading, reading (another way), closing it.
+    Read(usize),
+    /// The staff slam: raised, the top of the swing, the slam, recovery.
+    Staff(usize),
     /// The roll: tuck in, a tight ball turning in eighths of a turn (1..=8), then rise (9).
     Roll(usize),
 }
@@ -80,6 +84,8 @@ impl Frame {
             Frame::Kick(i) => format!("kick_{i}"),
             Frame::Point(i) => format!("point_{i}"),
             Frame::Grab(i) => format!("grab_{i}"),
+            Frame::Read(i) => format!("read_{i}"),
+            Frame::Staff(i) => format!("staff_{i}"),
             Frame::Roll(i) => format!("roll_{i}"),
         }
     }
@@ -116,6 +122,10 @@ pub const LECTURE_FRAMES: usize = 4;
 pub const POINT_FRAMES: usize = 3;
 pub const GRAB_FRAMES: usize = 6;
 
+/// The drawings of reading a scroll, and of the staff slam.
+pub const READ_FRAMES: usize = 4;
+pub const STAFF_FRAMES: usize = 4;
+
 /// Finger-gun volley drawings.
 pub const GUN_FRAMES: usize = 5;
 
@@ -140,6 +150,12 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Grab) {
         v.extend((0..GRAB_FRAMES).map(Frame::Grab));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Read) {
+        v.extend((0..READ_FRAMES).map(Frame::Read));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Staff) {
+        v.extend((0..STAFF_FRAMES).map(Frame::Staff));
     }
     v
 }
@@ -343,6 +359,28 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
             }
         }
         AnimKind::Speak => Frame::Speak(if frame <= mv.startup { 0 } else { 1 }),
+        AnimKind::Read => {
+            // Unrolling the scroll, then reading: the two reading drawings alternate every 12
+            // frames he has been held there (`charge`); the scroll closes in recovery.
+            Frame::Read(if f.charge > 0 && frame + 1 == mv.startup {
+                1 + ((f.charge / 12) % 2) as usize
+            } else if frame < mv.startup {
+                (frame * 100 > mv.startup * 60) as usize
+            } else if frame <= mv.startup + mv.active {
+                1
+            } else {
+                3
+            })
+        }
+        AnimKind::Staff => Frame::Staff(if frame * 2 <= mv.startup {
+            0
+        } else if frame <= mv.startup {
+            1
+        } else if frame <= mv.startup + mv.active + 5 {
+            2
+        } else {
+            3
+        }),
         AnimKind::Point => {
             // finger up for half the startup, then the arm goes out
             let cock = (mv.startup * 55 / 100).max(1);

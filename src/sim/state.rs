@@ -106,6 +106,9 @@ pub struct GameState {
     pub minions: Vec<Minion>,
     /// Each fighter's raven.
     pub ravens: [Raven; 2],
+    /// Where projectiles were just destroyed (subpixels) and on which frame, kept a few frames so the
+    /// screen can show a puff.
+    pub cleared: Vec<(i32, i32, u32)>,
     /// Frames left on the round clock.
     pub timer: u32,
     pub wins: [u8; 2],
@@ -116,7 +119,7 @@ pub struct GameState {
 
 impl GameState {
     /// The stage spans `-STAGE_HALF_WIDTH..=STAGE_HALF_WIDTH` around x = 0.
-    pub const STAGE_HALF_WIDTH: i32 = 200 * PX;
+    pub const STAGE_HALF_WIDTH: i32 = 400 * PX;
     pub const ROUND_FRAMES: u32 = 99 * 60;
     pub const ROUND_END_FRAMES: u32 = 150;
     pub const ROUNDS_TO_WIN: u8 = 2;
@@ -132,6 +135,7 @@ impl GameState {
             projectiles: Vec::new(),
             minions: Vec::new(),
             ravens: [Raven::idle(); 2],
+            cleared: Vec::new(),
             timer: Self::ROUND_FRAMES,
             wins: [0; 2],
             round: 1,
@@ -155,6 +159,8 @@ impl GameState {
     /// only on the state and the inputs.
     pub fn step(&mut self, inputs: [Input; 2], chars: [&CharacterData; 2]) {
         self.frame += 1;
+        let now = self.frame;
+        self.cleared.retain(|c| c.2 + 6 > now);
         let fighting = self.phase == Phase::Fighting;
         let inputs = if fighting { inputs } else { [Input::default(); 2] };
 
@@ -171,6 +177,7 @@ impl GameState {
                 self.start_lashes(chars);
                 self.apply_slams(inputs);
                 self.launch_projectiles(chars);
+                self.fire_channels(chars);
                 self.apply_curses(chars);
                 self.summon_minions(chars);
                 self.update_minions(chars, inputs);
@@ -178,6 +185,7 @@ impl GameState {
                 self.update_ravens(chars, inputs);
                 self.resolve_hits(inputs, chars);
                 self.update_curses();
+                self.clear_projectiles(chars);
                 self.move_projectiles(inputs, chars);
                 if self.fighters.iter().all(|f| f.hitstop == 0) {
                     self.timer = self.timer.saturating_sub(1);
@@ -228,6 +236,7 @@ impl GameState {
         self.projectiles.clear();
         self.minions.clear();
         self.ravens = [Raven::idle(); 2];
+        self.cleared.clear();
         self.timer = Self::ROUND_FRAMES;
         self.round += 1;
         self.phase = Phase::Fighting;
@@ -319,11 +328,18 @@ impl GameState {
             // a multi-hit move may hit differently in each window (a grab, then a shove)
             let adjusted = base.for_window(base.window(self.fighters[a].state_frame));
             let mv = &*adjusted;
-            let dir = self.fighters[a].facing;
+            let dir = if mv.radial {
+                if self.fighters[1 - a].x >= self.fighters[a].x { 1 } else { -1 }
+            } else {
+                self.fighters[a].facing
+            };
             self.fighters[a].hit_done = true;
             self.fighters[a].hitstop = mv.hitstop;
             let power = if self.fighters[a].finisher { 150 } else { 100 };
             let blocked = self.apply_hit(1 - a, mv, dir, blocks[1 - a], power);
+            if mv.silence > 0 && !blocked {
+                self.fighters[1 - a].silenced = mv.silence;
+            }
             self.apply_pulls(a, mv, blocked);
             self.gain_meter(a, mv, mv.damage * power / 100, blocked, chars[a].meter_gain_pct.unwrap_or(100));
             self.register_light_hit(a, mv, blocked);
@@ -658,6 +674,9 @@ impl GameState {
             let f = &self.fighters[owner];
             let mv = &chars[owner].moves[f.attack];
             let Some(p) = &mv.projectile else { continue };
+            if mv.channel.is_some() {
+                continue; // fired by fire_channels
+            }
             let total = mv.volley.max(1);
             if f.shots >= total || f.state_frame <= mv.startup + f.shots * mv.volley_gap {
                 continue;
@@ -678,6 +697,9 @@ impl GameState {
                 vx = if p.speed_tenths > 0 { f.facing * p.speed_tenths * PX / 10 } else { f.facing * if p.speed > 0 { p.speed } else { 5 } * PX };
                 vy = 0;
             }
+            if p.homing {
+                (vx, vy) = Self::missile_launch_velocity(p, f.facing);
+            }
             let mut power = if mv.charge_frames > 0 { 100 + f.charge as i32 * mv.charge_bonus_pct / mv.charge_frames as i32 } else { 100 };
             if f.finisher {
                 power = power * 150 / 100;
@@ -689,6 +711,80 @@ impl GameState {
             if mv.button == super::data::Button::Special {
                 f.meter = 0;
             }
+        }
+    }
+
+    /// A move that clears projectiles (the staff's shockwave) destroys every enemy projectile in its
+    /// horizontal reach while it is active, whatever the height up to a little above the head, but
+    /// not `melee` ones.
+    fn clear_projectiles(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            if f.state != FighterState::Attack {
+                continue;
+            }
+            let mv = &chars[owner].moves[f.attack];
+            if !mv.clears_projectiles || !mv.is_active(f.state_frame) {
+                continue;
+            }
+            let r = mv.hitbox;
+            let (x0, x1) = if f.facing > 0 { (f.x + r.x * PX, f.x + (r.x + r.w) * PX) } else { (f.x - (r.x + r.w) * PX, f.x - r.x * PX) };
+            let top = f.y + 100 * PX;
+            let bottom = f.y - 10 * PX;
+            let others = chars[1 - owner];
+            let frame = self.frame;
+            let mut gone = Vec::new();
+            self.projectiles.retain(|p| {
+                if p.owner == owner {
+                    return true;
+                }
+                let melee = others.moves[p.move_index].projectile.as_ref().is_some_and(|d| d.melee);
+                let inside = p.x >= x0 && p.x <= x1 && p.y >= bottom && p.y <= top;
+                if inside && !melee {
+                    gone.push((p.x, p.y, frame));
+                }
+                melee || !inside
+            });
+            self.cleared.extend(gone);
+        }
+    }
+
+    /// A heat-seeking missile's speed in subpixels a frame, and how it leaves the launcher: up and
+    /// forward, to curve round towards its target.
+    fn missile_speed(p: &super::data::ProjectileData) -> i32 {
+        if p.speed_tenths > 0 {
+            p.speed_tenths * PX / 10
+        } else {
+            p.speed.max(1) * PX
+        }
+    }
+
+    fn missile_launch_velocity(p: &super::data::ProjectileData, facing: i32) -> (i32, i32) {
+        let s = Self::missile_speed(p);
+        (facing * s / 2, s * 87 / 100)
+    }
+
+    /// A held move (reading a scroll) fires its projectile at held frame `first` and then every `every`
+    /// frames, for as long as the button stays down.
+    fn fire_channels(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            if f.state != FighterState::Attack {
+                continue;
+            }
+            let mv = &chars[owner].moves[f.attack];
+            let (Some(ch), Some(p)) = (mv.channel, mv.projectile.as_ref()) else { continue };
+            // `charge` counts the frames the move has been held at the end of its startup.
+            // (while it waits there the move sits one frame before the end of its startup)
+            if f.state_frame + 1 != mv.startup || f.charge < ch.first + f.shots * ch.every {
+                continue;
+            }
+            let (x, y) = (f.x + f.facing * p.x * PX, f.y + p.y * PX);
+            let (vx, vy) = if p.homing { Self::missile_launch_velocity(p, f.facing) } else { (f.facing * Self::missile_speed(p), 0) };
+            let move_index = f.attack;
+            self.projectiles.push(Projectile { owner, x, y, vx, vy, age: 0, move_index, land_x: 0, power: 100 });
+            self.fighters[owner].shots += 1;
+            self.fighters[owner].launched = true;
         }
     }
 
@@ -885,6 +981,21 @@ impl GameState {
             let owner = p.owner;
             let mv = &chars[owner].moves[p.move_index];
             let Some(data) = &mv.projectile else { continue };
+            // a heat-seeking missile turns towards the opponent's chest before it moves
+            let mut close = false;
+            if data.homing {
+                let foe = &self.fighters[1 - owner];
+                let (dx, dy) = ((foe.x - p.x) as i64, (foe.y + 30 * PX - p.y) as i64);
+                let dist = (Self::isqrt((dx * dx + dy * dy) as u64) as i64).max(1);
+                let speed = Self::missile_speed(data) as i64;
+                let turn = data.homing_turn.clamp(1, 100) as i64;
+                p.vx += ((dx * speed / dist - p.vx as i64) * turn / 100) as i32;
+                p.vy += ((dy * speed / dist - p.vy as i64) * turn / 100) as i32;
+                let now = (Self::isqrt((p.vx as i64 * p.vx as i64 + p.vy as i64 * p.vy as i64) as u64) as i64).max(1);
+                p.vx = (p.vx as i64 * speed / now) as i32;
+                p.vy = (p.vy as i64 * speed / now) as i32;
+                close = dist <= (data.detonate * PX) as i64;
+            }
             p.x += p.vx;
             p.y += p.vy;
             p.age += 1;
@@ -908,7 +1019,7 @@ impl GameState {
                 continue;
             }
             let (hw, hh) = (data.size.0 * PX / 2, data.size.1 * PX / 2);
-            let hit = p.x - hw < hurt[2] && hurt[0] < p.x + hw && p.y - hh < hurt[3] && hurt[1] < p.y + hh;
+            let hit = close || (p.x - hw < hurt[2] && hurt[0] < p.x + hw && p.y - hh < hurt[3] && hurt[1] < p.y + hh);
             let gone = p.age >= data.lifetime || p.x.abs() > Self::STAGE_HALF_WIDTH + 80 * PX || p.y < -10 * PX;
 
             if hit {
@@ -1586,11 +1697,11 @@ mod tests {
 
     #[test]
     fn shots_fly_straight_ahead_and_do_not_home_in() {
-        let a = anaran();
+        let a = professor();
         let mut s = GameState::new();
         s.fighters[1].x = s.fighters[0].x + 150 * PX;
         s.fighters[1].y = 40 * PX; // up in the air
-        s.step([Input(Input::HEAVY), Input(0)], [&a, &evilayz()]);
+        s.step([Input(Input::LIGHT), Input(0)], [&a, &evilayz()]);
         let mut seen = false;
         for _ in 0..30 {
             s.step([Input(0), Input(0)], [&a, &evilayz()]);
@@ -2547,5 +2658,204 @@ mod tests {
         assert_eq!((a.walk_speed, a.jump_speed, a.health, a.meter_gain_pct), (n.walk_speed, n.jump_speed, n.health, n.meter_gain_pct));
         assert_eq!((a.keeps_distance, a.cpu_range, a.air_chain, a.light_after_heavy), (n.keeps_distance, n.cpu_range, n.air_chain, n.light_after_heavy));
         assert_eq!(format!("{:?}", a.raven), format!("{:?}", n.raven), "the raven too");
+    }
+
+    fn astep(s: &mut GameState, a: u16, b: u16) {
+        s.step([Input(a), Input(b)], [&anaran(), &evilayz()]);
+    }
+
+    #[test]
+    fn anaran_reads_while_the_button_is_held_and_fires_a_missile_every_second() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -100 * PX;
+        s.fighters[1].x = 150 * PX;
+        let start = s.fighters[0].x;
+        // Holding Light (and walking away) he keeps reading and keeps walking.
+        let mut missiles_at = Vec::new();
+        let mut last = 0;
+        for frame in 0..320 {
+            astep(&mut s, Input::LIGHT | Input::LEFT, 0);
+            if s.fighters[0].shots > last {
+                last = s.fighters[0].shots;
+                missiles_at.push(frame);
+            }
+            assert_eq!(s.fighters[0].state, FighterState::Attack, "still reading at frame {frame}");
+        }
+        assert!(s.fighters[0].x < start, "he walks while he reads");
+        assert_eq!(missiles_at.len(), 5, "five missiles in a bit over five seconds: {missiles_at:?}");
+        for pair in missiles_at.windows(2) {
+            assert_eq!(pair[1] - pair[0], 60, "one second apart: {missiles_at:?}");
+        }
+        // Letting go closes the scroll and stops the missiles.
+        for _ in 0..40 {
+            astep(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[0].state, FighterState::Idle);
+        assert_eq!(s.fighters[0].shots, 5);
+    }
+
+    #[test]
+    fn a_tap_of_light_opens_the_scroll_but_no_missile_comes_out() {
+        let mut s = GameState::new();
+        astep(&mut s, Input::LIGHT, 0);
+        for _ in 0..100 {
+            astep(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[0].shots, 0);
+        assert!(s.projectiles.is_empty());
+    }
+
+    #[test]
+    fn the_missile_curves_after_the_opponent_even_if_they_run_behind_him_and_detonates() {
+        let mut s = GameState::new();
+        s.fighters[0].x = -100 * PX;
+        s.fighters[1].x = 80 * PX;
+        // Hold the scroll until the first missile is out, then let go.
+        let mut released = false;
+        let mut turned = false;
+        let mut hit_at = None;
+        for frame in 0..500 {
+            let a = if released { 0 } else { Input::LIGHT };
+            astep(&mut s, a, 0);
+            if !released && s.fighters[0].shots == 1 {
+                released = true;
+                // The opponent slips round behind him: the missile has to turn right round.
+                s.fighters[1].x = -180 * PX;
+            }
+            if let Some(m) = s.projectiles.first() {
+                turned |= m.vx < 0;
+            }
+            if hit_at.is_none() && s.fighters[1].health < Fighter::MAX_HEALTH {
+                hit_at = Some(frame);
+            }
+        }
+        assert!(turned, "the missile should have turned back");
+        assert!(hit_at.is_some(), "and still found them");
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 70, "one missile, 70 damage");
+        assert!(s.projectiles.is_empty(), "it detonated");
+    }
+
+    #[test]
+    fn the_staff_slam_shoves_enemies_away_from_him_on_either_side_and_leaves_them_unable_to_attack_for_a_second_and_a_half() {
+        for side in [1, -1] {
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = side * 45 * PX;
+            astep(&mut s, Input::HEAVY, 0);
+            let mut taken = 0;
+            for _ in 0..40 {
+                astep(&mut s, 0, 0);
+                taken = Fighter::MAX_HEALTH - s.fighters[1].health;
+            }
+            assert_eq!(taken, 80, "side {side}");
+            assert!((s.fighters[1].x - 0) * side > 45 * PX, "pushed away from him, side {side}");
+            assert!(s.fighters[1].silenced > 0, "silenced");
+            // The opponent mashes Light for the next second: nothing comes out.
+            let mut attacked = false;
+            for i in 0..60 {
+                astep(&mut s, 0, if i % 2 == 0 { Input::LIGHT } else { 0 });
+                attacked |= s.fighters[1].state == FighterState::Attack;
+            }
+            assert!(!attacked, "unable to attack while silenced, side {side}");
+            // After the 90 frames they can again.
+            for _ in 0..40 {
+                astep(&mut s, 0, 0);
+            }
+            astep(&mut s, 0, Input::LIGHT);
+            assert_eq!(s.fighters[1].state, FighterState::Attack, "free again after a second and a half");
+        }
+    }
+
+    #[test]
+    fn a_blocked_shockwave_does_not_silence_and_jumping_over_it_avoids_it() {
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 45 * PX;
+        astep(&mut s, Input::HEAVY, Input::BLOCK);
+        for _ in 0..40 {
+            astep(&mut s, 0, Input::BLOCK);
+        }
+        assert_eq!(s.fighters[1].silenced, 0, "blocked: no silence");
+        assert!(s.fighters[1].health > Fighter::MAX_HEALTH - 20, "only chip damage");
+
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 45 * PX;
+        astep(&mut s, Input::HEAVY, Input::UP);
+        for _ in 0..40 {
+            astep(&mut s, 0, 0);
+        }
+        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "jumped over it");
+        assert_eq!(s.fighters[1].silenced, 0);
+    }
+
+    #[test]
+    fn the_staff_slam_destroys_enemy_projectiles_in_its_reach_but_not_melee_ones_or_far_ones() {
+        let run = |slam: bool, melee: bool, gap: i32| {
+            let mut prof = professor();
+            if melee {
+                prof.moves[0].projectile.as_mut().unwrap().melee = true;
+            }
+            let a = anaran();
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = gap * PX;
+            for i in 0..60 {
+                // the Professor speaks at once; the slam (nearly instant) comes while the word is on its way
+                let (x, y) = (if slam && i == 20 { Input::HEAVY } else { 0 }, if i == 0 { Input::LIGHT } else { 0 });
+                s.step([Input(x), Input(y)], [&a, &prof]);
+            }
+            Fighter::MAX_HEALTH - s.fighters[0].health
+        };
+        assert_eq!(run(false, false, 120), 24, "without the slam the word hits him");
+        assert_eq!(run(true, false, 120), 0, "the slam destroys it");
+        assert_eq!(run(true, true, 120), 24, "but not a melee projectile");
+        // from the far side of the stage the word is still well outside the shockwave while it is active, and arrives
+        assert_eq!(run(true, false, 200), 24, "out of reach: not cleared");
+    }
+
+    #[test]
+    fn the_staff_slam_is_a_quick_cast_and_then_cools_down_for_two_and_a_half_seconds() {
+        let a = anaran();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 60 * PX;
+        // pressed once: the shockwave hits within a few frames
+        astep(&mut s, Input::HEAVY, 0);
+        let mut first_hit = None;
+        let mut slams = 1;
+        for frame in 1..400 {
+            let before = s.fighters[0].cooldown_left;
+            // mashing Heavy the whole time
+            astep(&mut s, if frame % 2 == 0 { Input::HEAVY } else { 0 }, 0);
+            if first_hit.is_none() && s.fighters[1].health < Fighter::MAX_HEALTH {
+                first_hit = Some(frame);
+            }
+            // a new cast restarts the cooldown
+            if s.fighters[0].cooldown_left > before && frame > 1 {
+                slams += 1;
+                assert!(frame >= 150, "cast again after only {frame} frames");
+            }
+        }
+        assert!(first_hit.is_some_and(|f| f <= 12), "the slam should land within a few frames, {first_hit:?}");
+        assert!(slams >= 2 && slams <= 3, "mashing for ~6.5 seconds gives a couple of slams, got {slams}");
+        assert_eq!(a.moves.iter().find(|m| m.name == "Staff Slam").unwrap().cooldown, 150);
+    }
+
+    #[test]
+    fn destroyed_projectiles_are_remembered_for_a_few_frames_so_the_screen_can_puff() {
+        let prof = professor();
+        let a = anaran();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 120 * PX;
+        let mut seen = 0;
+        for i in 0..60 {
+            let (x, y) = (if i == 20 { Input::HEAVY } else { 0 }, if i == 0 { Input::LIGHT } else { 0 });
+            s.step([Input(x), Input(y)], [&a, &prof]);
+            seen = seen.max(s.cleared.len());
+        }
+        assert_eq!(seen, 1, "one word was destroyed");
+        assert!(s.cleared.is_empty(), "and the memory fades after a few frames");
     }
 }

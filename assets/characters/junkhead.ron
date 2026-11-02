@@ -46,7 +46,7 @@
          startup: 6, active: 8, recovery: 12, damage: 40, hitstun: 16, blockstun: 10, knockback: 3, hitstop: 5,
          hitbox: (x: 6, y: -4, w: 30, h: 30)),
         (name: "Whip Pull", button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
-         pull_self: true, pull_gap: 24, guard_hits: Some(2),
+         pull_self: true, pull_gap: 24, cooldown: 180, guard_hits: Some(2),
          startup: 14, active: 4, recovery: 26, damage: 60, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: 22, w: 125, h: 16), assist: 12),
         (name: "Whip Spin", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
@@ -55,7 +55,7 @@
          hitbox: (x: -48, y: -6, w: 96, h: 72)),
         // the whip pulls him through the air towards the opponent (sideways)
         (name: "Air Whip Pull", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
-         pull_self: true, pull_gap: 24, guard_hits: Some(2),
+         pull_self: true, pull_gap: 24, cooldown: 180, guard_hits: Some(2),
          startup: 12, active: 4, recovery: 18, damage: 55, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: -80, w: 125, h: 110), assist: 12),
         // the special works in the air too: he hangs there while he spins and the lash goes high or low at the ground (heights are measured from the floor), so it's crouched or jumped like the ground one

@@ -779,6 +779,8 @@ fn spec(frame: Frame) -> Spec {
         Frame::Grab(_) => s((Keep, pose((38.0, 27.0), (41.0, 29.0))), 1.0, 0, stand(), 1),
         // Only the Gunslinger has the volley; the others never draw these.
         Frame::Gun(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        // Anaran's reading and staff slam are his own (see an_spec).
+        Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
         Frame::Roll(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
@@ -3688,6 +3690,8 @@ fn an_hands(frame: Frame) -> (AnHand, AnHand) {
         Frame::Punch(0) => (AnHand::Fist, AnHand::Scroll),
         Frame::Punch(2) => (AnHand::Scroll, AnHand::Fist),
         Frame::Hard(_) => (AnHand::Palm, AnHand::Fist),
+        Frame::Staff(_) => (AnHand::Palm, AnHand::Fist),
+        Frame::Read(3) => (AnHand::Fist, AnHand::Scroll),
         Frame::Summon(_) => (AnHand::Palm, AnHand::Palm),
         _ => (AnHand::Fist, AnHand::Fist),
     }
@@ -3715,6 +3719,18 @@ fn an_spec(frame: Frame) -> GsSpec {
         Frame::Hard(1) => own((pose((0.0, 22.0), (-5.0, 16.0)), pose((38.0, 22.0), (44.0, 16.0))), -1.0, 0, Legs::Stand, 2),
         Frame::Hard(2) => own((Keep, pose((38.0, 20.0), (50.0, 19.0))), 5.0, 0, stance(), 2),
         Frame::Hard(_) => own((Keep, pose((34.0, 24.0), (41.0, 22.0))), 3.0, 0, stance(), 1),
+        // Reading a scroll: he unrolls it between his hands, reads it (the scroll glows, his
+        // mouth moves, he leans a little), then rolls it up again. He stands still while he reads.
+        Frame::Read(0) => own((pose((7.0, 27.0), (18.0, 23.0)), pose((33.0, 27.0), (28.0, 23.0))), 1.0, 0, Legs::Stand, 0),
+        Frame::Read(1) => own((pose((6.0, 27.0), (14.0, 24.0)), pose((36.0, 28.0), (33.0, 24.0))), 2.0, 0, Legs::Stand, 2),
+        Frame::Read(2) => own((pose((6.0, 27.0), (14.0, 24.0)), pose((36.0, 28.0), (33.0, 24.0))), 3.0, 0, Legs::Stand, 1),
+        Frame::Read(_) => own((Keep, pose((30.0, 24.0), (34.0, 21.0))), 2.0, 0, Legs::Stand, 1),
+        // The staff slam: raised, swung back over his shoulder, slammed on the ground in front of
+        // him, then leaned on.
+        Frame::Staff(0) => own((Keep, pose((30.0, 15.0), (32.0, 7.0))), -2.0, 0, Legs::Stand, 2),
+        Frame::Staff(1) => own((Keep, pose((28.0, 11.0), (30.0, 2.0))), -4.0, 0, Legs::Stand, 2),
+        Frame::Staff(2) => own((Keep, pose((38.0, 23.0), (46.0, 30.0))), 5.0, 1, stance(), 2),
+        Frame::Staff(_) => own((Keep, pose((36.0, 24.0), (42.0, 29.0))), 2.0, 0, stance(), 0),
         other => {
             let mut sp = spec(other);
             if matches!(sp.legs, Legs::Squat) {
@@ -3736,6 +3752,11 @@ fn an_staff(frame: Frame) -> Option<((f32, f32), (f32, f32))> {
         Frame::Hard(_) => Some(((-1.0, 17.0), (2.0, -14.0))),
         Frame::AirHard(0) => Some(((-3.0, 12.0), (3.0, -8.0))),
         Frame::AirHard(_) => Some(((3.0, 14.0), (-2.0, -14.0))),
+        Frame::Staff(0) => Some(((-2.0, 14.0), (3.0, -12.0))),
+        Frame::Staff(1) => Some(((7.0, 12.0), (-9.0, -13.0))),
+        // planted on the floor in front of him
+        Frame::Staff(2) => Some(((1.0, 24.0), (-1.0, -10.0))),
+        Frame::Staff(_) => Some(((0.0, 23.0), (3.0, -11.0))),
         _ => None,
     }
 }
@@ -3863,6 +3884,10 @@ fn an_drawing(parts: &Parts, frame: Frame) -> (Grid, Grid) {
             upper.set(17 + AOX, 14 + AOY, 'g');
         }
     }
+    // The open scroll between his hands, drawn first so that the fists close over its edges.
+    if let (Frame::Read(k @ 0..=2), ArmSpec::Pose { hand: lh, .. }, ArmSpec::Pose { hand: rh, .. }) = (frame, &gs.spec.arms.0, &gs.spec.arms.1) {
+        an_open_scroll(&mut upper, an_j(*lh), an_j(*rh), k);
+    }
     let (hl, hr) = an_hands(frame);
     for (side, (spec, shoulder, kept, hand)) in [(&gs.spec.arms.0, G_LEFT_SHOULDER, &parts.left_arm, hl), (&gs.spec.arms.1, G_RIGHT_SHOULDER, &parts.right_arm, hr)].into_iter().enumerate() {
         // His staff is drawn first so that the fist closes over its shaft.
@@ -3923,7 +3948,67 @@ fn an_drawing(parts: &Parts, frame: Frame) -> (Grid, Grid) {
 fn an_frame_list() -> Vec<Frame> {
     let mut v = Frame::all();
     v.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
+    v.extend((0..t2f::anim::READ_FRAMES).map(Frame::Read));
+    v.extend((0..t2f::anim::STAFF_FRAMES).map(Frame::Staff));
     v
+}
+
+/// An unrolled scroll held between his hands (`l` and `r`, in his grid): parchment with a darker
+/// rim, lines of writing, a gold glow running along them as he reads, and sparks above it in the
+/// last reading drawing. The first drawing (0) is only just unrolled, so it is narrow.
+fn an_open_scroll(canvas: &mut Grid, l: Joint, r: Joint, k: usize) {
+    let (x0, x1) = (l.0.round() as i32 + 2, r.0.round() as i32 - 2);
+    let cy = ((l.1 + r.1) / 2.0).round() as i32;
+    let (y0, y1) = (cy - 5, cy + 4);
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let rim = y == y0 || y == y1 || x == x0 || x == x1;
+            canvas.set(x + AOX, y + AOY, if rim { 'U' } else { 't' });
+        }
+    }
+    // the writing: short strokes with gaps between the words
+    for (i, y) in [y0 + 2, y0 + 4, y0 + 6].into_iter().enumerate() {
+        for x in (x0 + 2)..(x1 - 1) {
+            if (x + i as i32 * 2) % 5 != 0 {
+                canvas.set(x + AOX, y + AOY, 'R');
+            }
+        }
+    }
+    if k >= 1 {
+        // the glow runs along the line he is reading
+        let width = (x1 - x0 - 3).max(1);
+        let gx = x0 + 2 + (k as i32 * 6) % width;
+        for dx in 0..3 {
+            canvas.set(gx + dx + AOX, y0 + 4 + AOY, 'y');
+            canvas.set(gx + dx + AOX, y0 + 2 + AOY, 'z');
+        }
+    }
+    if k == 2 {
+        for (dx, dy, ch) in [(3, -3, 'z'), (7, -6, 'y'), (11, -3, 'z'), (5, -8, 'y'), (9, -9, 'z')] {
+            canvas.set(x0 + dx + AOX, y0 + dy + AOY, ch);
+        }
+    }
+}
+
+/// His magic missile (14 x 9), pointing right: a golden orb with a streaming tail; the second
+/// drawing flickers.
+fn missile(variant: usize) -> Grid {
+    let mut g = Grid::blank(14, 9);
+    rv_poly(&mut g, &[(0.0, 4.5), (8.0, 2.4), (8.0, 6.6)], 'y');
+    rv_poly(&mut g, &[(2.0, 4.5), (8.0, 3.3), (8.0, 5.7)], 'Y');
+    rv_ellipse(&mut g, 9.6, 4.5, 3.4, 3.1, 'Y');
+    rv_ellipse(&mut g, 10.0, 4.3, 2.3, 2.0, 'z');
+    rv_ellipse(&mut g, 10.3, 4.2, 1.1, 1.0, 'W');
+    if variant == 1 {
+        for (x, y) in [(1, 3), (0, 5), (3, 6), (2, 2)] {
+            g.set(x, y, 'z');
+        }
+    } else {
+        for (x, y) in [(1, 5), (0, 4), (3, 2)] {
+            g.set(x, y, 'z');
+        }
+    }
+    g
 }
 
 fn an_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
@@ -3936,6 +4021,7 @@ fn an_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
     }
     for v in 0..2 {
         frames.push((format!("runes_{v}"), runes(v).to_png()));
+        frames.push((format!("missile_{v}"), missile(v).to_png()));
     }
     for (i, g) in goblin_frames().into_iter().enumerate() {
         frames.push((format!("goblin_{i}"), g.to_png()));
@@ -4432,6 +4518,495 @@ fn roll_drawings(img: &image::RgbaImage, body: &image::RgbaImage) -> Vec<image::
         .collect()
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Skill icons for the bottom-right skill bar: 24 x 24, MMORPG style. A glossy gradient tile with a
+// light rim, and a bold, outlined, shaded emblem for the attack. One set per character (the
+// Negaprofessor's is the Professor's, inverted). `assets/icons/<sprite folder>/<light|heavy|special>.png`.
+// ---------------------------------------------------------------------------------------------
+
+type Rgb = [u8; 3];
+const IC: i32 = 24;
+
+fn ic_put(img: &mut image::RgbaImage, x: i32, y: i32, c: Rgb) {
+    if x >= 0 && y >= 0 && x < IC && y < IC {
+        img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+    }
+}
+
+fn ic_ellipse(img: &mut image::RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, c: Rgb) {
+    for y in 0..IC {
+        for x in 0..IC {
+            let (dx, dy) = ((x as f32 + 0.5 - cx) / rx, (y as f32 + 0.5 - cy) / ry);
+            if dx * dx + dy * dy <= 1.0 {
+                ic_put(img, x, y, c);
+            }
+        }
+    }
+}
+
+fn ic_ring(img: &mut image::RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, thick: f32, c: Rgb) {
+    for y in 0..IC {
+        for x in 0..IC {
+            let (px, py) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let outer = (px / rx).powi(2) + (py / ry).powi(2);
+            let inner = (px / (rx - thick).max(0.1)).powi(2) + (py / (ry - thick).max(0.1)).powi(2);
+            if outer <= 1.0 && inner >= 1.0 {
+                ic_put(img, x, y, c);
+            }
+        }
+    }
+}
+
+fn ic_poly(img: &mut image::RgbaImage, pts: &[(f32, f32)], c: Rgb) {
+    for y in 0..IC {
+        for x in 0..IC {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let mut inside = false;
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                if (a.1 > py) != (b.1 > py) && px < (b.0 - a.0) * (py - a.1) / (b.1 - a.1) + a.0 {
+                    inside = !inside;
+                }
+            }
+            if inside {
+                ic_put(img, x, y, c);
+            }
+        }
+    }
+}
+
+fn ic_line(img: &mut image::RgbaImage, a: (f32, f32), b: (f32, f32), w: f32, c: Rgb) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = (dx * dx + dy * dy).max(0.0001);
+    for y in 0..IC {
+        for x in 0..IC {
+            let (px, py) = (x as f32 + 0.5 - a.0, y as f32 + 0.5 - a.1);
+            let t = ((px * dx + py * dy) / len2).clamp(0.0, 1.0);
+            let (qx, qy) = (px - t * dx, py - t * dy);
+            if qx * qx + qy * qy <= (w / 2.0) * (w / 2.0) {
+                ic_put(img, x, y, c);
+            }
+        }
+    }
+}
+
+/// A smooth curve through `pts` (a polyline of line pieces), `w` thick.
+fn ic_path(img: &mut image::RgbaImage, pts: &[(f32, f32)], w: f32, c: Rgb) {
+    for pair in pts.windows(2) {
+        ic_line(img, pair[0], pair[1], w, c);
+    }
+}
+
+fn ic_bezier(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)) -> Vec<(f32, f32)> {
+    (0..=24)
+        .map(|i| {
+            let t = i as f32 / 24.0;
+            let u = 1.0 - t;
+            (
+                u * u * u * p0.0 + 3.0 * u * u * t * p1.0 + 3.0 * u * t * t * p2.0 + t * t * t * p3.0,
+                u * u * u * p0.1 + 3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t * p3.1,
+            )
+        })
+        .collect()
+}
+
+fn ic_opaque(img: &image::RgbaImage, x: i32, y: i32) -> bool {
+    x >= 0 && y >= 0 && x < IC && y < IC && img.get_pixel(x as u32, y as u32)[3] > 0
+}
+
+/// Light on the upper-left edge of every shape and shade on the lower-right (the "3D" look), then
+/// a dark outline round the whole emblem.
+fn ic_finish(img: &mut image::RgbaImage) {
+    let copy = img.clone();
+    for y in 0..IC {
+        for x in 0..IC {
+            if !ic_opaque(&copy, x, y) {
+                continue;
+            }
+            let p = copy.get_pixel(x as u32, y as u32).0;
+            let lit = |k: i32| image::Rgba([p[0].saturating_add(k as u8), p[1].saturating_add(k as u8), p[2].saturating_add(k as u8), 255]);
+            let dark = |k: u8| image::Rgba([p[0].saturating_sub(k), p[1].saturating_sub(k), p[2].saturating_sub(k), 255]);
+            if !ic_opaque(&copy, x - 1, y) || !ic_opaque(&copy, x, y - 1) {
+                img.put_pixel(x as u32, y as u32, lit(46));
+            } else if !ic_opaque(&copy, x + 1, y) || !ic_opaque(&copy, x, y + 1) {
+                img.put_pixel(x as u32, y as u32, dark(46));
+            }
+        }
+    }
+    let copy = img.clone();
+    for y in 0..IC {
+        for x in 0..IC {
+            if ic_opaque(&copy, x, y) {
+                continue;
+            }
+            let near = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)].iter().any(|&(dx, dy)| ic_opaque(&copy, x + dx, y + dy));
+            if near {
+                img.put_pixel(x as u32, y as u32, image::Rgba([14, 10, 20, 255]));
+            }
+        }
+    }
+}
+
+/// The tile: a vertical gradient, a dark outer rim, a light inner rim in `accent`, a glossy
+/// highlight up in the corner and the emblem on top.
+fn ic_tile(emblem: &image::RgbaImage, top: Rgb, bottom: Rgb, accent: Rgb) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(IC as u32, IC as u32);
+    let lerp = |a: u8, b: u8, t: f32| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+    for y in 0..IC {
+        for x in 0..IC {
+            // round the four corners off
+            let corner = (x == 0 || x == IC - 1) && (y == 0 || y == IC - 1);
+            if corner {
+                continue;
+            }
+            let t = y as f32 / (IC - 1) as f32;
+            let mut c = [lerp(top[0], bottom[0], t), lerp(top[1], bottom[1], t), lerp(top[2], bottom[2], t)];
+            // gloss in the upper left
+            if x + y < 13 {
+                for k in 0..3 {
+                    c[k] = c[k].saturating_add(26);
+                }
+            }
+            let outer = x == 0 || y == 0 || x == IC - 1 || y == IC - 1;
+            let inner = x == 1 || y == 1 || x == IC - 2 || y == IC - 2;
+            let px = if outer {
+                [12, 8, 16]
+            } else if inner {
+                // the light rim: bright at the top left, dimmer at the bottom right
+                let k = if x + y < IC { 1.0 } else { 0.55 };
+                [(accent[0] as f32 * k) as u8, (accent[1] as f32 * k) as u8, (accent[2] as f32 * k) as u8]
+            } else {
+                c
+            };
+            img.put_pixel(x as u32, y as u32, image::Rgba([px[0], px[1], px[2], 255]));
+        }
+    }
+    image::imageops::overlay(&mut img, emblem, 0, 0);
+    img
+}
+
+fn ic_new() -> image::RgbaImage {
+    image::RgbaImage::new(IC as u32, IC as u32)
+}
+
+// ---- the emblems ------------------------------------------------------------------------------
+
+/// A scroll open on the left, a golden missile leaving it for the upper right.
+fn em_scroll_missile() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(8.0, 12.0), (12.0, 9.0), (15.0, 7.0), (15.0, 10.0), (11.0, 13.0)], [205, 150, 50]);
+    ic_poly(&mut g, &[(4.0, 10.0), (17.0, 10.0), (17.0, 19.0), (4.0, 19.0)], [242, 228, 196]);
+    ic_ellipse(&mut g, 4.5, 14.5, 2.0, 4.8, [206, 186, 146]);
+    ic_ellipse(&mut g, 16.8, 14.5, 2.0, 4.8, [206, 186, 146]);
+    for (y, x1) in [(13.5, 15.0), (15.5, 14.0), (17.5, 12.0)] {
+        ic_line(&mut g, (6.5, y), (x1, y), 1.0, [130, 40, 40]);
+    }
+    ic_ellipse(&mut g, 17.5, 6.0, 3.4, 3.2, [250, 205, 80]);
+    ic_ellipse(&mut g, 17.0, 5.6, 1.9, 1.8, [255, 245, 190]);
+    ic_finish(&mut g);
+    g
+}
+
+/// The staff planted on the ground with its orb up, two shock rings round its foot.
+fn em_staff_slam() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ring(&mut g, 12.0, 19.0, 10.5, 3.4, 1.6, [190, 140, 255]);
+    ic_ring(&mut g, 12.0, 19.0, 6.0, 2.0, 1.3, [235, 210, 255]);
+    ic_line(&mut g, (12.0, 18.0), (12.0, 6.0), 2.4, [150, 100, 60]);
+    ic_line(&mut g, (11.2, 17.0), (11.2, 7.0), 0.9, [200, 150, 100]);
+    ic_ellipse(&mut g, 12.0, 4.8, 3.6, 3.4, [250, 205, 80]);
+    ic_ellipse(&mut g, 11.4, 4.2, 1.6, 1.5, [255, 248, 200]);
+    ic_finish(&mut g);
+    g
+}
+
+/// A snarling goblin face.
+fn em_goblin() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(2.0, 9.0), (8.0, 9.0), (7.0, 15.0)], [96, 170, 70]);
+    ic_poly(&mut g, &[(22.0, 9.0), (16.0, 9.0), (17.0, 15.0)], [96, 170, 70]);
+    ic_ellipse(&mut g, 12.0, 13.0, 7.2, 7.8, [112, 190, 80]);
+    ic_ellipse(&mut g, 12.0, 17.0, 5.5, 3.5, [88, 156, 62]);
+    ic_ellipse(&mut g, 8.8, 11.5, 2.0, 1.6, [255, 232, 80]);
+    ic_ellipse(&mut g, 15.2, 11.5, 2.0, 1.6, [255, 232, 80]);
+    ic_put(&mut g, 9, 11, [160, 20, 20]);
+    ic_put(&mut g, 15, 11, [160, 20, 20]);
+    ic_line(&mut g, (6.0, 9.0), (10.5, 10.5), 1.0, [40, 70, 30]);
+    ic_line(&mut g, (18.0, 9.0), (13.5, 10.5), 1.0, [40, 70, 30]);
+    ic_line(&mut g, (7.5, 17.0), (16.5, 17.0), 1.8, [40, 24, 24]);
+    for x in [8, 10, 13, 15] {
+        ic_put(&mut g, x, 17, [250, 250, 240]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// A speech bubble with a word in it (a 3 x 5 pixel font, two pixels per dot).
+fn em_speech(word: &str) -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(2.0, 4.0), (22.0, 4.0), (22.0, 17.0), (2.0, 17.0)], [250, 250, 255]);
+    ic_poly(&mut g, &[(5.0, 17.0), (11.0, 17.0), (5.0, 22.0)], [250, 250, 255]);
+    let glyph = |c: char| -> [&'static str; 5] {
+        match c {
+            'u' => ["x.x", "x.x", "x.x", "x.x", "xxx"],
+            'h' => ["x..", "x..", "xxx", "x.x", "x.x"],
+            'm' => ["x...x", "xx.xx", "x.x.x", "x...x", "x...x"],
+            'e' => ["xxx", "x..", "xxx", "x..", "xxx"],
+            _ => ["...", "...", "...", "...", "..."],
+        }
+    };
+    let letters: Vec<[&str; 5]> = word.chars().map(glyph).collect();
+    let width: i32 = letters.iter().map(|l| l[0].len() as i32 * 2 + 2).sum::<i32>() - 2;
+    let mut x0 = 12 - width / 2;
+    for l in &letters {
+        for (y, row) in l.iter().enumerate() {
+            for (x, ch) in row.chars().enumerate() {
+                if ch == 'x' {
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        ic_put(&mut g, x0 + x as i32 * 2 + dx, 5 + y as i32 * 2 + dy, [40, 44, 90]);
+                    }
+                }
+            }
+        }
+        x0 += l[0].len() as i32 * 2 + 2;
+    }
+    ic_finish(&mut g);
+    g
+}
+
+fn em_fist(size: f32, skin: Rgb, shade: Rgb) -> image::RgbaImage {
+    let mut g = ic_new();
+    let (cx, cy) = (12.0, 13.0);
+    ic_ellipse(&mut g, cx, cy, 7.0 * size, 6.5 * size, skin);
+    for k in 0..4 {
+        ic_ellipse(&mut g, cx - 4.8 * size + k as f32 * 3.2 * size, cy - 5.2 * size + (k % 2) as f32 * 0.8, 2.0 * size, 2.0 * size, skin);
+    }
+    ic_ellipse(&mut g, cx - 6.0 * size, cy + 1.5 * size, 2.3 * size, 3.2 * size, skin);
+    ic_ellipse(&mut g, cx + 0.5, cy + 3.0 * size, 6.0 * size, 3.0 * size, shade);
+    for k in 0..3 {
+        ic_line(&mut g, (cx - 3.2 * size + k as f32 * 3.2 * size, cy - 3.0 * size), (cx - 3.2 * size + k as f32 * 3.2 * size, cy), 0.8, shade);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// A fist gripping a shirt collar.
+fn em_collar_grab() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(2.0, 14.0), (12.0, 21.0), (22.0, 14.0), (22.0, 23.0), (2.0, 23.0)], [240, 241, 250]);
+    ic_poly(&mut g, &[(2.0, 14.0), (12.0, 21.0), (12.0, 23.0), (2.0, 20.0)], [186, 192, 216]);
+    ic_line(&mut g, (4.0, 15.0), (12.0, 20.0), 1.0, [150, 156, 188]);
+    ic_line(&mut g, (20.0, 15.0), (12.0, 20.0), 1.0, [150, 156, 188]);
+    ic_ellipse(&mut g, 12.0, 9.0, 6.0, 5.2, [238, 196, 158]);
+    for k in 0..4 {
+        ic_ellipse(&mut g, 8.0 + k as f32 * 2.7, 5.2 + (k % 2) as f32 * 0.7, 1.7, 1.7, [238, 196, 158]);
+    }
+    ic_ellipse(&mut g, 12.0, 12.0, 5.2, 2.6, [222, 174, 134]);
+    ic_line(&mut g, (9.0, 14.5), (15.0, 14.5), 1.2, [238, 196, 158]);
+    // the knuckles: dark creases between the fingers
+    for x in [9.5f32, 12.5, 15.5] {
+        ic_line(&mut g, (x, 5.5), (x, 10.5), 0.9, [186, 134, 104]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// A raven with a rose.
+fn em_raven_rose() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(7.0, 12.0), (2.0, 17.0), (9.0, 15.5)], [28, 30, 50]);
+    ic_ellipse(&mut g, 10.5, 11.0, 6.5, 4.4, [34, 38, 66]);
+    ic_poly(&mut g, &[(6.0, 10.0), (13.0, 6.0), (10.0, 3.0), (4.0, 5.0)], [74, 80, 118]);
+    ic_ellipse(&mut g, 16.5, 8.0, 3.0, 2.8, [34, 38, 66]);
+    ic_poly(&mut g, &[(18.5, 7.0), (23.0, 8.6), (18.5, 9.6)], [20, 20, 24]);
+    ic_put(&mut g, 17, 7, [220, 224, 255]);
+    ic_line(&mut g, (18.5, 19.0), (18.5, 23.0), 1.4, [70, 140, 60]);
+    ic_ellipse(&mut g, 18.5, 17.0, 3.2, 3.0, [200, 60, 70]);
+    ic_ellipse(&mut g, 18.5, 17.6, 1.9, 1.7, [150, 40, 50]);
+    ic_put(&mut g, 17, 16, [255, 150, 150]);
+    ic_finish(&mut g);
+    g
+}
+
+/// A boot kicking, with speed lines.
+fn em_boot_kick() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(8.0, 2.0), (15.0, 2.0), (15.0, 12.0), (22.0, 14.0), (22.0, 20.0), (6.0, 20.0), (6.0, 12.0), (8.0, 12.0)], [150, 98, 56]);
+    ic_poly(&mut g, &[(8.0, 2.0), (10.5, 2.0), (10.5, 12.0), (8.0, 12.0)], [204, 150, 94]);
+    ic_line(&mut g, (6.0, 19.8), (22.0, 19.8), 2.0, [98, 62, 34]);
+    ic_line(&mut g, (11.0, 8.0), (15.0, 8.0), 1.0, [98, 62, 34]);
+    for (y, x0) in [(5.0, 0.0), (9.0, 0.5), (14.0, 1.0)] {
+        ic_line(&mut g, (x0, y), (x0 + 4.0, y), 1.2, [250, 250, 250]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// A red rose inside a blue ring.
+fn em_rose_ring() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ring(&mut g, 12.0, 12.0, 10.5, 10.5, 1.9, [90, 170, 255]);
+    ic_line(&mut g, (12.0, 14.0), (12.0, 21.0), 1.6, [70, 140, 60]);
+    ic_poly(&mut g, &[(12.0, 18.0), (17.0, 15.0), (14.0, 19.5)], [58, 120, 50]);
+    ic_ellipse(&mut g, 12.0, 10.0, 4.6, 4.4, [210, 60, 70]);
+    ic_ellipse(&mut g, 12.0, 10.8, 2.8, 2.6, [150, 40, 50]);
+    ic_put(&mut g, 10, 8, [255, 160, 160]);
+    ic_put(&mut g, 11, 8, [255, 160, 160]);
+    ic_finish(&mut g);
+    g
+}
+
+/// A finger gun with a spark at the muzzle.
+fn em_finger_gun() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ellipse(&mut g, 8.0, 16.0, 5.5, 4.6, [238, 196, 158]);
+    ic_poly(&mut g, &[(9.0, 10.0), (19.0, 10.0), (19.0, 13.5), (9.0, 13.5)], [238, 196, 158]);
+    ic_poly(&mut g, &[(6.0, 11.0), (10.0, 11.0), (9.0, 4.5), (6.5, 5.5)], [238, 196, 158]);
+    ic_line(&mut g, (10.0, 13.0), (19.0, 13.0), 1.0, [222, 174, 134]);
+    ic_ellipse(&mut g, 21.0, 9.0, 2.6, 2.6, [255, 232, 120]);
+    ic_ellipse(&mut g, 21.0, 9.0, 1.2, 1.2, [255, 255, 235]);
+    ic_line(&mut g, (21.0, 3.5), (21.0, 14.5), 1.0, [255, 232, 120]);
+    ic_finish(&mut g);
+    g
+}
+
+/// Three bullets.
+fn em_bullets() -> image::RgbaImage {
+    let mut g = ic_new();
+    for (i, x) in [5.5f32, 12.0, 18.5].into_iter().enumerate() {
+        let lift = if i == 1 { 0.0 } else { 2.0 };
+        ic_poly(&mut g, &[(x - 2.4, 9.0 + lift), (x + 2.4, 9.0 + lift), (x + 2.4, 20.0), (x - 2.4, 20.0)], [226, 178, 86]);
+        ic_poly(&mut g, &[(x - 2.4, 9.0 + lift), (x + 2.4, 9.0 + lift), (x, 3.0 + lift)], [190, 138, 42]);
+        ic_line(&mut g, (x - 1.2, 10.0 + lift), (x - 1.2, 18.0), 0.9, [255, 238, 170]);
+        ic_line(&mut g, (x - 2.4, 20.0), (x + 2.4, 20.0), 1.4, [130, 86, 40]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// A fedora.
+fn em_fedora() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ellipse(&mut g, 12.0, 16.0, 10.5, 3.8, [104, 66, 38]);
+    ic_poly(&mut g, &[(5.5, 15.0), (7.5, 5.0), (16.5, 5.0), (18.5, 15.0)], [150, 100, 58]);
+    ic_poly(&mut g, &[(6.0, 12.0), (18.0, 12.0), (18.5, 15.0), (5.5, 15.0)], [46, 34, 30]);
+    ic_poly(&mut g, &[(10.5, 12.0), (13.5, 12.0), (13.5, 15.0), (10.5, 15.0)], [250, 205, 80]);
+    ic_line(&mut g, (9.0, 6.0), (15.0, 6.0), 1.0, [200, 150, 96]);
+    ic_ellipse(&mut g, 12.0, 17.0, 10.0, 2.4, [150, 100, 58]);
+    ic_finish(&mut g);
+    g
+}
+
+fn whip_colors() -> (Rgb, Rgb) {
+    ([128, 80, 46], [196, 140, 90])
+}
+
+/// A curled whip with its handle.
+fn em_whip_curl() -> image::RgbaImage {
+    let mut g = ic_new();
+    let (mid, light) = whip_colors();
+    ic_line(&mut g, (2.5, 21.0), (7.5, 16.5), 3.2, [86, 52, 30]);
+    let path = ic_bezier((7.5, 16.5), (23.0, 19.0), (-1.0, 7.0), (18.0, 3.5));
+    ic_path(&mut g, &path, 2.2, mid);
+    let hi: Vec<(f32, f32)> = path.iter().map(|p| (p.0 - 0.5, p.1 - 0.7)).collect();
+    ic_path(&mut g, &hi, 0.8, light);
+    ic_ellipse(&mut g, 19.0, 3.5, 1.6, 1.4, [236, 218, 180]);
+    ic_finish(&mut g);
+    g
+}
+
+/// A whip with a grapple hook at the end.
+fn em_whip_hook() -> image::RgbaImage {
+    let mut g = ic_new();
+    let (mid, light) = whip_colors();
+    ic_line(&mut g, (2.5, 21.0), (6.5, 17.0), 3.0, [86, 52, 30]);
+    let path = ic_bezier((6.5, 17.0), (10.0, 20.0), (9.0, 10.0), (15.0, 9.0));
+    ic_path(&mut g, &path, 2.0, mid);
+    let hi: Vec<(f32, f32)> = path.iter().map(|p| (p.0 - 0.4, p.1 - 0.6)).collect();
+    ic_path(&mut g, &hi, 0.7, light);
+    // the hook: a silver barbed head
+    ic_poly(&mut g, &[(14.0, 6.0), (22.0, 8.5), (16.5, 12.0)], [200, 204, 220]);
+    ic_poly(&mut g, &[(14.0, 12.5), (19.0, 11.0), (15.0, 16.0)], [160, 164, 184]);
+    ic_ellipse(&mut g, 14.5, 9.5, 2.2, 2.2, [120, 124, 144]);
+    ic_finish(&mut g);
+    g
+}
+
+/// A whip spinning in a spiral, with sparks.
+fn em_whip_spiral() -> image::RgbaImage {
+    let mut g = ic_new();
+    let (mid, light) = whip_colors();
+    let pts: Vec<(f32, f32)> = (0..=60)
+        .map(|i| {
+            let t = i as f32 / 60.0;
+            let a = t * 4.2 * std::f32::consts::PI + 0.6;
+            let r = 1.2 + t * 9.5;
+            (12.0 + r * a.cos(), 12.0 + r * 0.9 * a.sin())
+        })
+        .collect();
+    ic_path(&mut g, &pts, 2.2, mid);
+    let hi: Vec<(f32, f32)> = pts.iter().map(|p| (p.0 - 0.4, p.1 - 0.6)).collect();
+    ic_path(&mut g, &hi, 0.7, light);
+    let tip = *pts.last().unwrap();
+    ic_ellipse(&mut g, tip.0, tip.1, 1.8, 1.6, [255, 240, 200]);
+    for (x, y) in [(3, 3), (20, 19), (21, 4), (3, 20)] {
+        ic_put(&mut g, x, y, [255, 240, 170]);
+        ic_put(&mut g, x + 1, y, [255, 240, 170]);
+        ic_put(&mut g, x, y + 1, [255, 240, 170]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// Every skill icon: (sprite folder, button, image).
+fn skill_icons() -> Vec<(&'static str, &'static str, image::RgbaImage)> {
+    let skin = ([238, 196, 158], [222, 174, 134]);
+    let tile = |e: image::RgbaImage, top: Rgb, bottom: Rgb, accent: Rgb| ic_tile(&e, top, bottom, accent);
+    let mut v = vec![
+        ("anaran", "light", tile(em_scroll_missile(), [96, 78, 214], [28, 18, 96], [240, 200, 90])),
+        ("anaran", "heavy", tile(em_staff_slam(), [152, 92, 204], [48, 22, 84], [226, 176, 255])),
+        ("anaran", "special", tile(em_goblin(), [112, 190, 92], [24, 76, 38], [204, 244, 154])),
+        ("ayz", "light", tile(em_speech("uh"), [140, 172, 214], [44, 68, 112], [232, 238, 252])),
+        ("ayz", "heavy", tile(em_collar_grab(), [242, 154, 62], [128, 58, 18], [255, 224, 154])),
+        ("ayz", "special", tile(em_raven_rose(), [78, 66, 138], [18, 14, 52], [196, 176, 255])),
+        ("cowboy", "light", tile(em_fist(1.0, skin.0, skin.1), [224, 92, 82], [98, 28, 30], [255, 204, 184])),
+        ("cowboy", "heavy", tile(em_boot_kick(), [182, 132, 84], [78, 48, 30], [242, 212, 154])),
+        ("cowboy", "special", tile(em_rose_ring(), [82, 134, 232], [22, 38, 102], [172, 224, 255])),
+        ("gunslinger", "light", tile(em_finger_gun(), [154, 164, 92], [58, 68, 32], [232, 232, 172])),
+        ("gunslinger", "heavy", tile(em_bullets(), [232, 192, 84], [118, 78, 22], [255, 242, 172])),
+        ("gunslinger", "special", tile(em_fedora(), [114, 62, 164], [38, 18, 72], [232, 192, 255])),
+        ("junkhead", "light", tile(em_whip_curl(), [212, 72, 72], [78, 18, 26], [255, 172, 162])),
+        ("junkhead", "heavy", tile(em_whip_hook(), [142, 142, 154], [48, 48, 60], [222, 222, 238])),
+        ("junkhead", "special", tile(em_whip_spiral(), [232, 62, 84], [88, 10, 40], [255, 192, 124])),
+    ];
+    // The Negaprofessor's icons are the Professor's in negative colours.
+    let nega: Vec<_> = v.iter().filter(|(f, _, _)| *f == "ayz").map(|(_, b, img)| ("evilayz", *b, invert(img))).collect();
+    v.extend(nega);
+    v
+}
+
+/// The skill icons, large, in rows by character (`--skill-icons <assets dir> <sheet.png>` also writes them).
+fn skill_icon_sheet() -> image::RgbaImage {
+    let icons = skill_icons();
+    let scale = 8u32;
+    let cell = IC as u32 * scale + 12;
+    let rows = icons.len() as u32 / 3;
+    let mut sheet = image::RgbaImage::from_pixel(3 * cell, rows * cell, image::Rgba([60, 64, 76, 255]));
+    for (k, (_, _, img)) in icons.iter().enumerate() {
+        let (ox, oy) = ((k as u32 % 3) * cell + 6, (k as u32 / 3) * cell + 6);
+        for y in 0..IC as u32 * scale {
+            for x in 0..IC as u32 * scale {
+                let p = img.get_pixel(x / scale, y / scale);
+                if p[3] > 0 {
+                    sheet.put_pixel(ox + x, oy + y, *p);
+                }
+            }
+        }
+    }
+    sheet
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next().unwrap_or_else(|| "ayz_default.png".into());
@@ -4606,6 +5181,22 @@ fn main() {
         let out = args.next().unwrap_or_else(|| "junkhead_whip.png".into());
         jh_whip_sheet(&jh_default()).save(&out).unwrap();
         println!("wrote {out}");
+        return;
+    }
+
+    // `--skill-icons <assets dir> <sheet.png>`: draw the skill-bar icons of every character into
+    // `assets/icons/<sprite folder>/<light|heavy|special>.png`, and a big contact sheet to look at.
+    if first == "--skill-icons" {
+        let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
+        for (folder, button, img) in skill_icons() {
+            let dir = assets.join("icons").join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            img.save(dir.join(format!("{button}.png"))).unwrap();
+        }
+        if let Some(sheet) = args.next() {
+            skill_icon_sheet().save(&sheet).unwrap();
+        }
+        println!("wrote the skill icons");
         return;
     }
 

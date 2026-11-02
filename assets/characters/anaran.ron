@@ -1,7 +1,13 @@
-// Anaran, Arch-Historian: a pompous high elf in red and copper robes with a black cape and dark crimson hair.
-// Light: scroll whip (arms alternate, 3-hit combo). Heavy: a pronouncement that sends golden runes across the screen.
+// Anaran, Arch-Historian: a pompous high elf in red and copper robes with a black cape and dark crimson hair. A ranged fighter.
+// Light: he opens a scroll and reads for as long as you hold the button (no combos). While he reads, a heat-seeking
+//        missile leaves the scroll after 0.75 seconds of reading and then one every second; it curves after the enemy and detonates
+//        when it is close. He can walk or crouch while he reads (on the ground only), and being hit stops it.
+// Heavy: he slams his staff on the ground (a quick cast, a 2.5 second cooldown that shows as a bar under him, and the screen shakes): a magical shockwave around him (both sides) damages and shoves the enemy
+//        away and leaves them unable to attack for 1.5 seconds (unless they block it). Jump over it. It also destroys the
+//        enemy's projectiles in its reach (except melee ones).
 // Special (the ruby at his throat glows when the meter is full): four goblins that swarm the enemy and bite until they're killed or time out.
-// See ayz.ron for what each field means; `minions` is explained in src/sim/data.rs.
+// Air: the scroll whip and the plunging verdict are as they were.
+// See ayz.ron for what each field means; `channel`, `radial`, `silence` and the `homing` projectile fields are explained in src/sim/data.rs.
 (
     name: "Anaran",
     // shown under his name in the character select only
@@ -10,18 +16,18 @@
     color: (0.95, 0.52, 0.38),
     walk_speed: 195,
     jump_speed: 1050,
+    // the CPU plays him as a ranged fighter: it keeps its distance, reads and slams when you get close
+    keeps_distance: true,
     special_mark: Some(Scar(color: (0.75, 0.2, 0.25), glow: (1.0, 0.35, 0.4))),
     moves: [
-        (name: "Scroll Whip", button: Light, crouching: false, anim: Punch, walk_pct: 60,
-         startup: 5, active: 3, recovery: 8, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
-         hitbox: (x: 12, y: 28, w: 40, h: 10)),
-        (name: "Low Whip", button: Light, crouching: true, anim: Soft, walk_pct: 0,
-         startup: 6, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
-         hitbox: (x: 12, y: 0, w: 38, h: 10)),
-        (name: "Pronouncement", button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
-         startup: 16, active: 2, recovery: 22, damage: 60, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 6,
+        (name: "Read the Scroll", button: Light, crouching: false, anim: Read, walk_pct: 100,
+         channel: Some((first: 45, every: 60)),
+         startup: 14, active: 1, recovery: 12, damage: 70, hitstun: 22, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 34, y: 38, aim_y: 38, travel_frames: 14, lifetime: 40, size: (18, 14), image: Some("runes")))),
+         projectile: Some((x: 20, y: 42, aim_y: 30, travel_frames: 1, lifetime: 300, size: (10, 10), image: Some("missile"), summon_image: Some("none"), homing: true, homing_turn: 7, detonate: 22, speed_tenths: 36))),
+        (name: "Staff Slam", button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 150, guard_hits: Some(2),
+         startup: 7, active: 4, recovery: 24, damage: 80, hitstun: 16, blockstun: 14, knockback: 9, hitstop: 8,
+         hitbox: (x: -84, y: 0, w: 168, h: 36)),
         (name: "Air Whip", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
          startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 8, y: 0, w: 34, h: 24)),

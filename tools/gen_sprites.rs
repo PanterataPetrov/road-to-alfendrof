@@ -159,91 +159,15 @@ fn hash2(a: i32, b: i32) -> u32 {
 // The map: a lane in Istanbul climbing to Galata Tower, with a portal over the tower.
 // Drawn at half resolution and enlarged 2x when saved, so every background pixel is a 2 x 2 block.
 
-const LAYER_W: i32 = 200;
-const LAYER_H: i32 = 108;
-const SKY_W: i32 = 192;
-/// Row of the floor line (the floor top is at world y = -80).
-const GROUND_ROW: i32 = 94;
-/// The tower at the far end of the lane, with the portal in the sky above its spire.
-const TOWER_X: i32 = 93;
-const SPIRE_TOP: i32 = 31;
-/// Below the HUD (which covers roughly the top 16 rows), directly above the spire.
-const PORTAL: (i32, i32) = (TOWER_X, 16);
+const LAYER_W: i32 = 400;
+const LAYER_H: i32 = 225;
+/// The portal hangs in the sky above the city, a little right of the tower (half resolution: the layer
+/// is 800 x 450 in the game, its centre 91 px above the floor line).
+const PORTAL: (i32, i32) = (140, 43);
+const TOWER_X: i32 = PORTAL.0;
+/// How far its lightning reaches down.
+const SPIRE_TOP: i32 = PORTAL.1 + 12;
 
-fn cloud(i: &mut Img, cx: i32, cy: i32, size: i32, rng: &mut Rng) {
-    let white = c(1.0, 1.0, 1.0);
-    let under = c(0.80, 0.89, 0.98);
-    let puffs = 4 + size / 4;
-    let mut discs = Vec::new();
-    for k in 0..puffs {
-        let t = k as f32 / (puffs - 1) as f32;
-        let x = cx + ((t - 0.5) * size as f32 * 2.2) as i32;
-        // Tall in the middle, low at the ends: a soft rolling top.
-        let r = ((0.45 + 0.55 * (t * std::f32::consts::PI).sin()) * size as f32 * 0.5) as i32 + rng.range(0, 2);
-        discs.push((x, cy - r / 2, r.max(2)));
-    }
-    for &(x, y, r) in &discs {
-        i.disc(x, y + 1, r, under);
-    }
-    for &(x, y, r) in &discs {
-        i.disc(x, y, r, white);
-    }
-}
-
-fn wisp(i: &mut Img, x0: i32, y0: i32, len: i32) {
-    for t in 0..len {
-        let y = y0 + (2.5 * (t as f32 / 8.0).sin()) as i32 - t / 14;
-        i.blend(x0 + t, y, c(1.0, 1.0, 1.0), 0.65);
-        if t % 3 == 0 {
-            i.blend(x0 + t, y + 1, c(1.0, 1.0, 1.0), 0.3);
-        }
-    }
-}
-
-fn sky() -> Img {
-    let (w, h) = (SKY_W, LAYER_H);
-    let mut i = Img::new(w as u32, h as u32);
-    let stops = [(0.0, c(0.28, 0.56, 0.95)), (0.55, c(0.50, 0.76, 0.98)), (1.0, c(0.88, 0.96, 0.99))];
-    // banded gradient with a checker dither between bands
-    let bands = 10;
-    for y in 0..h {
-        let t = y as f32 / h as f32 * bands as f32;
-        let (band, frac) = (t.floor(), t - t.floor());
-        for x in 0..w {
-            let dither = if frac > 0.65 && (x + y) % 2 == 0 { 1.0 } else { 0.0 };
-            i.set(x, y, gradient(&stops, ((band + dither) / bands as f32).min(1.0)));
-        }
-    }
-    // the sun, with stepped halos
-    for (r, a) in [(16, 0.10), (13, 0.12), (10, 0.16)] {
-        for y in -r..=r {
-            for x in -r..=r {
-                if x * x + y * y <= r * r {
-                    i.blend(160 + x, 14 + y, c(1.0, 0.97, 0.80), a);
-                }
-            }
-        }
-    }
-    i.disc(160, 14, 7, c(1.0, 0.98, 0.78));
-    i.disc(160, 14, 5, c(1.0, 1.0, 0.92));
-
-    let mut rng = Rng(3);
-    cloud(&mut i, 40, 30, 14, &mut rng);
-    cloud(&mut i, 100, 18, 10, &mut rng);
-    cloud(&mut i, 170, 46, 12, &mut rng);
-    cloud(&mut i, 20, 62, 8, &mut rng);
-    wisp(&mut i, 70, 40, 56);
-    wisp(&mut i, 110, 8, 48);
-    wisp(&mut i, 8, 48, 40);
-    // gulls
-    let gull = c(0.32, 0.36, 0.48);
-    for (x, y) in [(30, 50), (46, 44), (126, 56), (140, 70)] {
-        for (dx, dy) in [(-2, 0), (-1, 1), (0, 0), (1, 1), (2, 0)] {
-            i.set(x + dx, y + dy, gull);
-        }
-    }
-    i
-}
 /// The portal: a torn spiral rift above the tower with crackling energy, dark storm clouds and lightning
 /// down to the spire. Its own layer so the game can pulse it.
 fn portal() -> Img {
@@ -324,7 +248,6 @@ fn portal() -> Img {
             break;
         }
     }
-    i.disc(TOWER_X, SPIRE_TOP - 3, 2, c(1.0, 0.86, 1.0));
     for _ in 0..8 {
         let a = rng.range(0, 360) as f32 * std::f32::consts::PI / 180.0;
         let (mut sx, mut sy) = (cx + ((rx + 3) as f32 * a.cos()) as i32, cy + ((ry + 3) as f32 * a.sin()) as i32);
@@ -384,7 +307,6 @@ fn main() {
 
     // characters come from `gen_ayz` and the buildings from `trace_photo`; this draws the rest at half resolution, enlarged 2x
     let bg = out.join("backgrounds").join("galata");
-    sky().upscale(2).save(&bg.join("sky.png"));
     portal().upscale(2).save(&bg.join("portal.png"));
     cobblestones().upscale(2).save(&bg.join("floor.png"));
 }

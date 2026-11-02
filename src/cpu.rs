@@ -23,7 +23,32 @@ fn reach(mv: &MoveData, boosted: bool) -> i32 {
     mv.hitbox.x + mv.hitbox.w + if boosted { mv.boost_reach } else { 0 } + Fighter::HALF_WIDTH / PX
 }
 
+/// How a character fights: from a distance (words, bullets, missiles, a raven) or up close.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Style {
+    Ranged,
+    Melee,
+}
+
+pub fn style_of(data: &CharacterData) -> Style {
+    let light_shoots = data.find_move(Button::Light, false, false).map(|i| &data.moves[i]).is_some_and(|m| m.projectile.is_some() || m.channel.is_some());
+    if data.keeps_distance || light_shoots {
+        Style::Ranged
+    } else {
+        Style::Melee
+    }
+}
+
+/// The CPU's input when it doesn't know who it is fighting (it is treated as fighting its own kind).
 pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
+    cpu_input_vs(state, me, data, data)
+}
+
+/// The CPU's input for fighter `me` playing `data` against a fighter playing `opp`. It plays differently
+/// against a ranged opponent (it dodges and answers shots, closes the gap and doesn't back off) than a
+/// close-range one (a ranged CPU then keeps further away and shoots more), and every champion uses
+/// its own tools.
+pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &CharacterData) -> Input {
     if state.phase != Phase::Fighting {
         return Input::default();
     }
@@ -45,6 +70,11 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
     let window = state.frame / DECISION_FRAMES;
     let first_frame = state.frame % DECISION_FRAMES == 0;
     let roll = noise(window, me) % 100;
+    let my_style = style_of(data);
+    let vs_ranged = style_of(opp) == Style::Ranged;
+    // a shot of theirs (or a homing missile) is close to me
+    let incoming = state.projectiles.iter().any(|p| p.owner != me && (p.x - m.x).abs() / PX < 90);
+    let button = |flag: u16| Input(if first_frame { flag } else { 0 });
 
     // a zoner stays out of reach; near a wall it can't back off any further
     let wall = (GameState::STAGE_HALF_WIDTH - Fighter::HALF_WIDTH) / PX;
@@ -59,8 +89,33 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
         return Input(if roll < 20 { Input::DOWN } else { Input::BLOCK });
     }
 
+    // a ranged opponent shooting from afar, or a shot already on its way: dodge it, block it, or answer it
+    if m.is_neutral() && ((vs_ranged && o.state == FighterState::Attack && opponent_dist >= DANGER_RANGE) || incoming) && roll < 60 {
+        // a shockwave around himself destroys the shots near him (Anaran's staff slam)
+        if incoming && m.cooldown_left == 0 && data.moves.iter().any(|mv| mv.clears_projectiles && mv.button == Button::Heavy) {
+            return button(Input::HEAVY);
+        }
+        return Input(match (my_style, roll) {
+            // a close-range fighter jumps in over it
+            (Style::Melee, 0..=24) => toward | Input::UP,
+            (_, 0..=39) => Input::BLOCK,
+            // duck: words and bullets fly at head height
+            _ => Input::DOWN,
+        });
+    }
+
     // keep pressing forward during an attack; moves that allow it advance with the hit
     if m.state == FighterState::Attack {
+        // reading a scroll (a held move): keep the button down while the opponent stays at a distance,
+        // for about two missiles, then let go (and slam the staff if they come close)
+        let mv = &data.moves[m.attack];
+        if let Some(ch) = mv.channel {
+            if m.state_frame <= mv.startup {
+                let reading = m.state_frame + 1 >= mv.startup;
+                let stop = reading && (opponent_dist <= 60 || m.charge >= ch.first + ch.every + 40);
+                return Input(if stop { 0 } else { Input::LIGHT });
+            }
+        }
         // Junkhead: once a heavy or the special has connected, go straight into lights (tapped fast so each press registers)
         if data.light_after_heavy && m.hit_done && data.moves[m.attack].button != Button::Light {
             return Input(if state.frame % 2 == 0 { Input::LIGHT } else { 0 });
@@ -97,12 +152,23 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
 
     // a zoner backs away when the opponent gets close (hopping over them against a wall), pokes when they're right on top of it, and shoots from a distance with the volley and the special
     if data.keeps_distance {
-        let button = |flag: u16| Input(if first_frame { flag } else { 0 });
-        if dist < 70 {
+        // a shockwave around himself (the staff slam) is the answer to someone close
+        let slam = data.moves.iter().any(|mv| mv.radial && mv.button == Button::Heavy);
+        // against a close-range fighter it backs off sooner, sits further away and shoots more; against
+        // another ranged fighter it holds the middle and trades shots
+        let close = if vs_ranged { 60 } else { 85 };
+        let comfort = if vs_ranged { 100 } else { 135 };
+        let fire = if vs_ranged { 40 } else { 32 };
+        // the heavy is only worth using if it reaches from here
+        let heavy_reaches = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]).is_some_and(|h| h.hitbox.w <= 0 || dist <= reach(h, false) - 8);
+        if dist < close {
+            if slam && m.cooldown_left == 0 && dist < 60 && roll < 50 {
+                return button(Input::HEAVY);
+            }
             if cornered {
                 return Input(toward | Input::UP);
             }
-            if dist < 50 && roll < 22 {
+            if dist < close - 20 && roll < 22 {
                 return button(Input::LIGHT);
             }
             return Input(away);
@@ -111,17 +177,15 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
             if m.meter >= Fighter::METER_MAX && roll < 35 {
                 return button(Input::SPECIAL);
             }
-            if roll < 32 {
-                return button(if roll < 16 { Input::HEAVY } else { Input::LIGHT });
+            if roll < fire {
+                return button(if roll < fire / 2 && heavy_reaches { Input::HEAVY } else { Input::LIGHT });
             }
             // keep adjusting the gap: back off if it's a bit short, otherwise wait
-            return Input(if dist < 115 && roll < 70 { away } else { 0 });
+            return Input(if dist < comfort && roll < 70 { away } else { 0 });
         }
         return Input(toward);
     }
 
-    // buttons go down on one frame only
-    let button = |flag: u16| Input(if first_frame { flag } else { 0 });
     // Junkhead keeps tapping Light during the quick lights after a heavy or special, or a light combo, while the opponent is in front of him
     if data.light_after_heavy && (m.quick > 0 || m.combo > 0) && dist <= data.cpu_range.unwrap_or(ATTACK_RANGE) + 10 {
         return Input(if state.frame % 2 == 0 { Input::LIGHT } else { 0 });
@@ -139,10 +203,28 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
             return button(Input::SPECIAL);
         }
         let heavy = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]);
-        if heavy.is_some_and(|h| h.pull_self && dist <= reach(h, false) - 15) && roll < 50 {
+        // against someone who shoots from afar, the pulling lash is used much more to close the gap
+        if heavy.is_some_and(|h| h.pull_self && m.cooldown_left == 0 && dist <= reach(h, false) - 15) && roll < if vs_ranged { 80 } else { 50 } {
             return button(Input::HEAVY);
         }
-        let hop = if roll < 10 && dist > 70 { Input::UP } else { 0 };
+        // a leaping heavy (the dive kicks) jumps the gap
+        if vs_ranged && heavy.is_some_and(|h| h.leap > 0) && dist > 60 && dist < 140 && roll < 35 {
+            return button(Input::HEAVY);
+        }
+        // a rusher dashes in (tapping the direction twice), dives from further out and hops all the time
+        if data.cpu_rush {
+            if heavy.is_some_and(|h| h.leap > 0) && dist > 55 && dist < 170 && roll < 30 {
+                return button(Input::HEAVY);
+            }
+            if dist > 85 && roll < 60 {
+                return Input(if state.frame % 2 == 0 { toward } else { 0 });
+            }
+            if dist > 50 && roll >= 60 && roll < 80 {
+                return Input(toward | Input::UP);
+            }
+        }
+        // and a hop now and then keeps shots from hitting
+        let hop = if roll < if vs_ranged { 18 } else { 10 } && dist > 70 { Input::UP } else { 0 };
         return Input(toward | hop);
     }
 
@@ -155,7 +237,10 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
         35..=54 => button(Input::HEAVY),
         55..=61 => button(if m.meter >= crate::sim::Fighter::METER_MAX { Input::SPECIAL } else { Input::LIGHT }),
         62..=74 => button(Input::LIGHT | Input::DOWN),
-        75..=84 => Input(away),
+        // against a shooter there is no point backing off: keep on them
+        // (a rusher keeps hopping at them instead)
+        75..=84 if data.cpu_rush => Input(toward | Input::UP),
+        75..=84 => Input(if vs_ranged { toward } else { away }),
         _ => Input::default(),
     }
 }
@@ -194,6 +279,37 @@ mod tests {
             s.step([Input::default(), cpu], [&c[0], &c[1]]);
         }
         assert!(s.fighters[0].health < crate::sim::Fighter::MAX_HEALTH || s.wins[1] > 0, "CPU never hit anyone");
+    }
+
+    #[test]
+    fn the_rushing_cowboy_closes_the_distance_faster_and_moves_more() {
+        let cowboy = CharacterData::from_ron(include_str!("../assets/characters/cowboy.ron")).unwrap();
+        assert!(cowboy.cpu_rush);
+        let mut calm = cowboy.clone();
+        calm.cpu_rush = false;
+        let c = chars();
+        // a passive opponent at the far side: how long until the CPU is in striking distance, and whether it dashes on the way
+        let run = |data: &CharacterData| {
+            let mut s = GameState::new();
+            s.fighters[0].x = -300 * PX;
+            s.fighters[1].x = 300 * PX;
+            let (mut arrived, mut dashes, mut was_dashing) = (None, 0, false);
+            for frame in 0..400 {
+                let cpu = cpu_input_vs(&s, 1, data, &c[0]);
+                s.step([Input::default(), cpu], [&c[0], data]);
+                let dashing = s.fighters[1].state == FighterState::Dash;
+                dashes += (dashing && !was_dashing) as u32;
+                was_dashing = dashing;
+                if arrived.is_none() && (s.fighters[1].x - s.fighters[0].x).abs() / PX < 60 {
+                    arrived = Some(frame);
+                }
+            }
+            (arrived.unwrap_or(400), dashes)
+        };
+        let (rush_t, rush_dashes) = run(&cowboy);
+        let (calm_t, _) = run(&calm);
+        assert!(rush_dashes > 0, "the rusher dashes");
+        assert!(rush_t < calm_t, "the rusher arrives sooner: {rush_t} vs {calm_t}");
     }
 
     #[test]
@@ -292,6 +408,30 @@ mod tests {
     }
 
     #[test]
+    fn the_cpu_anaran_reads_from_a_distance_slams_when_close_and_hurts_a_passive_player() {
+        let a = CharacterData::from_ron(include_str!("../assets/characters/anaran.ron")).unwrap();
+        assert!(a.keeps_distance);
+        let c = chars();
+        let mut s = GameState::new();
+        let (mut missiles, mut slams) = (0, 0);
+        for _ in 0..4_000 {
+            let cpu = cpu_input(&s, 1, &a);
+            let before = s.fighters[1].shots;
+            s.step([Input::default(), cpu], [&c[0], &a]);
+            missiles += (s.fighters[1].shots > before && s.fighters[1].state == FighterState::Attack) as u32;
+            if s.fighters[1].state == FighterState::Attack && s.fighters[1].state_frame == 0 && a.moves[s.fighters[1].attack].radial {
+                slams += 1;
+            }
+            if s.phase != Phase::Fighting {
+                break;
+            }
+        }
+        assert!(missiles > 0, "he never fired a missile");
+        assert!(s.fighters[0].health < Fighter::MAX_HEALTH, "he never hurt anyone");
+        let _ = slams;
+    }
+
+    #[test]
     fn two_cpus_fight_without_breaking_anything() {
         let c = chars();
         let mut s = GameState::new();
@@ -316,5 +456,110 @@ mod tests {
         assert!(cpu_input(&s, 1, &j).has(Input::LIGHT), "light on an even frame");
         s.frame = 11;
         assert!(!cpu_input(&s, 1, &j).has(Input::LIGHT), "and released on the next so that it counts as a new press");
+    }
+
+    fn load(path: &str) -> CharacterData {
+        CharacterData::from_ron(&std::fs::read_to_string(format!("{}/assets/characters/{path}.ron", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_champions_are_sorted_into_ranged_and_close_range() {
+        for ranged in ["ayz", "evilayz", "anaran", "gunslinger"] {
+            assert_eq!(style_of(&load(ranged)), Style::Ranged, "{ranged}");
+        }
+        for melee in ["cowboy", "junkhead"] {
+            assert_eq!(style_of(&load(melee)), Style::Melee, "{melee}");
+        }
+    }
+
+    /// The mean gap (px) a CPU `me` keeps over a few seconds against a player who just stands there.
+    fn mean_gap(me: &CharacterData, opp: &CharacterData) -> i32 {
+        let mut s = GameState::new();
+        s.fighters[0].x = -80 * PX;
+        s.fighters[1].x = 80 * PX;
+        let (mut total, mut counted) = (0, 0);
+        for i in 0..900 {
+            let cpu = cpu_input_vs(&s, 1, me, opp);
+            s.step([Input::default(), cpu], [opp, me]);
+            // only the moments when both are just standing around count (not while one has been grabbed)
+            if i >= 300 && s.fighters[1].is_neutral() && s.fighters[0].state == FighterState::Idle {
+                total += (s.fighters[1].x - s.fighters[0].x).abs() / PX;
+                counted += 1;
+            }
+            // nobody dies, so the positions say what the CPU wants
+            s.fighters[0].health = Fighter::MAX_HEALTH;
+        }
+        total / counted.max(1)
+    }
+
+    #[test]
+    fn a_ranged_cpu_keeps_further_away_from_a_close_range_fighter_than_from_another_shooter() {
+        let (professor, cowboy, gunslinger) = (load("ayz"), load("cowboy"), load("gunslinger"));
+        let (vs_melee, vs_ranged) = (mean_gap(&professor, &cowboy), mean_gap(&professor, &gunslinger));
+        assert!(vs_melee > vs_ranged + 8, "the Professor sat {vs_melee} px from the cowboy but {vs_ranged} px from the Gunslinger");
+    }
+
+    #[test]
+    fn a_close_range_cpu_answers_shots_a_ranged_opponent_fires_and_ignores_them_from_a_melee_one() {
+        let (cowboy, gunslinger) = (load("cowboy"), load("gunslinger"));
+        // the player's (P1) bullet is 50 px from the cowboy CPU (P2)
+        let mut s = GameState::new();
+        s.fighters[0].x = -150 * PX;
+        s.fighters[1].x = 50 * PX;
+        s.projectiles.push(crate::sim::Projectile { owner: 0, x: 0, y: 44 * PX, vx: 6 * PX, vy: 0, age: 0, move_index: 0, land_x: 0, power: 100 });
+        let mut defended = 0;
+        for window in 0..60 {
+            s.frame = window * 8;
+            let i = cpu_input_vs(&s, 1, &cowboy, &gunslinger);
+            defended += (i.has(Input::BLOCK) || i.has(Input::DOWN) || i.has(Input::UP)) as u32;
+        }
+        assert!(defended >= 20, "it should block, duck or jump a shot on its way, did so {defended} times out of 60");
+        // with nothing flying at it it just walks up to the player
+        s.projectiles.clear();
+        let mut defended = 0;
+        for window in 0..60 {
+            s.frame = window * 8;
+            let i = cpu_input_vs(&s, 1, &cowboy, &cowboy);
+            defended += (i.has(Input::BLOCK) || i.has(Input::DOWN)) as u32;
+        }
+        assert_eq!(defended, 0);
+    }
+
+    #[test]
+    fn anaran_answers_a_shot_close_to_him_with_the_shockwave_that_destroys_it() {
+        let (anaran, gunslinger) = (load("anaran"), load("gunslinger"));
+        let mut s = GameState::new();
+        s.fighters[0].x = -150 * PX;
+        s.fighters[1].x = 50 * PX;
+        s.projectiles.push(crate::sim::Projectile { owner: 0, x: 0, y: 44 * PX, vx: 6 * PX, vy: 0, age: 0, move_index: 0, land_x: 0, power: 100 });
+        let slams = (0..40u32).filter(|w| {
+            s.frame = w * 8;
+            cpu_input_vs(&s, 1, &anaran, &gunslinger).has(Input::HEAVY)
+        });
+        assert!(slams.count() >= 10, "the staff slam is the answer to a shot");
+        // while it is cooling down he does something else
+        s.fighters[1].cooldown_move = anaran.moves.iter().position(|m| m.name == "Staff Slam").unwrap();
+        s.fighters[1].cooldown_left = 100;
+        assert_eq!((0..40u32).filter(|w| { s.frame = w * 8; cpu_input_vs(&s, 1, &anaran, &gunslinger).has(Input::HEAVY) }).count(), 0);
+    }
+
+    #[test]
+    fn a_close_range_cpu_closes_the_gap_on_a_shooter_and_a_ranged_cpu_still_fights_without_breaking() {
+        // every pairing of champions plays on without panicking or standing still for good
+        let names = ["ayz", "anaran", "cowboy", "gunslinger", "junkhead", "evilayz"];
+        for a in names {
+            for b in names {
+                let (ca, cb) = (load(a), load(b));
+                let mut s = GameState::new();
+                for _ in 0..2_000 {
+                    let (i0, i1) = (cpu_input_vs(&s, 0, &ca, &cb), cpu_input_vs(&s, 1, &cb, &ca));
+                    s.step([i0, i1], [&ca, &cb]);
+                    if s.phase == Phase::MatchOver {
+                        break;
+                    }
+                }
+                assert!(s.fighters[0].health < Fighter::MAX_HEALTH || s.fighters[1].health < Fighter::MAX_HEALTH || s.wins.iter().sum::<u8>() > 0, "{a} vs {b}: nobody ever got hurt");
+            }
+        }
     }
 }

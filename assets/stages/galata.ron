@@ -1,17 +1,18 @@
-// Galata Tower, Istanbul, over a street of colourful buildings. A portal has torn open in the sky above the tower.
-// The buildings (near.png) are traced from a photo with `cargo run --bin trace_photo`; the sky, the portal and the
-// cobbles come from `cargo run --bin gen_sprites`. Swap any image for your own art.
-// Layers go back to front. parallax: 1 = fixed on screen, 0 = fixed in the world. glow: true makes a layer pulse (the portal).
+// Galata Tower and the rooftops of Istanbul at sunset, with a portal torn open in the sky. The arena is 800 px wide,
+// twice what it was, and the camera zooms to follow the fighters.
+// The background (near.png) is traced from a photo with `cargo run --bin trace_photo`; the portal and the floor tile
+// come from `cargo run --bin gen_sprites`. Swap any image for your own art.
+// Layers go back to front. parallax: 1 = fixed on screen, 0 = fixed in the world. y: height of the layer's centre.
+// glow: true makes a layer pulse (the portal).
 (
     name: "Galata Tower",
-    sky: (0.50, 0.76, 0.98),
+    sky: (0.92, 0.62, 0.55),
     pillar: (0.62, 0.72, 0.88),
     floor_a: (0.58, 0.52, 0.52),
     floor_b: (0.50, 0.45, 0.46),
     layers: [
-        (image: "backgrounds/galata/sky.png", parallax: 1.0, z: -10.0),
-        (image: "backgrounds/galata/portal.png", parallax: 0.0, z: -7.5, glow: true),
-        (image: "backgrounds/galata/near.png", parallax: 0.0, z: -8.0),
+        (image: "backgrounds/galata/near.png", parallax: 0.0, z: -8.0, y: 91.0),
+        (image: "backgrounds/galata/portal.png", parallax: 0.0, z: -7.5, y: 91.0, glow: true),
     ],
     floor_tile: Some("backgrounds/galata/floor.png"),
 )

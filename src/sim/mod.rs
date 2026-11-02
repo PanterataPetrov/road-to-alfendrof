@@ -6,7 +6,7 @@ pub mod fighter;
 pub mod input;
 pub mod state;
 
-pub use data::{AnimKind, Button, CharacterData, CurseData, HitOverride, MarkKind, MinionData, MoveData, ProjectileData, RavenData, RavenMove};
+pub use data::{ChannelData, AnimKind, Button, CharacterData, CurseData, HitOverride, MarkKind, MinionData, MoveData, ProjectileData, RavenData, RavenMove};
 pub use fighter::{Fighter, FighterState, PX};
 pub use input::Input;
 pub use state::{GameState, Minion, MinionMode, Phase, Projectile, Raven, Rose};

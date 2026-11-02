@@ -44,6 +44,8 @@ pub struct Seen {
     curse: [Option<(bool, bool, bool)>; 2],
     /// Lobs seen last tick: (owner, landing spot in pixels, splash radius in pixels).
     lobs: Vec<(usize, i32, i32)>,
+    /// The last frame whose destroyed projectiles got a puff.
+    cleared_until: u32,
     seed: u32,
 }
 
@@ -302,6 +304,43 @@ pub fn emit(
                     let v = Vec2::new(dir * seen.range(70.0, 130.0), seen.range(-22.0, 22.0));
                     spawn(&mut commands, mouth + Vec2::new(dir * 6.0, seen.range(-3.0, 3.0)), v, Color::WHITE, 2.0, 0.28, 0.0, true);
                 }
+            }
+        }
+
+        // projectiles destroyed by the shockwave: a small purple puff where each one was
+        if i == 0 {
+            let newest = s.cleared.iter().map(|c| c.2).max().unwrap_or(0);
+            let until = seen.cleared_until;
+            for &(x, y, _) in s.cleared.iter().filter(|c| c.2 > until) {
+                let at = Vec2::new((x / PX) as f32, GROUND_Y + (y / PX) as f32);
+                let violet = [Color::srgb(0.75, 0.5, 1.0), Color::srgb(0.55, 0.3, 0.9), Color::srgb(0.9, 0.8, 1.0)];
+                burst(&mut commands, &mut seen, at, 8, 20.0, 70.0, &violet, 3.0, 0.35, 0.0);
+                spawn(&mut commands, at, Vec2::ZERO, Color::srgba(0.8, 0.6, 1.0, 0.8), 12.0, 0.15, 0.0, true);
+            }
+            seen.cleared_until = seen.cleared_until.max(newest);
+        }
+        // the staff slam: golden and violet dust races out along the floor both ways, and a burst
+        // flies up where the staff lands
+        if f.state == FighterState::Attack && data.moves[f.attack].anim == AnimKind::Staff {
+            let mv = &data.moves[f.attack];
+            if mv.is_active(f.state_frame) && s.frame % 2 == 0 {
+                let violet = Color::srgb(0.75, 0.5, 1.0);
+                for side in [-1.0f32, 1.0] {
+                    for k in 0..5 {
+                        let at = feet + Vec2::new(side * (10.0 + k as f32 * 4.0), 2.0 + seen.range(0.0, 6.0));
+                        let colour = if k % 2 == 0 { gold[k % 3] } else { violet };
+                        spawn(&mut commands, at, Vec2::new(side * seen.range(150.0, 260.0), seen.range(0.0, 28.0)), colour, 3.0, 0.45, 0.0, true);
+                    }
+                }
+                burst(&mut commands, &mut seen, feet + Vec2::new(f.facing as f32 * 30.0, 6.0), 10, 40.0, 130.0, &gold, 3.0, 0.4, -60.0);
+                shake.0 = shake.0.max(9.0);
+            }
+        }
+        // heat-seeking missiles leave a trail of golden sparks
+        for p in s.projectiles.iter().filter(|p| p.owner == i) {
+            if data.moves[p.move_index].projectile.as_ref().is_some_and(|d| d.homing) && s.frame % 2 == 0 {
+                let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
+                spawn(&mut commands, at, Vec2::new(seen.range(-10.0, 10.0), seen.range(-6.0, 10.0)), gold[(s.frame as usize / 2) % 3], 2.0, 0.3, 0.0, true);
             }
         }
 

@@ -19,7 +19,7 @@ pub struct StageData {
     pub floor_tile: Option<String>,
 }
 
-/// One parallax layer. Images are 216 px tall, centred on the screen.
+/// One background layer, centred on the stage (`y` raises it).
 #[derive(Clone, Debug, Deserialize)]
 pub struct LayerData {
     /// Path under `assets/`.
@@ -27,6 +27,9 @@ pub struct LayerData {
     /// How much it follows the camera: 1 stays on screen (sky), 0 stays in the world.
     pub parallax: f32,
     pub z: f32,
+    /// Height of the layer's centre in world pixels.
+    #[serde(default)]
+    pub y: f32,
     /// Pulses slowly (portals, fires).
     #[serde(default)]
     pub glow: bool,

@@ -9,13 +9,19 @@ use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
-use t2f::cpu::cpu_input;
+use t2f::cpu::cpu_input_vs;
 use t2f::sim::{CharacterData, Fighter, GameState, Input, Phase, PX};
 use t2f::stage::StageData;
 
 /// Pixel-art resolution; the window scales it up.
 const VIEW_W: f32 = 384.0;
 const VIEW_H: f32 = 216.0;
+/// Camera zoom: the narrowest view (fighters close together), how much wider than the gap between the
+/// fighters it is otherwise, how fast it follows, and how far up from the bottom of the view the floor sits.
+const MIN_VIEW_W: f32 = 346.0;
+const ZOOM_MARGIN: f32 = 220.0;
+const ZOOM_SPEED: f32 = 5.0;
+const FLOOR_FRACTION: f32 = 0.12;
 /// Floor line, in world pixels.
 const GROUND_Y: f32 = -80.0;
 
@@ -135,6 +141,8 @@ struct DevOptions {
     hold: u16,
     /// `--meter 0..100`: starting special meter.
     meter: i32,
+    /// `--spread`: start the fighters at opposite ends of the map (to look at the zoomed-out camera).
+    spread: bool,
 }
 
 impl DevOptions {
@@ -156,6 +164,7 @@ impl DevOptions {
                 value("--p1").and_then(|v| v.parse().ok()).unwrap_or(0),
                 value("--p2").and_then(|v| v.parse().ok()).unwrap_or(1),
             ],
+            spread: args.iter().any(|a| a == "--spread"),
             meter: value("--meter").and_then(|v| v.parse().ok()).unwrap_or(0),
             hold: value("--hold")
                 .map(|names| {
@@ -238,7 +247,7 @@ fn main() {
         .add_plugins(menus::MenuPlugin)
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
-        .add_systems(OnEnter(AppState::Fight), spawn_fight)
+        .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar).chain())
         .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>| {
             clear.0 = MENU_BACKGROUND;
             fixed.set_timestep_hz(60.0);
@@ -254,6 +263,7 @@ fn main() {
                 render::animate_marks,
                 render::animate_whips,
                 render::animate_ravens,
+                render::animate_skill_bar,
                 render::animate_moons,
                 render::animate_bubbles,
                 render::animate_curses,
@@ -315,6 +325,10 @@ fn spawn_fight(
     dev: Res<DevOptions>,
 ) {
     *sim = fresh_sim(&roster, &selection);
+    if dev.spread {
+        sim.0.fighters[0].x = -380 * PX;
+        sim.0.fighters[1].x = 380 * PX;
+    }
     for f in &mut sim.0.fighters {
         f.meter = dev.meter;
     }
@@ -394,34 +408,36 @@ fn spawn_fight(
             scoped.clone(),
             ParallaxLayer(layer.parallax),
             Sprite::from_image(asset_server.load(layer.image.clone())),
-            Transform::from_xyz(0.0, 0.0, layer.z),
+            Transform::from_xyz(0.0, layer.y, layer.z),
         ));
         if layer.glow {
             e.insert(Glow);
         }
     }
 
-    // floor: a repeated tile or two alternating colours
+    // floor: a repeated tile or two alternating colours, two rows deep so it still reaches the bottom when zoomed out
     let stage_w = (GameState::STAGE_HALF_WIDTH * 2 / PX) as f32;
     let half = stage_w / 2.0;
-    let mut x = -half + 16.0;
-    let mut n = 0;
-    while x < half {
-        let mut floor = match &stage.floor_tile {
-            Some(path) => Sprite::from_image(asset_server.load(path.clone())),
-            None => Sprite::from_color(rgb(if n % 2 == 0 { stage.floor_a } else { stage.floor_b }), Vec2::new(32.0, 40.0)),
-        };
-        floor.flip_x = n % 2 == 1; // break up the repetition
-        commands.spawn((scoped.clone(), floor, Transform::from_xyz(x, GROUND_Y - 20.0, 0.1)));
-        if stage.layers.is_empty() && n % 4 == 0 {
-            commands.spawn((
-                scoped.clone(),
-                Sprite::from_color(rgb(stage.pillar), Vec2::new(20.0, 90.0)),
-                Transform::from_xyz(x, GROUND_Y + 45.0, -1.0),
-            ));
+    for row in 0..2 {
+        let mut x = -half + 16.0;
+        let mut n = row;
+        while x < half {
+            let mut floor = match &stage.floor_tile {
+                Some(path) => Sprite::from_image(asset_server.load(path.clone())),
+                None => Sprite::from_color(rgb(if n % 2 == 0 { stage.floor_a } else { stage.floor_b }), Vec2::new(32.0, 40.0)),
+            };
+            floor.flip_x = n % 2 == 1; // break up the repetition
+            commands.spawn((scoped.clone(), floor, Transform::from_xyz(x, GROUND_Y - 20.0 - 40.0 * row as f32, 0.1)));
+            if row == 0 && stage.layers.is_empty() && n % 4 == 0 {
+                commands.spawn((
+                    scoped.clone(),
+                    Sprite::from_color(rgb(stage.pillar), Vec2::new(20.0, 90.0)),
+                    Transform::from_xyz(x, GROUND_Y + 45.0, -1.0),
+                ));
+            }
+            x += 32.0;
+            n += 1;
         }
-        x += 32.0;
-        n += 1;
     }
 
     let mut handles = render::FrameHandles::default();
@@ -501,7 +517,7 @@ fn step_sim(
         }
         return;
     }
-    let inputs = [player, cpu_input(&sim.0, 1, &roster.0[sel.chars[1]])];
+    let inputs = [player, cpu_input_vs(&sim.0, 1, &roster.0[sel.chars[1]], &roster.0[sel.chars[0]])];
     sim.0.step(inputs, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
 }
 
@@ -513,25 +529,39 @@ fn pulse_glow(time: Res<Time>, mut layers: Query<&mut Sprite, With<Glow>>) {
     }
 }
 
-/// Camera follows the fighters' midpoint and stays inside the stage.
+/// The camera follows the fighters and zooms: close together it zooms in, further apart it zooms
+/// out, up to showing the whole map. The floor stays a fixed fraction up from the bottom of the view.
 fn follow_camera(
     sim: Res<Sim>,
     time: Res<Time>,
     shake: Res<particles::Shake>,
-    mut cam: Single<&mut Transform, With<Camera2d>>,
+    mut width: Local<f32>,
+    mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut hud: Single<&mut Transform, (With<HudRoot>, Without<Camera2d>)>,
     mut layers: Query<(&ParallaxLayer, &mut Transform), (Without<Camera2d>, Without<HudRoot>)>,
 ) {
-    let mid = (sim.0.fighters[0].x + sim.0.fighters[1].x) as f32 / 2.0 / PX as f32;
-    let limit = (GameState::STAGE_HALF_WIDTH / PX) as f32 - VIEW_W / 2.0;
-    let base = mid.clamp(-limit, limit);
-    // screen shake after a heavy hit; the HUD moves with the camera
+    let (a, b) = (sim.0.fighters[0].x as f32 / PX as f32, sim.0.fighters[1].x as f32 / PX as f32);
+    let map_w = (GameState::STAGE_HALF_WIDTH * 2 / PX) as f32;
+    let target = ((a - b).abs() + ZOOM_MARGIN).clamp(MIN_VIEW_W, map_w);
+    if *width == 0.0 {
+        *width = target;
+    }
+    *width += (target - *width) * (1.0 - (-ZOOM_SPEED * time.delta_secs()).exp());
+    let zoom = *width / VIEW_W;
+    let view_h = *width * VIEW_H / VIEW_W;
+    let limit = (map_w - *width) / 2.0;
+    let base = ((a + b) / 2.0).clamp(-limit, limit);
+    // screen shake after a heavy hit; the HUD moves and scales with the camera
     let t = time.elapsed_secs();
     let (shake_x, shake_y) = ((t * 97.0).sin() * shake.0, (t * 131.0).cos() * shake.0);
-    cam.translation.x = base + shake_x.round();
-    cam.translation.y = shake_y.round();
-    hud.translation.x = cam.translation.x;
-    hud.translation.y = cam.translation.y;
+    cam.0.translation.x = base + shake_x.round();
+    cam.0.translation.y = GROUND_Y + view_h * (0.5 - FLOOR_FRACTION) + shake_y.round();
+    if let Projection::Orthographic(ortho) = &mut *cam.1 {
+        ortho.scale = zoom;
+    }
+    hud.translation.x = cam.0.translation.x;
+    hud.translation.y = cam.0.translation.y;
+    hud.scale = Vec3::new(zoom, zoom, 1.0);
     for (ParallaxLayer(parallax), mut tf) in &mut layers {
         // whole pixels only, so the background doesn't shimmer
         tf.translation.x = (base * parallax).round();

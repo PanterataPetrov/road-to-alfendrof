@@ -139,22 +139,18 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     }
 }
 
-/// The logo bobs; the portal pulses.
+/// The logo bobs.
 #[derive(Component)]
 struct TitleLogo;
 
-#[derive(Component)]
-struct TitlePortal;
-
-/// Start screen: the tower under the portal, the logo over it, the menu below.
+/// Start screen: the map behind, the logo over it, the menu below.
 fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res<AssetServer>) {
     let state = AppState::Title;
-    for (image, z, portal) in [("backgrounds/galata/sky.png", -10.0, false), ("backgrounds/galata/portal.png", -9.0, true), ("backgrounds/galata/near.png", -8.0, false)] {
-        let mut e = commands.spawn((DespawnOnExit(state.clone()), Sprite::from_image(asset_server.load(image)), Transform::from_xyz(0.0, 0.0, z)));
-        if portal {
-            e.insert(TitlePortal);
-        }
-    }
+    commands.spawn((
+        DespawnOnExit(state.clone()),
+        Sprite { image: asset_server.load("backgrounds/galata/near.png"), custom_size: Some(Vec2::new(384.0, 216.0)), ..default() },
+        Transform::from_xyz(0.0, 0.0, -8.0),
+    ));
     // dark band behind the menu so it reads, vignette at the top
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.82), Vec2::new(384.0, 96.0)), Transform::from_xyz(0.0, -62.0, 1.0)));
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.35), Vec2::new(384.0, 22.0)), Transform::from_xyz(0.0, 105.0, 1.0)));
@@ -181,13 +177,10 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     );
 }
 
-fn animate_title(time: Res<Time>, mut logo: Query<&mut Transform, With<TitleLogo>>, mut portal: Query<&mut Sprite, With<TitlePortal>>) {
+fn animate_title(time: Res<Time>, mut logo: Query<&mut Transform, With<TitleLogo>>) {
     let t = time.elapsed_secs();
     for mut tf in &mut logo {
         tf.translation.y = 58.0 + (t * 1.6).sin() * 2.0;
-    }
-    for mut sprite in &mut portal {
-        sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.8 + (t * 2.2).sin() * 0.2);
     }
 }
 
@@ -390,7 +383,13 @@ fn stage_confirm(keys: Res<ButtonInput<KeyCode>>, menu: Res<Menu>, mut sel: ResM
     }
 }
 
-/// Menus are drawn around the origin.
-fn menu_camera(mut cam: Single<&mut Transform, With<Camera2d>>) {
-    cam.translation.x = 0.0;
+/// Menus are drawn around the origin at the normal zoom: the fight camera zooms and moves to follow the
+/// fighters, and leaving a fight at any zoom would otherwise leave the menu drawn at that scale and in the
+/// wrong place, no longer filling the window.
+fn menu_camera(mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>>) {
+    cam.0.translation.x = 0.0;
+    cam.0.translation.y = 0.0;
+    if let Projection::Orthographic(ortho) = &mut *cam.1 {
+        ortho.scale = 1.0;
+    }
 }

@@ -112,6 +112,11 @@ pub struct Fighter {
     pub fast: bool,
     /// The raven is away from the shoulder (set by the game state each frame).
     pub raven_away: bool,
+    /// Frames left in which this fighter can't attack (the staff's shockwave).
+    pub silenced: u32,
+    /// The move on cooldown (an index into the character's moves) and the frames left on it.
+    pub cooldown_move: usize,
+    pub cooldown_left: u32,
     /// Dash double-tap: direction of the last tap and frames since.
     pub tap_dir: i32,
     pub tap_timer: u32,
@@ -236,6 +241,9 @@ impl Fighter {
             slamming: false,
             slam_landed: false,
             raven_away: false,
+            silenced: 0,
+            cooldown_move: 0,
+            cooldown_left: 0,
         }
     }
 
@@ -300,7 +308,16 @@ impl Fighter {
         self.vx = push;
     }
 
+    /// Whether move `index` is still cooling down from its last use.
+    pub fn on_cooldown(&self, index: usize, data: &CharacterData) -> bool {
+        self.cooldown_left > 0 && self.cooldown_move == index && data.moves[index].cooldown > 0
+    }
+
     fn begin_attack(&mut self, index: usize, mv: &MoveData) {
+        if mv.cooldown > 0 {
+            self.cooldown_move = index;
+            self.cooldown_left = mv.cooldown;
+        }
         // the third light of a combo is the finisher
         if mv.button == Button::Light {
             if self.combo >= 3 {
@@ -375,6 +392,8 @@ impl Fighter {
         self.want_roll = pressed.has(Input::ROLL_RIGHT) as i32 - pressed.has(Input::ROLL_LEFT) as i32;
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
+        self.silenced = self.silenced.saturating_sub(1);
+        self.cooldown_left = self.cooldown_left.saturating_sub(1);
         if self.quick_timer > 0 {
             self.quick_timer -= 1;
             if self.quick_timer == 0 {
@@ -435,7 +454,7 @@ impl Fighter {
                     let crouching = input.has(Input::DOWN);
                     for (flag, button) in [(Input::SPECIAL, Button::Special), (Input::HEAVY, Button::Heavy)] {
                         if pressed.has(flag) && rank(button) > rank(mv.button) && (button != Button::Special || self.meter >= Self::METER_MAX) {
-                            if let Some(index) = data.find_move(button, crouching, false) {
+                            if let Some(index) = data.find_move(button, crouching, false).filter(|&i| !self.on_cooldown(i, data)) {
                                 self.begin_attack(index, &data.moves[index]);
                                 return self.finish_step();
                             }
@@ -476,7 +495,9 @@ impl Fighter {
                     }
                 }
                 // a chargeable move waits at the end of its startup while the button is held
-                if mv.charge_frames > 0 && self.state_frame == mv.startup && self.charge < mv.charge_frames && input.has(button_flag(mv.button)) {
+                // (a held move, like reading a scroll, waits there for as long as the button is held)
+                let holding = mv.channel.is_some() || (mv.charge_frames > 0 && self.charge < mv.charge_frames);
+                if holding && self.state_frame == mv.startup && input.has(button_flag(mv.button)) {
                     self.charge += 1;
                     self.state_frame -= 1;
                 }
@@ -544,7 +565,7 @@ impl Fighter {
                 }
                 // One air attack per jump, or more after a connected air attack (see `air_chain`).
                 let more = self.hit_done && (self.air_count as u32) < data.air_chain.unwrap_or(1);
-                if !self.air_used || more {
+                if (!self.air_used || more) && self.silenced == 0 {
                     for (flag, button) in [(Input::SPECIAL, Button::Special), (Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
                         if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
                             if let Some(index) = data.find_move(button, false, true) {
@@ -595,6 +616,9 @@ impl Fighter {
 
     /// Start an attack if a button was pressed for one this frame; returns whether one started.
     fn try_attack(&mut self, input: Input, pressed: Input, data: &CharacterData) -> bool {
+        if self.silenced > 0 {
+            return false;
+        }
         let crouching = input.has(Input::DOWN);
         for (flag, button) in [
             (Input::SPECIAL, Button::Special),
@@ -605,8 +629,8 @@ impl Fighter {
                 // the light combo can have its own move for each hit (the third is the finisher, which needs the raven at home if it's the raven's claw)
                 let stepped = if button == Button::Light && !crouching { data.find_combo_move(self.combo, !self.raven_away) } else { None };
                 if let Some(index) = stepped.or_else(|| data.find_move(button, crouching, false)) {
-                    // a raven that's away can't be sent again
-                    if data.moves[index].raven_move.is_some() && self.raven_away {
+                    // a raven that's away can't be sent again, and a move on cooldown can't be used
+                    if (data.moves[index].raven_move.is_some() && self.raven_away) || self.on_cooldown(index, data) {
                         continue;
                     }
                     self.begin_attack(index, &data.moves[index]);

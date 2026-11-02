@@ -299,6 +299,10 @@ pub fn animate_body(
             }
         }
         sprite.color = tint(f.state);
+        // a fighter who can't attack (the staff's shockwave) is tinted violet
+        if f.silenced > 0 && f.state != FighterState::Hitstun {
+            sprite.color = Color::srgb(0.78, 0.68, 1.0);
+        }
     }
 }
 
@@ -674,6 +678,108 @@ pub fn animate_bubbles(
                     text.0 = LECTURE_LINE[..shown].to_string();
                 }
             }
+        }
+    }
+}
+
+/// The skill bar in the bottom right: Light (F), Heavy (G) and Special (H) as icons with their key in
+/// the corner. An attack that can't be used right now (cooling down, the opponent's shockwave has
+/// silenced you, the raven is away, or the special meter isn't full) is greyed out with the time left;
+/// the special fills up from the bottom as its meter charges, and glows when it's ready.
+#[derive(Component)]
+pub struct SkillIcon(pub usize);
+#[derive(Component)]
+pub struct SkillShade(pub usize);
+#[derive(Component)]
+pub struct SkillTimer(pub usize);
+#[derive(Component)]
+pub struct SkillGlow(pub usize);
+
+const SKILL_SIZE: f32 = 24.0;
+/// Centres of the three icons (the bar is part of the HUD, which is laid out in view units).
+const SKILL_X: [f32; 3] = [118.0, 146.0, 174.0];
+const SKILL_Y: f32 = -91.0;
+
+pub fn spawn_skill_bar(mut commands: Commands, hud: Single<Entity, With<crate::HudRoot>>, asset_server: Res<AssetServer>) {
+    commands.entity(*hud).with_children(|h| {
+        for (k, key) in ["F", "G", "H"].into_iter().enumerate() {
+            let (x, y) = (SKILL_X[k], SKILL_Y);
+            h.spawn((SkillGlow(k), Sprite::from_color(Color::srgba(1.0, 0.85, 0.3, 0.0), Vec2::splat(SKILL_SIZE + 4.0)), Transform::from_xyz(x, y, 9.8)));
+            h.spawn((SkillIcon(k), Sprite::from_image(asset_server.load("icons/ayz/light.png")), Transform::from_xyz(x, y, 10.0)));
+            h.spawn((SkillShade(k), Sprite::from_color(Color::srgba(0.04, 0.04, 0.07, 0.74), Vec2::splat(SKILL_SIZE)), Transform::from_xyz(x, y, 10.1), Visibility::Hidden));
+            h.spawn((
+                SkillTimer(k),
+                Text2d::new(""),
+                TextFont { font_size: FontSize::Px(9.0), ..default() },
+                TextColor(Color::WHITE),
+                Transform::from_xyz(x, y - 1.0, 10.3),
+            ));
+            // the key in the top-left corner, on a little dark badge
+            h.spawn((Sprite::from_color(Color::srgba(0.04, 0.03, 0.08, 0.9), Vec2::new(8.0, 9.0)), Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.4)));
+            h.spawn((
+                Text2d::new(key),
+                TextFont { font_size: FontSize::Px(7.0), ..default() },
+                TextColor(Color::srgb(1.0, 0.9, 0.5)),
+                Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.5),
+            ));
+        }
+    });
+}
+
+/// Keep the skill bar in step with the fighter you control: their icons, what's available and the timers.
+pub fn animate_skill_bar(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    time: Res<Time>,
+    net: Option<Res<crate::online::NetSession>>,
+    asset_server: Res<AssetServer>,
+    mut icons: Query<(&SkillIcon, &mut Sprite), (Without<SkillShade>, Without<SkillGlow>)>,
+    mut shades: Query<(&SkillShade, &mut Sprite, &mut Transform, &mut Visibility), (Without<SkillIcon>, Without<SkillGlow>)>,
+    mut glows: Query<(&SkillGlow, &mut Sprite), (Without<SkillIcon>, Without<SkillShade>)>,
+    mut timers: Query<(&SkillTimer, &mut Text2d)>,
+) {
+    use t2f::sim::Button;
+    let side = net.as_ref().map_or(0, |n| n.local);
+    let f = &sim.0.fighters[side.min(1)];
+    let data = &roster.0[sel.chars[side.min(1)]];
+    let folder = data.sprites.clone().unwrap_or_else(|| data.name.to_lowercase());
+    let buttons = [Button::Light, Button::Heavy, Button::Special];
+    let names = ["light", "heavy", "special"];
+    // what each slot looks like right now: (available, frames of timer, how much of the icon is greyed from the top, 0..1)
+    let state = |k: usize| -> (bool, u32, f32) {
+        let index = data.find_move(buttons[k], false, false);
+        let cooling = index.is_some_and(|i| f.on_cooldown(i, data));
+        let raven_away = index.is_some_and(|i| data.moves[i].raven_move.is_some() && f.raven_away);
+        let waiting_for_meter = buttons[k] == Button::Special && f.meter < Fighter::METER_MAX;
+        let silenced = f.silenced > 0;
+        let frames = if cooling { f.cooldown_left } else if silenced { f.silenced } else { 0 };
+        let shade = if waiting_for_meter && !cooling && !silenced { 1.0 - f.meter as f32 / Fighter::METER_MAX as f32 } else { 1.0 };
+        (!(cooling || silenced || raven_away || waiting_for_meter), frames, shade)
+    };
+    for (SkillIcon(k), mut sprite) in &mut icons {
+        sprite.image = asset_server.load(format!("icons/{folder}/{}.png", names[*k]));
+    }
+    for (SkillShade(k), mut sprite, mut tf, mut visibility) in &mut shades {
+        let (available, _, shade) = state(*k);
+        *visibility = if available { Visibility::Hidden } else { Visibility::Inherited };
+        let h = SKILL_SIZE * shade;
+        sprite.custom_size = Some(Vec2::new(SKILL_SIZE, h));
+        // the grey covers the top of the icon down to `h`
+        tf.translation.y = SKILL_Y + SKILL_SIZE / 2.0 - h / 2.0;
+    }
+    for (SkillGlow(k), mut sprite) in &mut glows {
+        let (available, _, _) = state(*k);
+        let pulse = 0.55 + 0.45 * (time.elapsed_secs() * 7.0).sin();
+        // the special shouts when it's ready; the others have a quiet edge
+        let alpha = if available && buttons[*k] == Button::Special { pulse } else { 0.0 };
+        sprite.color = Color::srgba(1.0, 0.85, 0.3, alpha);
+    }
+    for (SkillTimer(k), mut text) in &mut timers {
+        let (_, frames, _) = state(*k);
+        let shown = if frames > 0 { format!("{:.1}", frames as f32 / 60.0) } else { String::new() };
+        if text.0 != shown {
+            text.0 = shown;
         }
     }
 }

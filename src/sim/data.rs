@@ -25,6 +25,10 @@ pub struct CharacterData {
     /// (default 50). Long-reach fighters set it higher.
     #[serde(default)]
     pub cpu_range: Option<i32>,
+    /// The CPU rushes in with this character: dashes, leaps and hops towards the opponent and stays
+    /// on them instead of backing off.
+    #[serde(default)]
+    pub cpu_rush: bool,
     /// Air attacks allowed per jump (default 1). With more, a connected air light can chain into
     /// another one or the air heavy.
     #[serde(default)]
@@ -102,6 +106,10 @@ pub enum AnimKind {
     Point,
     /// A grab: beckon, pull in, hold by the collar while talking, shove away (6 drawings).
     Grab,
+    /// Reading from a scroll while he holds the button (the unrolling, then the reading, 4 drawings).
+    Read,
+    /// The staff slammed on the ground: raised, the top of the swing, the slam, the recovery (4 drawings).
+    Staff,
 }
 
 /// A projectile a move launches. It flies in a straight line and hits once for the move's damage.
@@ -140,6 +148,18 @@ pub struct ProjectileData {
     /// Never turned to face where it flies (words stay readable).
     #[serde(default)]
     pub upright: bool,
+    /// A short-range shot that is really a melee attack: moves that clear projectiles leave it alone.
+    #[serde(default)]
+    pub melee: bool,
+    /// A heat-seeking missile: it steers towards the opponent (each frame its velocity moves
+    /// `homing_turn` percent of the way to pointing at them, at its fixed speed) and detonates, hitting
+    /// them, once it is within `detonate` pixels. It starts by flying up and forward.
+    #[serde(default)]
+    pub homing: bool,
+    #[serde(default)]
+    pub homing_turn: i32,
+    #[serde(default)]
+    pub detonate: i32,
     /// A lob: flies from a spot in the sky (the moon) down to where the opponent stood at launch
     /// and splashes for `splash_radius` pixels, hurting anyone near the ground.
     #[serde(default)]
@@ -318,6 +338,31 @@ pub struct MoveData {
     /// `knockback` (a grab, then a shove).
     #[serde(default)]
     pub hit_overrides: Vec<HitOverride>,
+    /// A move that is held: while the button stays down the move stays at the end of its startup (he
+    /// keeps reading), and the projectile is fired at held frame `first` and then every `every` frames.
+    #[serde(default)]
+    pub channel: Option<ChannelData>,
+    /// The hit pushes the opponent away from the attacker, wherever they stand (a shockwave around him),
+    /// instead of in the direction the attacker faces.
+    #[serde(default)]
+    pub radial: bool,
+    /// An unblocked hit leaves the opponent unable to attack for this many frames.
+    #[serde(default)]
+    pub silence: u32,
+    /// After this move starts it can't be started again for this many frames (the staff slam).
+    #[serde(default)]
+    pub cooldown: u32,
+    /// While the hitbox is active, every enemy projectile within the hitbox's horizontal range (at any
+    /// height up to a little above the head) is destroyed, except `melee` ones (the staff's shockwave).
+    #[serde(default)]
+    pub clears_projectiles: bool,
+}
+
+/// When a held move fires: at held frame `first`, then every `every` frames.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct ChannelData {
+    pub first: u32,
+    pub every: u32,
 }
 
 impl MoveData {
