@@ -238,6 +238,10 @@ fn main() {
     if let Some(backend) = args.iter().position(|a| a == "--backend").and_then(|i| args.get(i + 1)) {
         std::env::set_var("WGPU_BACKEND", backend);
     }
+    // `--gpu nvidia` picks the graphics card by (part of) its name, for laptops that choose the wrong one
+    if let Some(gpu) = args.iter().position(|a| a == "--gpu").and_then(|i| args.get(i + 1)) {
+        std::env::set_var("WGPU_ADAPTER_NAME", gpu);
+    }
     let dev = DevOptions::from_args();
     let mut app = App::new();
     app
