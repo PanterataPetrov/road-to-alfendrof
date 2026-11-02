@@ -108,6 +108,8 @@ pub struct Fighter {
     pub air_count: u8,
     /// The current move hangs in the air (see `MoveData::hover`).
     pub hovering: bool,
+    /// Gravity while falling in the current move, in percent (0 = normal), see `MoveData::slow_fall`.
+    pub slow_fall: u32,
     /// After a connected heavy or special: no cooldown for Light, and the next `quick` lights (for
     /// `quick_timer` more frames) start and recover faster. `fast` is set while such a light is thrown.
     pub quick: u8,
@@ -136,6 +138,14 @@ pub struct Fighter {
     /// the game state deals the splash.
     pub slamming: bool,
     pub slam_landed: bool,
+    /// Futility: frames left in which every attack this fighter starts costs them `FUTILITY_DAMAGE`.
+    pub futile: u32,
+    /// A committed move is firing: hits no longer interrupt it (set each frame by `step`).
+    pub armored: bool,
+    /// The moon is a portal over the opponent: it closes when the move that opened it is over.
+    pub portal: bool,
+    /// Where a beam of light that sweeps across this fighter's opponent has locked in (subpixels).
+    pub beam_lock: Option<i32>,
 }
 
 /// Input flag for a move's button.
@@ -174,6 +184,8 @@ impl Fighter {
     pub const SLAM_SPEED: i32 = 1500;
     pub const SLAM_MIN_HEIGHT: i32 = 14 * PX;
     pub const SLAM_DAMAGE: i32 = 28;
+    /// What starting an attack costs while futile (it can't kill).
+    pub const FUTILITY_DAMAGE: i32 = 12;
     pub const SLAM_RADIUS: i32 = 44;
     /// The second jump is this percent of the first jump's speed.
     pub const DOUBLE_JUMP_PCT: i32 = 90;
@@ -229,6 +241,7 @@ impl Fighter {
             aim_low: false,
             air_count: 0,
             hovering: false,
+            slow_fall: 0,
             quick: 0,
             quick_timer: 0,
             fast: false,
@@ -242,6 +255,10 @@ impl Fighter {
             roll_cd: 0,
             slamming: false,
             slam_landed: false,
+            futile: 0,
+            armored: false,
+            portal: false,
+            beam_lock: None,
             raven_away: false,
             silenced: 0,
             cooldowns: [0; MAX_MOVES],
@@ -299,7 +316,7 @@ impl Fighter {
     /// Start a stun from a hit or block; restarts the state even if already in it.
     pub fn start_stun(&mut self, state: FighterState, frames: u32, push: i32) {
         // a ground pound isn't interrupted by hits (only a KO stops it), so the splash still lands
-        if self.slamming && state != FighterState::Ko {
+        if (self.slamming || self.armored) && state != FighterState::Ko {
             return;
         }
         self.slamming = false;
@@ -320,6 +337,9 @@ impl Fighter {
     }
 
     fn begin_attack(&mut self, index: usize, mv: &MoveData) {
+        if self.futile > 0 {
+            self.health = (self.health - Self::FUTILITY_DAMAGE).max(1);
+        }
         if mv.cooldown > 0 {
             if let Some(left) = self.cooldowns.get_mut(index) {
                 *left = mv.cooldown;
@@ -400,6 +420,14 @@ impl Fighter {
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
+        self.futile = self.futile.saturating_sub(1);
+        if self.state != FighterState::Attack {
+            self.armored = false;
+        }
+        if self.portal && self.state != FighterState::Attack {
+            self.portal = false;
+            self.moon = None;
+        }
         for left in &mut self.cooldowns {
             *left = left.saturating_sub(1);
         }
@@ -432,7 +460,9 @@ impl Fighter {
             }
             FighterState::Attack => {
                 let mv = &data.moves[self.attack];
+                self.armored = mv.committed && self.state_frame > mv.startup;
                 self.hovering = mv.hover && !self.grounded() && self.state_frame <= mv.total_frames() - mv.recovery;
+                self.slow_fall = mv.slow_fall;
                 // a leap jumps when its startup ends; landing ends it
                 if mv.leap > 0 && self.state_frame == mv.startup && self.grounded() {
                     self.vy = mv.leap;
@@ -445,7 +475,7 @@ impl Fighter {
                 }
                 // a lobbing special hangs its moon where the move started
                 if self.state_frame == 1 {
-                    if let Some(p) = mv.projectile.as_ref().filter(|p| p.lob) {
+                    if let Some(p) = mv.projectile.as_ref().filter(|p| p.lob && !p.over_target) {
                         self.moon = Some((self.x + self.facing * p.x * PX, p.moon_height * PX, 0));
                     }
                 }
@@ -540,6 +570,16 @@ impl Fighter {
                 }
             }
             FighterState::Hitstun | FighterState::Blockstun => {
+                // a move that can be used while being hit (the Cowboy's Gun Boost) gets him out of it
+                if self.state == FighterState::Hitstun && self.grounded() && self.silenced == 0 && pressed.has(Input::HEAVY) {
+                    if let Some(index) = data.moves.iter().position(|m| m.escape && m.button == Button::Heavy && !m.air) {
+                        if !self.on_cooldown(index, data) {
+                            self.vx = 0;
+                            self.begin_attack(index, &data.moves[index]);
+                            return self.finish_step();
+                        }
+                    }
+                }
                 // pushback fades quickly
                 if self.state_frame > self.stun {
                     self.vx = 0;
@@ -601,7 +641,9 @@ impl Fighter {
         if self.hovering {
             self.vy = 0;
         } else if !self.grounded() {
-            self.vy -= Self::GRAVITY;
+            // a move with a slow fall floats down once the rise is over
+            let slow = self.state == FighterState::Attack && self.slow_fall > 0 && self.vy <= 0;
+            self.vy -= if slow { Self::GRAVITY * self.slow_fall as i32 / 100 } else { Self::GRAVITY };
         }
         self.x += self.vx;
         self.y += self.vy;

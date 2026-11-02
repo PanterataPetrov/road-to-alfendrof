@@ -51,7 +51,7 @@ pub struct CharacterData {
     /// How fast the special meter fills, in percent of normal (default 100).
     #[serde(default)]
     pub meter_gain_pct: Option<i32>,
-    /// Shooting in the air tilts his whole body back (see `render::pose_bodies`).
+    /// Shooting in the air leans him back, drawn in three stages (`Frame::Lean`).
     #[serde(default)]
     pub air_shot_tilt: bool,
     pub moves: Vec<MoveData>,
@@ -116,6 +116,10 @@ pub enum AnimKind {
     Read,
     /// The staff slammed on the ground: raised, the top of the swing, the slam, the recovery (4 drawings).
     Staff,
+    /// Guns fired at the ground, the recoil launches him up, then shots down from the air (4 drawings).
+    Boost,
+    /// Writing in a book: it opens, he writes (two drawings alternate), then a flourish (4 drawings).
+    Write,
 }
 
 /// A projectile a move launches. It flies in a straight line and hits once for the move's damage.
@@ -148,6 +152,10 @@ pub struct ProjectileData {
     /// direction the attacker faces.
     #[serde(default)]
     pub aimed: bool,
+    /// An aimed shot that goes for the floor under the opponent (where they stand, whatever their
+    /// height) instead of their body, so an opponent who jumps is missed.
+    #[serde(default)]
+    pub aim_ground: bool,
     /// Spins in flight (a thrown hat).
     #[serde(default)]
     pub spin: bool,
@@ -179,6 +187,17 @@ pub struct ProjectileData {
     /// projectile launches later so there is time to move.
     #[serde(default)]
     pub lock_frame: u32,
+    /// A lob's moon (the portal) hangs above the opponent, where they stood when the landing spot was
+    /// locked in, and the shots fall straight down from it instead of coming from the attacker's side.
+    #[serde(default)]
+    pub over_target: bool,
+    /// Each shot of a lobbing volley lands somewhere within this many pixels either side of the locked
+    /// spot (the same pattern every time).
+    #[serde(default)]
+    pub spread: i32,
+    /// The projectile ignores blocking.
+    #[serde(default)]
+    pub unblockable: bool,
 }
 
 impl ProjectileData {
@@ -280,6 +299,13 @@ pub struct MoveData {
     pub leap: i32,
     #[serde(default)]
     pub leap_vx: i32,
+    /// Once the fighter starts to fall during this move, gravity is only this percent as strong
+    /// (0 = normal), so he floats down slowly (the Cowboy's volley).
+    #[serde(default)]
+    pub slow_fall: u32,
+    /// Can be used from the ground while being hit, which cuts the stun short (a way out of a combo).
+    #[serde(default)]
+    pub escape: bool,
     /// How many times the hitbox goes active (1 if 0), `hit_gap` frames apart; each can hit again.
     #[serde(default)]
     pub hits: u32,
@@ -373,6 +399,36 @@ pub struct MoveData {
     /// height up to a little above the head) is destroyed, except `melee` ones (the staff's shockwave).
     #[serde(default)]
     pub clears_projectiles: bool,
+    /// Whoever this move hits can't help hurting themselves: for this many frames each attack they
+    /// start costs them a little health.
+    #[serde(default)]
+    pub futility: u32,
+    /// What the character writes while this move winds up, in a speech bubble (`{enemy}` is the
+    /// opponent's name).
+    #[serde(default)]
+    pub say: Option<String>,
+    /// Sparks (r, g, b) flying off the writing while this move winds up.
+    #[serde(default)]
+    pub sparks: Option<(f32, f32, f32)>,
+    /// A beam of light that sweeps across the opponent (see `BeamData`).
+    #[serde(default)]
+    pub beam: Option<BeamData>,
+    /// Once the startup is over (it is firing) being hit hurts but no longer interrupts the move.
+    #[serde(default)]
+    pub committed: bool,
+}
+
+/// A beam of light that sweeps across the opponent. At frame `lock_frame` of the move the spot where
+/// the opponent stands is locked in; while the move is active a column `width` pixels wide and
+/// `height` tall travels from `lead` pixels in front of that spot (on the attacker's side) to `sweep`
+/// pixels behind it, hitting once.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct BeamData {
+    pub lock_frame: u32,
+    pub lead: i32,
+    pub sweep: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// When a held move fires: at held frame `first`, then every `every` frames.

@@ -1,0 +1,54 @@
+// The Scribe: a man with long brown hair, an olive corduroy blazer over a white shirt with a red tie, mustard trousers
+// and black boots, and a book on his belt at all times.
+// Light: very fast stabs with a quill (arms alternate). The third hit of a combo is the book: he opens it and writes
+//        "<enemy> understood the futility of life." in a speech bubble; a blue particle then flies at the enemy and can't
+//        be dodged or blocked. It hurts a little and, for 2.5 seconds, every attack the enemy starts costs them health.
+// Heavy: he reads from the book and writes, purple sparks flying off the pen, "A hail of knives poured onto <enemy>":
+//        a wide portal opens above where the enemy stands and knives pour out of it over a wide stretch of ground.
+//        Move out from under it. Once the knives start, being hit does not interrupt it.
+// Special: he writes three strokes, "... then Jesus appeared": Jesus appears in the sky and a beam of light sweeps from
+//        in front of where the enemy stood to behind it. Get out of its way (or roll through it). Once the beam
+//        starts, being hit does not interrupt it.
+// See ayz.ron for what each field means; `futility`, `say`, `sparks`, `beam` and the lob fields `over_target`,
+// `spread` and `unblockable` are explained in src/sim/data.rs.
+(
+    name: "The Scribe",
+    subtitle: Some("Author of many-a-fanfic"),
+    sprites: Some("scribe"),
+    color: (0.85, 0.90, 0.40),
+    walk_speed: 200,
+    jump_speed: 1050,
+    moves: [
+        // very fast quill stabs
+        (name: "Quill Jab", button: Light, crouching: false, anim: Punch, walk_pct: 70,
+         startup: 3, active: 2, recovery: 4, damage: 14, hitstun: 9, blockstun: 5, knockback: 1, hitstop: 2,
+         hitbox: (x: 8, y: 30, w: 30, h: 12)),
+        (name: "Low Quill", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 4, active: 2, recovery: 5, damage: 12, hitstun: 9, blockstun: 5, knockback: 1, hitstop: 2,
+         hitbox: (x: 8, y: 0, w: 30, h: 12)),
+        // the third hit of a combo: the book. The blue particle homes in on the enemy and can't be blocked.
+        (name: "Futility", button: Light, crouching: false, anim: Write, walk_pct: 0, finisher_move: true,
+         futility: 150, say: Some("{enemy} understood the futility of life."),
+         startup: 40, active: 2, recovery: 18, damage: 14, hitstun: 12, blockstun: 6, knockback: 0, hitstop: 4,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 18, y: 30, aim_y: 30, travel_frames: 1, lifetime: 150, size: (8, 8), image: Some("orb"), summon_image: Some("none"),
+                           homing: true, homing_turn: 100, detonate: 7, speed_tenths: 75, unblockable: true))),
+        (name: "Air Quill", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 3, active: 6, recovery: 6, damage: 14, hitstun: 9, blockstun: 5, knockback: 1, hitstop: 2,
+         hitbox: (x: 6, y: 0, w: 30, h: 28)),
+        // the hail: he writes (purple sparks), a portal opens over the enemy, knives pour out of it
+        (name: "Hail of Knives", button: Heavy, crouching: false, anim: Write, walk_pct: 0, cooldown: 150,
+         say: Some("A hail of knives poured onto {enemy}"), sparks: Some((0.72, 0.3, 1.0)),
+         volley: 20, volley_gap: 3, guard_hits: Some(40), committed: true,
+         startup: 70, active: 4, recovery: 62, damage: 11, hitstun: 6, blockstun: 4, knockback: 1, hitstop: 1,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 0, y: 0, aim_y: 0, travel_frames: 14, lifetime: 40, size: (6, 12), image: Some("knife"), summon_image: Some("portal"),
+                           lob: true, over_target: true, spread: 44, splash_radius: 12, moon_height: 120, lock_frame: 48))),
+        // three strokes, then Jesus and his beam
+        (name: "Then Jesus Appeared", button: Special, crouching: false, anim: Write, walk_pct: 0, guard_hits: Some(2), committed: true,
+         say: Some("... then Jesus appeared"), sparks: Some((1.0, 0.92, 0.5)),
+         beam: Some((lock_frame: 60, lead: 14, sweep: 56, width: 26, height: 90)),
+         startup: 76, active: 24, recovery: 30, damage: 110, hitstun: 40, blockstun: 20, knockback: 6, hitstop: 10,
+         hitbox: (x: 0, y: 0, w: 0, h: 0)),
+    ],
+)

@@ -302,6 +302,7 @@ fn main() {
             )
                 .run_if(in_state(AppState::Fight)),
         )
+        .add_systems(Update, render::animate_scribe_effects.run_if(in_state(AppState::Fight)))
         .add_systems(Update, (toggle_debug, dev_screenshot));
 
     if dev.fight {
@@ -467,7 +468,8 @@ fn spawn_fight(
     for i in 0..2 {
         let c = &roster.0[selection.chars[i]];
         // the crescent appears where the summon's projectile starts
-        let summon = c.moves.iter().find(|m| m.anim == t2f::sim::AnimKind::Summon).and_then(|m| m.projectile.as_ref());
+        let lob = c.moves.iter().filter_map(|m| m.projectile.as_ref()).find(|p| p.lob);
+        let summon = lob.or_else(|| c.moves.iter().find(|m| m.anim == t2f::sim::AnimKind::Summon).and_then(|m| m.projectile.as_ref()));
         // effect drawings the moves use
         let mut effects: Vec<String> = Vec::new();
         for p in c.moves.iter().filter_map(|m| m.projectile.as_ref()) {
@@ -477,8 +479,11 @@ fn spawn_fight(
                 }
             }
         }
-        if c.moves.iter().filter_map(|m| m.projectile.as_ref()).any(|p| p.lob) && !effects.iter().any(|e| e == "moon_star") {
+        if c.moves.iter().filter_map(|m| m.projectile.as_ref()).any(|p| p.lob && !p.over_target) && !effects.iter().any(|e| e == "moon_star") {
             effects.push("moon_star".to_string());
+        }
+        if c.moves.iter().any(|m| m.beam.is_some()) && !effects.iter().any(|e| e == "jesus") {
+            effects.push("jesus".to_string());
         }
         if c.moves.iter().any(|m| m.minions.is_some()) && !effects.iter().any(|e| e == "goblin") {
             effects.push("goblin".to_string());

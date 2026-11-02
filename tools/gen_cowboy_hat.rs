@@ -6,18 +6,26 @@ use std::path::Path;
 
 use image::{Rgba, RgbaImage};
 
-const HAT: [&str; 6] = [
-    "......bbbb......",
-    "....bbbbbbbb....",
-    "....bbbbbbbb....",
-    "....kkkgkkkk....",
-    "BB.BBBBBBBBBB.BB",
-    ".BBBBBBBBBBBBBB.",
+/// The hat seen a little from the side (he faces right): a pinched crown, a gold band, and a brim that curls up on
+/// the far side and droops over the forehead on the near one. 19 wide, 11 tall.
+const HAT: [&str; 11] = [
+    ".......kkkkkk......",
+    "......kmhhmmmk.....",
+    "......kmhmkmmBk....",
+    ".....kmmmmmmmBBk...",
+    ".....kmmmmmmmBBk...",
+    ".....kBBBBBBBBBBk..",
+    "....kkgggggggggkk..",
+    ".kkmkBBBBBBBBBBkkk.",
+    "kmhmmmmmmmmmmmmBBkk",
+    ".kkmmmmmmmmmmmBBBBk",
+    "...kkkkkkkkkkkkkkk.",
 ];
 
 fn colour(c: u8) -> Option<Rgba<u8>> {
     match c {
-        b'b' => Some(Rgba([156, 102, 54, 255])),
+        b'm' => Some(Rgba([156, 102, 54, 255])),
+        b'h' => Some(Rgba([190, 134, 78, 255])),
         b'B' => Some(Rgba([112, 70, 36, 255])),
         b'k' => Some(Rgba([46, 28, 18, 255])),
         b'g' => Some(Rgba([226, 176, 64, 255])),
@@ -89,7 +97,7 @@ fn main() {
     for entry in std::fs::read_dir(dir).expect("sprite folder") {
         let path = entry.unwrap().path();
         let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        if path.extension().is_none_or(|e| e != "png") || name.ends_with("_mark") || name.starts_with("hat_") || name.starts_with("bullet_") {
+        if path.extension().is_none_or(|e| e != "png") || name.ends_with("_mark") || name.starts_with("hat_") || name.starts_with("bullet_") || name.contains("whip") {
             continue;
         }
         let body = image::open(&path).expect("drawing").to_rgba8();
@@ -97,8 +105,8 @@ fn main() {
         // the tumbling roll drawings are sideways, so they get a looser match
         match find_head(&body, 8, 5).or_else(|| find_head(&body, 5, 3)) {
             Some((cx, top)) => {
-                // the brim sits a couple of pixels down the head, the crown above it
-                draw_hat(&mut mark, cx - 8, top - 4, 1, |p| p);
+                // the brim comes down over the forehead, the crown above it
+                draw_hat(&mut mark, cx - 10, top - 4, 1, |p| p);
                 done += 1;
             }
             None => missing.push(name.clone()),
@@ -107,10 +115,10 @@ fn main() {
     }
     println!("hats on {done} drawings; no head found in: {missing:?}");
 
-    // the thrown hat, twice as big, the second drawing a little brighter
+    // the thrown hat, twice as big (the same drawing), the second drawing a little brighter
     for (k, lift) in [(0, 0u8), (1, 28u8)] {
-        let mut img = RgbaImage::new(36, 20);
-        draw_hat(&mut img, 2, 4, 2, |p| Rgba([p[0].saturating_add(lift), p[1].saturating_add(lift), p[2].saturating_add(lift / 2), p[3]]));
+        let mut img = RgbaImage::new(42, 26);
+        draw_hat(&mut img, 2, 2, 2, |p| Rgba([p[0].saturating_add(lift), p[1].saturating_add(lift), p[2].saturating_add(lift / 2), p[3]]));
         img.save(dir.join(format!("hat_{k}.png"))).expect("write hat");
     }
 }

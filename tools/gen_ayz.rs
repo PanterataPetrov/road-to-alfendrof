@@ -782,7 +782,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -1920,7 +1920,7 @@ fn texture_hair(input: &str, output: &str) {
     println!("wrote {output}");
 }
 
-// The Gunslinger's poses, drawn from his default pose (`gunslinger.png`)
+// The Scribe's poses (the old Gunslinger's body), drawn from his default pose (`gunslinger_textured.png`)
 //
 // The same machinery as the Professor's (torso leaned and dropped over legs, arms drawn as tubes),
 // with his own joints, sleeves, trousers and hands, and the Professor's arm and leg positions
@@ -1942,6 +1942,10 @@ enum Hand {
     Fist,
     Palm,
     Point,
+    /// A fist holding a quill like a dagger, nib forward.
+    Quill,
+    /// A fist holding a quill like a pen, nib down and to the left.
+    Pen,
 }
 
 /// His body without arms or hat, the original arms as cells, his boots and his hat.
@@ -2060,6 +2064,7 @@ fn gs_arm(canvas: &mut Grid, shoulder: Joint, elbow: Joint, hand: Joint, kind: H
         Hand::Fist => {}
         // An open hand: the palm stretched out along the arm, for the slap and the throw.
         Hand::Palm => cells.extend(tube(&[hand, (hand.0 + ux * 5.0, hand.1 + uy * 5.0)], 5.0)),
+        Hand::Quill | Hand::Pen => {}
         // A finger gun: the index finger out along the arm, the thumb cocked up.
         Hand::Point => {
             cells.extend(tube(&[hand, (hand.0 + ux * 8.0, hand.1 + uy * 8.0)], 2.4));
@@ -2071,6 +2076,34 @@ fn gs_arm(canvas: &mut Grid, shoulder: Joint, elbow: Joint, hand: Joint, kind: H
     for &(x, y) in &cells {
         let ch = if !cells.contains(&(x + 1, y)) || !cells.contains(&(x, y + 1)) { 'b' } else { 'a' };
         canvas.set(x + GOX, y + GOY, ch);
+    }
+    match kind {
+        Hand::Quill => gs_quill(canvas, hand, (ux, uy)),
+        Hand::Pen => gs_quill(canvas, hand, (-0.6, 0.8)),
+        _ => {}
+    }
+}
+
+/// A feather quill held in the fist at `hand`: a white shaft with a vane on the back end and a dark
+/// nib `dir` ahead of the hand.
+fn gs_quill(canvas: &mut Grid, hand: Joint, dir: (f32, f32)) {
+    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt().max(0.01);
+    let (dx, dy) = (dir.0 / len, dir.1 / len);
+    let (px, py) = (-dy, dx);
+    let at = |t: f32, side: f32| ((hand.0 + dx * t + px * side).round() as i32 + GOX, (hand.1 + dy * t + py * side).round() as i32 + GOY);
+    let mut t = -7.0;
+    while t <= 7.5 {
+        let (x, y) = at(t, 0.0);
+        canvas.set(x, y, if t >= 5.5 { 'g' } else if t >= 4.0 { 'u' } else { 'w' });
+        // the vane: a feather along the back end of the shaft
+        if t <= -2.0 {
+            let wide = if t <= -3.0 && t >= -6.0 { 2.0 } else { 1.0 };
+            for side in [-wide, wide] {
+                let (vx, vy) = at(t, side);
+                canvas.set(vx, vy, if side < 0.0 { 'v' } else { 'u' });
+            }
+        }
+        t += 0.5;
     }
 }
 
@@ -2116,11 +2149,13 @@ fn gs_legs(legs: Legs) -> Legs {
     }
 }
 
-/// His hands: a slap, a finger gun for the volley and the air slam, and open hands to throw.
+/// His hands: a quill in the fist for the stabs, an open hand under the book and a pen in the other
+/// while he writes, open hands for the slaps.
 fn gs_hands(frame: Frame) -> (Hand, Hand) {
     match frame {
-        Frame::Soft(1) | Frame::CrouchSoft(1) | Frame::AirSoft(0) | Frame::AirSoft(1) => (Hand::Fist, Hand::Palm),
-        Frame::Gun(_) | Frame::Punch(_) | Frame::Hard(1) | Frame::Hard(2) | Frame::Hard(3) | Frame::AirHard(1) => (Hand::Point, Hand::Point),
+        Frame::Soft(1) | Frame::CrouchSoft(1) | Frame::AirSoft(0) | Frame::AirSoft(1) => (Hand::Fist, Hand::Quill),
+        Frame::Punch(_) | Frame::Hard(1) | Frame::Hard(2) | Frame::Hard(3) | Frame::AirHard(1) => (Hand::Quill, Hand::Quill),
+        Frame::Write(_) => (Hand::Palm, Hand::Pen),
         Frame::Summon(_) | Frame::Speak(_) => (Hand::Fist, Hand::Palm),
         _ => (Hand::Fist, Hand::Fist),
     }
@@ -2137,31 +2172,23 @@ struct GsSpec {
 fn gs_spec(frame: Frame) -> GsSpec {
     use ArmSpec::Keep;
     let stance = || legs((8.0, 45.0), (4.0, 48.0), (33.0, 45.0), (36.0, 48.0));
-    let own = |arms: (ArmSpec, ArmSpec), lean: f32, dy: i32, legs: Legs, hat_in_hand: Option<Joint>, hat_on_head: bool| GsSpec {
+    let own = |arms: (ArmSpec, ArmSpec), lean: f32, dy: i32, legs: Legs| GsSpec {
         spec: Spec { arms, lean, dy, legs, mouth: 0, finger: None },
-        hat_in_hand,
-        hat_on_head,
+        hat_in_hand: None,
+        hat_on_head: false,
     };
     match frame {
-        // The hat throw: reach up to the hat, lift it off, wind back, throw, follow through.
-        Frame::Summon(0) => own((Keep, pose((27.0, 11.0), (18.0, 3.0))), -1.0, 0, Legs::Stand, None, true),
-        Frame::Summon(1) => own((Keep, pose((29.0, 8.0), (21.0, -1.0))), -2.0, 0, Legs::Stand, Some((21.0, -1.0)), false),
-        Frame::Summon(2) => own((pose((9.0, 24.0), (14.0, 20.0)), pose((22.0, 4.0), (9.0, -2.0))), -4.0, 0, stance(), Some((9.0, -2.0)), false),
-        Frame::Summon(3) => own((pose((9.0, 24.0), (15.0, 21.0)), pose((14.0, 4.0), (2.0, 4.0))), -6.0, 1, stance(), Some((2.0, 4.0)), false),
-        Frame::Summon(4) => own((pose((8.0, 24.0), (14.0, 22.0)), pose((36.0, 16.0), (47.0, 13.0))), 6.0, 1, legs((6.0, 46.0), (0.0, 48.0), (36.0, 45.0), (42.0, 48.0)), None, false),
-        Frame::Summon(_) => own((Keep, pose((35.0, 22.0), (44.0, 27.0))), 4.0, 0, stance(), None, false),
-        // The finger-gun volley: ready with both fingers up, then left, right, left hands.
-        Frame::Gun(0) => own((pose((2.0, 25.0), (7.0, 15.0)), pose((25.0, 26.0), (21.0, 16.0))), -1.0, 0, Legs::Stand, None, true),
-        Frame::Gun(1) => own((pose((12.0, 22.0), (31.0, 19.0)), pose((25.0, 27.0), (22.0, 18.0))), 3.0, 0, stance(), None, true),
-        Frame::Gun(2) => own((pose((2.0, 26.0), (7.0, 17.0)), pose((35.0, 21.0), (47.0, 19.0))), 4.0, 0, stance(), None, true),
-        Frame::Gun(3) => own((pose((13.0, 21.0), (33.0, 17.0)), pose((25.0, 27.0), (22.0, 18.0))), 5.0, 0, stance(), None, true),
-        // The light shot: the right hand, then the left, each cocked and then fired.
-        Frame::Punch(0) => own((Keep, pose((25.0, 25.0), (29.0, 19.0))), 0.0, 0, Legs::Stand, None, true),
-        Frame::Punch(1) => own((Keep, pose((34.0, 21.0), (44.0, 19.0))), 3.0, 0, stance(), None, true),
-        Frame::Punch(2) => own((pose((4.0, 25.0), (9.0, 18.0)), Keep), 0.0, 0, Legs::Stand, None, true),
-        Frame::Punch(_) => own((pose((14.0, 22.0), (33.0, 19.0)), Keep), 3.0, 0, stance(), None, true),
-        // Resting after the volley: the last shooting hand stays exactly where it fired, smoking.
-        Frame::Gun(_) => own((pose((13.0, 21.0), (33.0, 17.0)), pose((25.0, 27.0), (22.0, 18.0))), 5.0, 0, stance(), None, true),
+        // The quill stabs: the right hand cocks and strikes, then the left.
+        Frame::Punch(0) => own((Keep, pose((25.0, 25.0), (29.0, 19.0))), 0.0, 0, Legs::Stand),
+        Frame::Punch(1) => own((Keep, pose((34.0, 21.0), (44.0, 19.0))), 3.0, 0, stance()),
+        Frame::Punch(2) => own((pose((4.0, 25.0), (9.0, 18.0)), Keep), 0.0, 0, Legs::Stand),
+        Frame::Punch(_) => own((pose((14.0, 22.0), (33.0, 19.0)), Keep), 3.0, 0, stance()),
+        // Writing: the book opens in the left hand, the right hand writes (two strokes), then a flourish
+        // with the quill held high.
+        Frame::Write(0) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((24.0, 26.0), (21.0, 21.0))), 0.0, 0, Legs::Stand),
+        Frame::Write(1) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((24.0, 27.0), (18.0, 25.0))), 1.0, 0, Legs::Stand),
+        Frame::Write(2) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((25.0, 26.0), (21.0, 24.0))), 1.0, 0, Legs::Stand),
+        Frame::Write(_) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((29.0, 16.0), (31.0, 7.0))), 2.0, 0, Legs::Stand),
         // Everything else is the Professor's pose moved over to his proportions.
         other => {
             let mut sp = spec(other);
@@ -2170,7 +2197,54 @@ fn gs_spec(frame: Frame) -> GsSpec {
                 sp.dy += 2;
             }
             sp.arms = (gs_pose_arm(sp.arms.0, false), gs_pose_arm(sp.arms.1, true));
-            GsSpec { spec: sp, hat_in_hand: None, hat_on_head: true }
+            GsSpec { spec: sp, hat_in_hand: None, hat_on_head: false }
+        }
+    }
+}
+
+/// The closed book on his belt, on the left hip: a dark spine, a brown cover with a gold clasp and
+/// the pages showing along the right edge.
+fn gs_belt_book(c: &mut Grid) {
+    let rows = ["äääää", "äöööt", "äöüöt", "äööYU", "äöööt", "äääää"];
+    for (dy, row) in rows.iter().enumerate() {
+        for (dx, ch) in row.chars().enumerate() {
+            c.set(5 + dx as i32 + GOX, 34 + dy as i32 + GOY, ch);
+        }
+    }
+}
+
+/// The book open in his hands while he writes (`k` = 0 half open, 1..=3 more and more written on the
+/// right page), in front of his chest.
+fn gs_open_book(c: &mut Grid, k: usize) {
+    let (cx, cy) = (14, 27);
+    let hw: i32 = if k == 0 { 4 } else { 7 };
+    // the cover, which shows as a brown border below and at each side
+    for x in -hw - 1..=hw + 1 {
+        c.set(cx + x + GOX, cy + 5 + GOY, 'ä');
+    }
+    for y in -3..=5 {
+        c.set(cx - hw - 1 + GOX, cy + y + GOY, 'ö');
+        c.set(cx + hw + 1 + GOX, cy + y + GOY, 'ö');
+    }
+    // the pages, with a line of writing every other row
+    for y in -4..=4 {
+        for x in -hw..=hw {
+            let page = if x == 0 { 'U' } else { 't' };
+            c.set(cx + x + GOX, cy + y + GOY, page);
+        }
+    }
+    for line in 0..3 {
+        let y = cy - 2 + line * 2;
+        for x in 2..=hw.min(2 + 2 * k as i32) {
+            c.set(cx + x + GOX, y + GOY, 'ä');
+        }
+        // the left page is already full
+        if k > 0 {
+            for x in -hw + 1..=-1 {
+                if (x + line) % 4 != 0 {
+                    c.set(cx + x + GOX, y + GOY, 'U');
+                }
+            }
         }
     }
 }
@@ -2217,6 +2291,11 @@ fn gs_torso(parts: &Parts, frame: Frame, gs: &GsSpec) -> (Grid, Grid) {
             }
             ArmSpec::Pose { elbow, hand } => gs_arm(&mut c, shoulder, *elbow, *hand, kind),
         }
+    }
+    if let Frame::Write(k) = frame {
+        gs_open_book(&mut c, k);
+    } else {
+        gs_belt_book(&mut c);
     }
     if let Some(at) = gs.hat_in_hand {
         gs_hat_in_hand(&mut c, at);
@@ -2312,94 +2391,28 @@ fn gs_drawing(parts: &Parts, frame: Frame) -> (Grid, Grid) {
     (canvas, hat_canvas)
 }
 
-/// The thrown hat (28 x 20): his hat at twice the size, wreathed in purple magic with gold
-/// sparkles. The two drawings differ in where the sparkles and the aura are.
-fn thrown_hat(variant: usize) -> Grid {
-    let mut g = Grid::blank(28, 20);
-    let mut cells = HashSet::new();
-    for (dy, row) in SMALL_HAT.iter().enumerate() {
-        for (dx, ch) in row.chars().enumerate() {
-            if ch != '.' {
-                for (ax, ay) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let (x, y) = (2 + dx as i32 * 2 + ax, 5 + dy as i32 * 2 + ay);
-                    cells.insert((x, y));
-                    g.set(x, y, ch);
-                }
-            }
-        }
-    }
-    // The aura: purple pixels in the ring just outside the hat.
-    for y in 0..20 {
-        for x in 0..28 {
-            if cells.contains(&(x, y)) {
-                continue;
-            }
-            let near = (-2..=2).any(|dy| (-2..=2).any(|dx| cells.contains(&(x + dx, y + dy))));
-            if near && (x + y + variant as i32) % 2 == 0 {
-                let close = (-1..=1).any(|dy| (-1..=1).any(|dx| cells.contains(&(x + dx, y + dy))));
-                g.set(x, y, if close { '9' } else { '0' });
-            }
-        }
-    }
-    let spots: [(i32, i32); 4] = if variant == 0 { [(2, 2), (25, 3), (4, 17), (24, 16)] } else { [(24, 1), (1, 9), (14, 18), (26, 12)] };
-    for (x, y) in spots {
-        g.set(x, y, 'W');
-        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-            if g.get(x + dx, y + dy) == '.' {
-                g.set(x + dx, y + dy, 'Y');
-            }
-        }
-    }
-    g
-}
 
-/// A finger-gun bullet (24 x 8): a hot white-gold slug with a tail, heading right.
-fn bullet(variant: usize) -> Grid {
-    let mut g = Grid::blank(24, 8);
-    for x in 0..16 {
-        let half = (x as f32 / 16.0 * 2.0) as i32;
-        for dy in -half..=half {
-            if variant == 1 && (x + dy.abs()) % 4 == 0 {
-                continue;
-            }
-            g.set(x, 4 + dy, if dy == 0 && x > 5 { 'z' } else { 'y' });
-        }
-    }
-    for y in 1..=6 {
-        for x in 15..=22 {
-            let (dx, dy) = ((x - 18) as f32 / 4.5, (y as f32 - 3.5) / 3.2);
-            if dx * dx + dy * dy <= 1.0 {
-                g.set(x, y, if y <= 2 { 'z' } else if y >= 5 { 'y' } else { 'Y' });
-            }
-        }
-    }
-    g.set(20, 3, 'W');
-    g.set(21, 3, 'W');
-    g
-}
 
 /// Every frame the Gunslinger has: the common set and his volley.
 fn gs_frame_list() -> Vec<Frame> {
     let mut v = Frame::all();
-    v.extend((0..t2f::anim::GUN_FRAMES).map(Frame::Gun));
     v.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
+    v.extend((0..t2f::anim::WRITE_FRAMES).map(Frame::Write));
     v
 }
 
-/// Every drawing of the Gunslinger as (file name, image).
+/// Every drawing of the Scribe as (file name, image): the poses and his effects.
 fn gs_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
     let parts = gs_split(default);
     let mut frames = Vec::new();
     for f in gs_frame_list() {
-        let (body, hat) = gs_drawing(&parts, f);
+        let (body, _hat) = gs_drawing(&parts, f);
         frames.push((f.file_stem(), body.to_png()));
-        frames.push((format!("{}_mark", f.file_stem()), hat.to_png()));
     }
-    for v in 0..t2f::anim::CRESCENT_FRAMES {
-        frames.push((format!("hat_{v}"), thrown_hat(v).to_png()));
-    }
-    for v in 0..t2f::anim::STAR_FRAMES {
-        frames.push((format!("bullet_{v}"), bullet(v).to_png()));
+    for (name, make) in scribe_effects() {
+        for v in 0..2 {
+            frames.push((format!("{name}_{v}"), make(v).to_png()));
+        }
     }
     frames
 }
@@ -2409,17 +2422,13 @@ fn gs_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     let cells: Vec<image::RgbaImage> = gs_frame_list()
         .into_iter()
         .map(|f| {
-            // Body with the hat on top, as it looks in the game when the special is ready.
-            let (body, hat) = gs_drawing(&parts, f);
-            let mut img = body.to_png();
-            image::imageops::overlay(&mut img, &hat.to_png(), 0, 0);
-            img
+            gs_drawing(&parts, f).0.to_png()
         })
         .collect();
     let columns = 8u32;
     let (cw, ch) = (FRAME_W as u32 * scale, FULL_H as u32 * scale);
     let rows = (cells.len() as u32 + columns - 1) / columns;
-    let mut sheet = image::RgbaImage::from_pixel(columns * (cw + 8) + 8, rows * (ch + 8) + 8 + 40 * scale, image::Rgba([196, 214, 232, 255]));
+    let mut sheet = image::RgbaImage::from_pixel(columns * (cw + 8) + 8, rows * (ch + 8) + 8 + 60 * scale, image::Rgba([196, 214, 232, 255]));
     for (k, cell) in cells.iter().enumerate() {
         let (col, row) = (k as u32 % columns, k as u32 / columns);
         let (ox, oy) = (8 + col * (cw + 8), 8 + row * (ch + 8));
@@ -2432,7 +2441,7 @@ fn gs_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     }
     let mut x = 8;
     let y = rows * (ch + 8) + 8;
-    for img in [thrown_hat(0).to_png(), thrown_hat(1).to_png(), bullet(0).to_png(), bullet(1).to_png()] {
+    for img in scribe_effects().into_iter().flat_map(|(_, make)| [make(0).to_png(), make(1).to_png()]) {
         for yy in 0..img.height() * scale {
             for xx in 0..img.width() * scale {
                 let p = img.get_pixel(xx / scale, yy / scale);
@@ -2446,6 +2455,151 @@ fn gs_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     sheet
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// The Scribe's effects: the blue particle, a falling knife, the portal and Jesus.
+
+fn scribe_effects() -> Vec<(&'static str, fn(usize) -> Grid)> {
+    vec![("orb", scribe_orb), ("knife", scribe_knife), ("portal", scribe_portal), ("jesus", scribe_jesus)]
+}
+
+/// The blue particle (12 x 12): a bright core in glowing rings; the second drawing is a size bigger.
+fn scribe_orb(v: usize) -> Grid {
+    let mut g = Grid::blank(12, 12);
+    let r = if v == 0 { 4.6 } else { 5.4 };
+    for y in 0..12 {
+        for x in 0..12 {
+            let d = (((x as f32 - 5.5) * (x as f32 - 5.5)) + ((y as f32 - 5.5) * (y as f32 - 5.5))).sqrt();
+            let ch = if d <= 1.6 { 'W' } else if d <= r - 2.4 { '%' } else if d <= r - 1.0 { '#' } else if d <= r { '&' } else { '.' };
+            g.set(x, y, ch);
+        }
+    }
+    g
+}
+
+/// A knife (18 x 7), heading right: a steel blade, a small guard, a dark handle.
+fn scribe_knife(v: usize) -> Grid {
+    let mut g = Grid::blank(18, 7);
+    for x in 6..18 {
+        let half = if x < 14 { 1 } else if x < 16 { 1 } else { 0 };
+        for dy in -half..=half {
+            g.set(x, 3 + dy, if dy < 0 { 'J' } else if dy == 0 { 'M' } else { 'L' });
+        }
+    }
+    g.set(17, 3, 'W');
+    for dy in -2..=2 {
+        g.set(5, 3 + dy, 'Y');
+    }
+    for x in 0..5 {
+        g.set(x, 3, 'ö');
+        g.set(x, 2, 'ä');
+        g.set(x, 4, 'ä');
+    }
+    // a glint that moves along the blade
+    g.set(8 + 4 * v as i32, 2, 'W');
+    g
+}
+
+/// The portal (44 x 26): a swirl of violet with a dark centre and sparks; it turns between drawings.
+fn scribe_portal(v: usize) -> Grid {
+    let mut g = Grid::blank(44, 26);
+    for y in 0..26 {
+        for x in 0..44 {
+            let (dx, dy) = ((x as f32 - 21.5) / 21.0, (y as f32 - 12.5) / 12.0);
+            let d = dx * dx + dy * dy;
+            if d <= 1.0 {
+                let angle = dy.atan2(dx) + d * 3.2 + v as f32 * 0.9;
+                let arm = (angle * 2.0).sin();
+                let ch = if d > 0.82 { '0' } else if d < 0.16 { 'g' } else if arm > 0.45 { '9' } else if arm > -0.25 { '0' } else { 'g' };
+                g.set(x, y, ch);
+            }
+        }
+    }
+    // the bright rim and a few sparks
+    for k in 0..40 {
+        let a = k as f32 / 40.0 * std::f32::consts::TAU;
+        g.set((21.5 + 20.5 * a.cos()).round() as i32, (12.5 + 11.5 * a.sin()).round() as i32, if (k + v) % 3 == 0 { 'W' } else { '9' });
+    }
+    for (x, y) in [(3, 4), (40, 6), (38, 21), (6, 20), (21, 1), (22, 24)] {
+        g.set(x + v as i32 - 1, y, 'W');
+    }
+    g
+}
+
+/// Jesus (34 x 54), arms spread, a halo over his head, in a white robe with a red sash. The second
+/// drawing lets the hem and the halo's glints move.
+fn scribe_jesus(v: usize) -> Grid {
+    let mut g = Grid::blank(34, 54);
+    // the halo: a gold ring over the head
+    for k in 0..48 {
+        let a = k as f32 / 48.0 * std::f32::consts::TAU;
+        g.set((17.0 + 8.5 * a.cos()).round() as i32, (4.0 + 2.8 * a.sin()).round() as i32, if (k + v * 3) % 8 == 0 { 'z' } else { 'Y' });
+    }
+    // long hair behind the head and shoulders
+    for y in 8..=24 {
+        let half = if y < 11 { 5 } else if y < 18 { 6 } else { 5 };
+        for x in 17 - half..=17 + half {
+            g.set(x, y, if x == 17 - half { 'f' } else { 'c' });
+        }
+    }
+    // the face
+    for y in 8..=17 {
+        let half = if y < 10 { 3 } else if y < 15 { 4 } else { 3 };
+        for x in 17 - half..=17 + half {
+            g.set(x, y, if x == 17 + half { 'b' } else { 'a' });
+        }
+    }
+    // hair on top of the head: a parting down the middle and a fringe over the forehead
+    for (y, half) in [(6, 3), (7, 5), (8, 6), (9, 5)] {
+        for x in 17 - half..=17 + half {
+            g.set(x, y, if x == 17 { 'i' } else if x < 17 - half + 2 { 'f' } else { 'c' });
+        }
+    }
+    for x in [14, 15, 19, 20] {
+        g.set(x, 10, 'c');
+    }
+    g.set(15, 12, 'g');
+    g.set(19, 12, 'g');
+    // the beard and a calm mouth
+    for y in 15..=19 {
+        let half = if y == 19 { 1 } else { 3 };
+        for x in 17 - half..=17 + half {
+            if y > 15 || x != 17 {
+                g.set(x, y, 'c');
+            }
+        }
+    }
+    g.set(17, 16, 'v');
+    g.set(16, 16, 'v');
+    g.set(18, 16, 'v');
+    // the robe: shoulders to a wide hem, shaded on the right
+    for y in 20..=52 {
+        let t = (y - 20) as f32 / 32.0;
+        let half = (5.0 + t * 8.5).round() as i32 + if y > 46 && (y + v as i32) % 2 == 0 { 1 } else { 0 };
+        for x in 17 - half..=17 + half {
+            g.set(x, y, if x >= 17 + half - 1 { 'u' } else if x > 17 + half / 2 { 'v' } else { 'w' });
+        }
+    }
+    // the arms spread wide, sleeves flaring, with open hands
+    for (side, tip) in [(-1, 2), (1, 31)] {
+        for k in 0..13 {
+            let x = 17 + side * (5 + k);
+            let y = 22 - k / 3;
+            let thick = 2 + k / 5;
+            for dy in -thick..=thick {
+                g.set(x, y + dy, if dy == thick { 'v' } else { 'w' });
+            }
+        }
+        for dy in -1..=1 {
+            g.set(tip, 18 + dy, 'a');
+            g.set(tip + side * -1, 18 + dy, 'b');
+        }
+    }
+    // the red sash across the chest
+    g.line(12, 21, 24, 40, 'B', None);
+    g.line(13, 21, 25, 40, 'C', None);
+    g
+}
 // Cowboy From Hell: the original's own pose and eyes, bald, in a dark brown ribbed tank top, with
 // silver earrings and a chain, and big brown cowboy boots
 
@@ -2875,6 +3029,29 @@ fn cb_arm(canvas: &mut Grid, shoulder: Joint, elbow: Joint, hand: Joint, left: b
     tattoo
 }
 
+/// An index finger stretched out along the forearm (past the fist) and the thumb up like a hammer: a finger gun.
+fn cb_finger_gun(canvas: &mut Grid, elbow: Joint, hand: Joint) {
+    let (dx, dy) = (hand.0 - elbow.0, hand.1 - elbow.1);
+    let len = (dx * dx + dy * dy).sqrt().max(0.01);
+    let (ux, uy) = (dx / len, dy / len);
+    // the side of the hand that is up (or, for an arm pointing straight up, the outer side)
+    let mut n = (-uy, ux);
+    if n.1 > 0.0 || (n.1 == 0.0 && n.0 < 0.0) {
+        n = (-n.0, -n.1);
+    }
+    let put = |canvas: &mut Grid, x: f32, y: f32, ch: char| canvas.set(x.round() as i32 + GOX, y.round() as i32 + GOY, ch);
+    for t in 3..=8 {
+        let (cx, cy) = (hand.0 + ux * t as f32, hand.1 + uy * t as f32);
+        let tip = t == 8;
+        put(canvas, cx, cy, if tip { '?' } else { '<' });
+        put(canvas, cx - n.0 * 0.9, cy - n.1 * 0.9, '>');
+    }
+    // the thumb, standing up from the knuckles
+    for (along, up) in [(1.0f32, 3.0f32), (0.0, 4.0), (0.0, 3.0)] {
+        put(canvas, hand.0 + ux * along + n.0 * up, hand.1 + uy * along + n.1 * up, '<');
+    }
+}
+
 fn cb_leg(canvas: &mut Grid, hip: Joint, knee: Joint, ankle: Joint) {
     let leg = tube(&[hip, knee, ankle], 10.5);
     for &(x, y) in &leg {
@@ -2912,6 +3089,16 @@ fn cb_spec(frame: Frame) -> GsSpec {
         Frame::Kick(1) => own((pose((1.0, 24.0), (-3.0, 20.0)), pose((30.0, 24.0), (34.0, 20.0))), -1.0, 0, legs((6.0, 43.0), (9.0, 45.0), (36.0, 43.0), (33.0, 45.0))),
         Frame::Kick(2) => own((pose((1.0, 23.0), (-3.0, 19.0)), pose((30.0, 22.0), (34.0, 18.0))), -4.0, 0, legs((10.0, 44.0), (10.0, 46.0), (36.0, 45.0), (47.0, 48.0))),
         Frame::Kick(_) => own((pose((1.0, 23.0), (-3.0, 19.0)), pose((30.0, 22.0), (34.0, 18.0))), -4.0, 0, legs((14.0, 45.0), (30.0, 48.0), (33.0, 44.0), (33.0, 46.0))),
+        // The Gun Boost: crouched with both guns pointing at the ground, firing (the flash is added in
+        // `cb_drawing_with`), rising from the recoil with the arms trailing down, then shooting down leaning back.
+        Frame::Boost(0) => own((pose((1.0, 24.0), (3.0, 29.0)), pose((25.0, 25.0), (27.0, 30.0))), 2.0, 15, Legs::Squat),
+        Frame::Boost(1) => own((pose((1.0, 23.0), (3.0, 28.0)), pose((25.0, 24.0), (27.0, 29.0))), 0.0, 13, Legs::Squat),
+        Frame::Boost(2) => own((pose((0.0, 28.0), (-1.0, 38.0)), pose((26.0, 29.0), (28.0, 39.0))), 0.0, 0, legs((6.0, 43.0), (9.0, 45.0), (36.0, 43.0), (33.0, 45.0))),
+        Frame::Boost(_) => own((pose((7.0, 27.0), (13.0, 38.0)), pose((29.0, 26.0), (37.0, 37.0))), -4.0, 0, legs((10.0, 44.0), (7.0, 47.0), (32.0, 44.0), (30.0, 47.0))),
+        // Leaning back as he shoots in the air: a little, more, all the way (the gun hand rising as he goes back).
+        Frame::Lean(0) => own((pose((3.0, 26.0), (6.0, 22.0)), pose((33.0, 22.0), (44.0, 19.0))), -1.0, 0, stance()),
+        Frame::Lean(1) => own((pose((3.0, 26.0), (6.0, 22.0)), pose((32.0, 20.0), (42.0, 14.0))), -3.0, 0, legs((9.0, 44.0), (5.0, 47.0), (32.0, 44.0), (30.0, 47.0))),
+        Frame::Lean(_) => own((pose((3.0, 26.0), (6.0, 22.0)), pose((31.0, 17.0), (40.0, 8.0))), -6.0, 0, legs((10.0, 44.0), (5.0, 46.0), (30.0, 45.0), (25.0, 47.0))),
         other => {
             let mut sp = spec(other);
             if matches!(sp.legs, Legs::Squat) {
@@ -2974,8 +3161,8 @@ fn cb_drawing_with(parts: &Parts, frame: Frame, spec_of: fn(Frame) -> GsSpec, be
     });
     let mut canvas = cb_leg_layer(parts, &legs);
     // The torso, with the arms.
-    let mut upper = Grid::blank(FRAME_W, G_TORSO_H);
-    let mut glow = Grid::blank(FRAME_W, G_TORSO_H);
+    let mut upper = Grid::blank(FRAME_W, FULL_H);
+    let mut glow = Grid::blank(FRAME_W, FULL_H);
     for y in 0..=G_UPPER_LAST {
         for x in 0..parts.body.w as i32 {
             let ch = parts.body.get(x, y);
@@ -3014,6 +3201,19 @@ fn cb_drawing_with(parts: &Parts, frame: Frame, spec_of: fn(Frame) -> GsSpec, be
             }
         }
     }
+    // The finger guns: the shooting hand points a finger along the arm with the thumb up (not Junkhead's).
+    if !belt_whip && matches!(frame, Frame::Punch(_) | Frame::Lean(_) | Frame::Boost(_)) {
+        let fires = match frame {
+            Frame::Punch(0) | Frame::Punch(1) | Frame::Lean(_) => (false, true),
+            Frame::Punch(_) => (true, false),
+            _ => (true, true),
+        };
+        for (arm, fires) in [(&gs.spec.arms.0, fires.0), (&gs.spec.arms.1, fires.1)] {
+            if let (ArmSpec::Pose { elbow, hand }, true) = (arm, fires) {
+                cb_finger_gun(&mut upper, *elbow, *hand);
+            }
+        }
+    }
     if belt_whip {
         for (dy, row) in BELT_COIL.iter().enumerate() {
             for (dx, ch) in row.chars().enumerate() {
@@ -3023,8 +3223,16 @@ fn cb_drawing_with(parts: &Parts, frame: Frame, spec_of: fn(Frame) -> GsSpec, be
             }
         }
     }
+    // The guns going off at the ground: a hot white and yellow burst under each hand.
+    if frame == Frame::Boost(1) {
+        for (hx, hy) in [(3, 36), (27, 37)] {
+            for (dx, dy, ch) in [(0, 0, 'W'), (-1, 0, 'Y'), (1, 0, 'Y'), (0, 1, 'W'), (-2, 1, 'Y'), (2, 1, 'Y'), (-1, 1, 'W'), (1, 1, 'W'), (0, 2, 'Y'), (-3, 2, 'Y'), (3, 2, 'Y'), (-2, 0, 'Y'), (2, 0, 'Y')] {
+                upper.set(hx + dx + GOX, hy + dy + GOY, ch);
+            }
+        }
+    }
     let mut mark = Grid::blank(FRAME_W, FULL_H);
-    for cy in 0..G_TORSO_H {
+    for cy in 0..FULL_H {
         let r = (cy - GOY).clamp(0, G_UPPER_LAST);
         let shift = (gs.spec.lean * (G_UPPER_LAST - r) as f32 / G_UPPER_LAST as f32).round() as i32;
         for x in 0..FRAME_W {
@@ -3052,6 +3260,8 @@ fn cb_frame_list() -> Vec<Frame> {
     let mut v = Frame::all();
     v.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
     v.extend((0..t2f::anim::KICK_FRAMES).map(Frame::Kick));
+    v.extend((0..t2f::anim::BOOST_FRAMES).map(Frame::Boost));
+    v.extend((0..t2f::anim::LEAN_FRAMES).map(Frame::Lean));
     v
 }
 
@@ -4775,22 +4985,6 @@ fn em_speech(word: &str) -> image::RgbaImage {
     g
 }
 
-fn em_fist(size: f32, skin: Rgb, shade: Rgb) -> image::RgbaImage {
-    let mut g = ic_new();
-    let (cx, cy) = (12.0, 13.0);
-    ic_ellipse(&mut g, cx, cy, 7.0 * size, 6.5 * size, skin);
-    for k in 0..4 {
-        ic_ellipse(&mut g, cx - 4.8 * size + k as f32 * 3.2 * size, cy - 5.2 * size + (k % 2) as f32 * 0.8, 2.0 * size, 2.0 * size, skin);
-    }
-    ic_ellipse(&mut g, cx - 6.0 * size, cy + 1.5 * size, 2.3 * size, 3.2 * size, skin);
-    ic_ellipse(&mut g, cx + 0.5, cy + 3.0 * size, 6.0 * size, 3.0 * size, shade);
-    for k in 0..3 {
-        ic_line(&mut g, (cx - 3.2 * size + k as f32 * 3.2 * size, cy - 3.0 * size), (cx - 3.2 * size + k as f32 * 3.2 * size, cy), 0.8, shade);
-    }
-    ic_finish(&mut g);
-    g
-}
-
 /// A fist gripping a shirt collar.
 fn em_collar_grab() -> image::RgbaImage {
     let mut g = ic_new();
@@ -4829,34 +5023,6 @@ fn em_raven_rose() -> image::RgbaImage {
     g
 }
 
-/// A boot kicking, with speed lines.
-fn em_boot_kick() -> image::RgbaImage {
-    let mut g = ic_new();
-    ic_poly(&mut g, &[(8.0, 2.0), (15.0, 2.0), (15.0, 12.0), (22.0, 14.0), (22.0, 20.0), (6.0, 20.0), (6.0, 12.0), (8.0, 12.0)], [150, 98, 56]);
-    ic_poly(&mut g, &[(8.0, 2.0), (10.5, 2.0), (10.5, 12.0), (8.0, 12.0)], [204, 150, 94]);
-    ic_line(&mut g, (6.0, 19.8), (22.0, 19.8), 2.0, [98, 62, 34]);
-    ic_line(&mut g, (11.0, 8.0), (15.0, 8.0), 1.0, [98, 62, 34]);
-    for (y, x0) in [(5.0, 0.0), (9.0, 0.5), (14.0, 1.0)] {
-        ic_line(&mut g, (x0, y), (x0 + 4.0, y), 1.2, [250, 250, 250]);
-    }
-    ic_finish(&mut g);
-    g
-}
-
-/// A red rose inside a blue ring.
-fn em_rose_ring() -> image::RgbaImage {
-    let mut g = ic_new();
-    ic_ring(&mut g, 12.0, 12.0, 10.5, 10.5, 1.9, [90, 170, 255]);
-    ic_line(&mut g, (12.0, 14.0), (12.0, 21.0), 1.6, [70, 140, 60]);
-    ic_poly(&mut g, &[(12.0, 18.0), (17.0, 15.0), (14.0, 19.5)], [58, 120, 50]);
-    ic_ellipse(&mut g, 12.0, 10.0, 4.6, 4.4, [210, 60, 70]);
-    ic_ellipse(&mut g, 12.0, 10.8, 2.8, 2.6, [150, 40, 50]);
-    ic_put(&mut g, 10, 8, [255, 160, 160]);
-    ic_put(&mut g, 11, 8, [255, 160, 160]);
-    ic_finish(&mut g);
-    g
-}
-
 /// A finger gun with a spark at the muzzle.
 fn em_finger_gun() -> image::RgbaImage {
     let mut g = ic_new();
@@ -4867,33 +5033,6 @@ fn em_finger_gun() -> image::RgbaImage {
     ic_ellipse(&mut g, 21.0, 9.0, 2.6, 2.6, [255, 232, 120]);
     ic_ellipse(&mut g, 21.0, 9.0, 1.2, 1.2, [255, 255, 235]);
     ic_line(&mut g, (21.0, 3.5), (21.0, 14.5), 1.0, [255, 232, 120]);
-    ic_finish(&mut g);
-    g
-}
-
-/// Three bullets.
-fn em_bullets() -> image::RgbaImage {
-    let mut g = ic_new();
-    for (i, x) in [5.5f32, 12.0, 18.5].into_iter().enumerate() {
-        let lift = if i == 1 { 0.0 } else { 2.0 };
-        ic_poly(&mut g, &[(x - 2.4, 9.0 + lift), (x + 2.4, 9.0 + lift), (x + 2.4, 20.0), (x - 2.4, 20.0)], [226, 178, 86]);
-        ic_poly(&mut g, &[(x - 2.4, 9.0 + lift), (x + 2.4, 9.0 + lift), (x, 3.0 + lift)], [190, 138, 42]);
-        ic_line(&mut g, (x - 1.2, 10.0 + lift), (x - 1.2, 18.0), 0.9, [255, 238, 170]);
-        ic_line(&mut g, (x - 2.4, 20.0), (x + 2.4, 20.0), 1.4, [130, 86, 40]);
-    }
-    ic_finish(&mut g);
-    g
-}
-
-/// A fedora.
-fn em_fedora() -> image::RgbaImage {
-    let mut g = ic_new();
-    ic_ellipse(&mut g, 12.0, 16.0, 10.5, 3.8, [104, 66, 38]);
-    ic_poly(&mut g, &[(5.5, 15.0), (7.5, 5.0), (16.5, 5.0), (18.5, 15.0)], [150, 100, 58]);
-    ic_poly(&mut g, &[(6.0, 12.0), (18.0, 12.0), (18.5, 15.0), (5.5, 15.0)], [46, 34, 30]);
-    ic_poly(&mut g, &[(10.5, 12.0), (13.5, 12.0), (13.5, 15.0), (10.5, 15.0)], [250, 205, 80]);
-    ic_line(&mut g, (9.0, 6.0), (15.0, 6.0), 1.0, [200, 150, 96]);
-    ic_ellipse(&mut g, 12.0, 17.0, 10.0, 2.4, [150, 100, 58]);
     ic_finish(&mut g);
     g
 }
@@ -4959,9 +5098,87 @@ fn em_whip_spiral() -> image::RgbaImage {
     g
 }
 
+/// The Cowboy's light: a finger gun with a lasso loop round it.
+fn em_lasso_gun() -> image::RgbaImage {
+    let mut g = em_finger_gun();
+    ic_ring(&mut g, 14.0, 17.0, 7.0, 4.6, 1.7, [196, 140, 84]);
+    ic_poly(&mut g, &[(19.5, 20.0), (22.0, 21.0), (21.0, 23.0), (18.5, 22.0)], [150, 98, 56]);
+    ic_finish(&mut g);
+    g
+}
+
+/// The Cowboy's heavy: both pistols fire at the ground and the recoil throws him up.
+fn em_gun_boost() -> image::RgbaImage {
+    let mut g = ic_new();
+    for x in [7.5f32, 16.5] {
+        // the pistol, pointing down, with its grip
+        ic_poly(&mut g, &[(x - 2.2, 3.0), (x + 2.2, 3.0), (x + 2.2, 12.0), (x - 2.2, 12.0)], [168, 170, 184]);
+        ic_poly(&mut g, &[(x - 2.2, 3.0), (x + 4.5, 3.0), (x + 4.5, 6.0), (x - 2.2, 6.0)], [120, 122, 138]);
+        // the blast
+        ic_poly(&mut g, &[(x - 3.0, 12.0), (x + 3.0, 12.0), (x, 21.0)], [255, 150, 36]);
+        ic_poly(&mut g, &[(x - 1.6, 12.0), (x + 1.6, 12.0), (x, 18.0)], [255, 234, 120]);
+    }
+    // smoke and debris at the floor
+    ic_ellipse(&mut g, 12.0, 21.5, 9.0, 1.5, [226, 214, 196]);
+    ic_finish(&mut g);
+    g
+}
+
+/// The Cowboy's special: his hat with the glowing blue curse ring round it.
+fn em_hat_ring() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ring(&mut g, 12.0, 12.0, 10.5, 9.5, 2.0, [112, 184, 255]);
+    ic_poly(&mut g, &[(8.0, 13.5), (8.0, 9.5), (10.0, 7.0), (14.0, 7.0), (16.0, 9.5), (16.0, 13.5)], [150, 100, 58]);
+    ic_ellipse(&mut g, 12.0, 14.0, 7.5, 2.2, [118, 76, 42]);
+    ic_poly(&mut g, &[(8.0, 12.0), (16.0, 12.0), (16.0, 13.4), (8.0, 13.4)], [40, 30, 28]);
+    ic_finish(&mut g);
+    g
+}
+
+/// The Scribe's light: a feather quill with a drop of ink.
+fn em_quill() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_poly(&mut g, &[(7.0, 18.0), (9.0, 9.0), (15.0, 4.0), (21.0, 3.0), (19.5, 10.0), (13.0, 16.0)], [244, 244, 252]);
+    ic_poly(&mut g, &[(12.0, 12.0), (15.0, 7.0), (20.0, 4.5), (19.0, 9.0), (14.0, 13.0)], [170, 190, 236]);
+    ic_line(&mut g, (4.5, 20.5), (17.0, 6.0), 1.4, [214, 200, 170]);
+    ic_poly(&mut g, &[(2.5, 22.5), (6.0, 18.0), (7.5, 19.5)], [40, 40, 52]);
+    ic_ellipse(&mut g, 4.0, 15.5, 1.6, 2.0, [64, 72, 160]);
+    ic_finish(&mut g);
+    g
+}
+
+/// The Scribe's heavy: a purple portal with knives pouring out of it.
+fn em_knife_rain() -> image::RgbaImage {
+    let mut g = ic_new();
+    ic_ellipse(&mut g, 12.0, 5.0, 10.0, 3.4, [128, 56, 200]);
+    ic_ellipse(&mut g, 12.0, 5.0, 6.5, 1.9, [16, 4, 34]);
+    for (x, y) in [(6.0f32, 8.0), (12.0, 11.0), (18.0, 9.0)] {
+        ic_line(&mut g, (x, y - 3.0), (x, y), 2.0, [124, 80, 46]);
+        ic_poly(&mut g, &[(x - 2.4, y), (x + 2.4, y), (x - 1.8, y + 1.2), (x + 1.8, y + 1.2), (x, y + 10.0)], [216, 222, 236]);
+        ic_poly(&mut g, &[(x - 2.4, y), (x + 2.4, y), (x + 2.4, y + 1.0), (x - 2.4, y + 1.0)], [214, 170, 70]);
+    }
+    ic_finish(&mut g);
+    g
+}
+
+/// The Scribe's special: Jesus with a halo, and his beam of light coming down.
+fn em_jesus_beam() -> image::RgbaImage {
+    let mut g = ic_new();
+    // the beam
+    ic_poly(&mut g, &[(9.0, 12.0), (15.0, 12.0), (20.5, 22.0), (3.5, 22.0)], [255, 238, 150]);
+    ic_poly(&mut g, &[(10.5, 12.0), (13.5, 12.0), (16.5, 22.0), (7.5, 22.0)], [255, 255, 238]);
+    // Jesus: arms out, a white robe, a head with long hair, a gold halo
+    ic_path(&mut g, &[(4.0, 8.5), (9.0, 9.0), (15.0, 9.0), (20.0, 8.5)], 2.0, [244, 244, 252]);
+    ic_poly(&mut g, &[(9.0, 8.0), (15.0, 8.0), (16.5, 13.0), (7.5, 13.0)], [244, 244, 252]);
+    ic_ellipse(&mut g, 12.0, 5.5, 3.0, 3.4, [124, 80, 46]);
+    ic_ellipse(&mut g, 12.0, 6.0, 2.0, 2.3, [238, 196, 158]);
+    ic_ring(&mut g, 12.0, 2.4, 4.5, 1.6, 1.0, [255, 214, 80]);
+    ic_finish(&mut g);
+    g
+}
+
 /// Every skill icon: (sprite folder, button, image).
 fn skill_icons() -> Vec<(&'static str, &'static str, image::RgbaImage)> {
-    let skin = ([238, 196, 158], [222, 174, 134]);
     let tile = |e: image::RgbaImage, top: Rgb, bottom: Rgb, accent: Rgb| ic_tile(&e, top, bottom, accent);
     let mut v = vec![
         ("anaran", "light", tile(em_scroll_missile(), [96, 78, 214], [28, 18, 96], [240, 200, 90])),
@@ -4970,12 +5187,12 @@ fn skill_icons() -> Vec<(&'static str, &'static str, image::RgbaImage)> {
         ("ayz", "light", tile(em_speech("uh"), [140, 172, 214], [44, 68, 112], [232, 238, 252])),
         ("ayz", "heavy", tile(em_collar_grab(), [242, 154, 62], [128, 58, 18], [255, 224, 154])),
         ("ayz", "special", tile(em_raven_rose(), [78, 66, 138], [18, 14, 52], [196, 176, 255])),
-        ("cowboy", "light", tile(em_fist(1.0, skin.0, skin.1), [224, 92, 82], [98, 28, 30], [255, 204, 184])),
-        ("cowboy", "heavy", tile(em_boot_kick(), [182, 132, 84], [78, 48, 30], [242, 212, 154])),
-        ("cowboy", "special", tile(em_rose_ring(), [82, 134, 232], [22, 38, 102], [172, 224, 255])),
-        ("gunslinger", "light", tile(em_finger_gun(), [154, 164, 92], [58, 68, 32], [232, 232, 172])),
-        ("gunslinger", "heavy", tile(em_bullets(), [232, 192, 84], [118, 78, 22], [255, 242, 172])),
-        ("gunslinger", "special", tile(em_fedora(), [114, 62, 164], [38, 18, 72], [232, 192, 255])),
+        ("cowboy", "light", tile(em_lasso_gun(), [224, 92, 82], [98, 28, 30], [255, 204, 184])),
+        ("cowboy", "heavy", tile(em_gun_boost(), [214, 142, 70], [96, 50, 24], [255, 222, 154])),
+        ("cowboy", "special", tile(em_hat_ring(), [82, 134, 232], [22, 38, 102], [172, 224, 255])),
+        ("scribe", "light", tile(em_quill(), [154, 164, 92], [58, 68, 32], [232, 232, 172])),
+        ("scribe", "heavy", tile(em_knife_rain(), [114, 62, 164], [38, 18, 72], [232, 192, 255])),
+        ("scribe", "special", tile(em_jesus_beam(), [236, 196, 88], [122, 82, 24], [255, 244, 176])),
         ("junkhead", "light", tile(em_whip_curl(), [212, 72, 72], [78, 18, 26], [255, 172, 162])),
         ("junkhead", "heavy", tile(em_whip_hook(), [142, 142, 154], [48, 48, 60], [222, 222, 238])),
         ("junkhead", "special", tile(em_whip_spiral(), [232, 62, 84], [88, 10, 40], [255, 192, 124])),
@@ -5040,12 +5257,12 @@ fn main() {
         return;
     }
 
-    // `--gunslinger <gunslinger.png> <assets dir> <contact sheet.png>`: draw every pose from his
-    // default pose into the game's sprite folder, with a contact sheet.
-    if first == "--gunslinger" {
+    // `--scribe <default pose.png> <assets dir> <contact sheet.png>`: draw every pose of the Scribe from
+    // the default pose into the game's sprite folder, with his effects and a contact sheet.
+    if first == "--scribe" {
         let default = grid_from_png(&args.next().expect("default pose png"));
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
-        let folder = assets.join("sprites").join("gunslinger");
+        let folder = assets.join("sprites").join("scribe");
         std::fs::create_dir_all(&folder).unwrap();
         for (frame, img) in gs_frames(&default) {
             img.save(folder.join(format!("{frame}.png"))).unwrap();
@@ -5053,7 +5270,7 @@ fn main() {
         if let Some(sheet) = args.next() {
             gs_contact_sheet(&default, 4).save(&sheet).unwrap();
         }
-        println!("wrote the Gunslinger's frames");
+        println!("wrote the Scribe's frames");
         return;
     }
 

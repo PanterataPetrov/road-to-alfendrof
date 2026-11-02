@@ -1,6 +1,7 @@
-//! Draws the logo: `cargo run --bin gen_logo -- assets/ui/logo.png`.
-//! "ROAD TO" in silver over a big golden "ALFENDROF", in a chunky 5 x 7 font with a bevel, outline and drop
-//! shadow, over a dithered purple glow.
+//! Draws the logo: `cargo run --bin gen_logo -- assets/ui/logo.png assets/ui/emblem.png`.
+//! The wordmark: "ROAD TO" in silver over a big golden "ALFENDROF", in a chunky 5 x 7 font with a bevel,
+//! outline and drop shadow, over a dithered purple glow. The emblem: a red Templar cross (a cross pattée)
+//! on a white heater shield with a gold rim.
 
 use image::{Rgba, RgbaImage};
 
@@ -109,59 +110,144 @@ fn draw_text(img: &mut RgbaImage, mask: &Mask, ox: i32, oy: i32, top: [u8; 3], b
     }
 }
 
-fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "assets/ui/logo.png".into());
-    let (w, h) = (300i32, 90i32);
-    let mut img = RgbaImage::new(w as u32, h as u32);
+/// How far inside the shield's edge a point is, 0 outside; used for the rim.
+fn shield_half_width(y: i32) -> f32 {
+    // straight sides down to y = 44, then curving in to a point at y = 78
+    if y < 0 || y > 78 {
+        return -1.0;
+    }
+    if y <= 44 {
+        30.0
+    } else {
+        let t = (y - 44) as f32 / 34.0;
+        30.0 * (1.0 - t.powf(1.7))
+    }
+}
 
-    // portal glow behind the big word: a dithered purple ellipse
-    const BAYER: [[i32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-    let (cx, cy) = (w as f32 / 2.0, 58.0);
+fn emblem() -> RgbaImage {
+    let (w, h) = (68, 80);
+    let mut img = RgbaImage::new(w as u32, h as u32);
+    let cx = 34.0f32;
+    let inside = |x: i32, y: i32| -> bool {
+        let half = shield_half_width(y);
+        // slightly rounded top corners
+        let corner = y < 3 && (x as f32 - cx).abs() > half - (3 - y) as f32 * 1.5;
+        half > 0.0 && (x as f32 + 0.5 - cx).abs() <= half && !corner
+    };
+    // how many pixels from the edge (up to 6)
+    let depth = |x: i32, y: i32| -> i32 {
+        for d in 1..=6 {
+            for (dx, dy) in [(-d, 0), (d, 0), (0, -d), (0, d), (-d, -d), (d, d), (-d, d), (d, -d)] {
+                if !inside(x + dx, y + dy) {
+                    return d;
+                }
+            }
+        }
+        7
+    };
     for y in 0..h {
         for x in 0..w {
-            let (dx, dy) = ((x as f32 - cx) / 150.0, (y as f32 - cy) / 36.0);
+            if !inside(x, y) {
+                continue;
+            }
+            let d = depth(x, y);
+            let c = if d == 1 {
+                [28, 18, 30, 255]
+            } else if d <= 3 {
+                // the gold rim, lit from the upper left
+                if (x as f32) < cx && y < 40 { [255, 226, 120, 255] } else { [214, 160, 54, 255] }
+            } else if d == 4 {
+                [120, 78, 30, 255]
+            } else {
+                // white field with a faint shade towards the bottom
+                let t = y as f32 / h as f32;
+                let g = (252.0 - 34.0 * t) as u8;
+                [g, g, (g as f32 * 0.97) as u8, 255]
+            };
+            put(&mut img, x, y, c);
+        }
+    }
+    // the cross pattée: arms narrow at the centre and flaring to straight ends
+    let (ccx, ccy) = (34.0f32, 34.0f32);
+    let (arm_h, arm_v) = (22.0f32, 27.0f32);
+    let flare = |d: f32, len: f32| 3.6 + (d / len) * 6.2;
+    let in_cross = |x: i32, y: i32| -> bool {
+        let (dx, dy) = ((x as f32 + 0.5 - ccx).abs(), (y as f32 + 0.5 - ccy).abs());
+        (dx <= arm_h && dy <= flare(dx, arm_h)) || (dy <= arm_v && dx <= flare(dy, arm_v))
+    };
+    for y in 0..h {
+        for x in 0..w {
+            if !in_cross(x, y) {
+                continue;
+            }
+            let lit = !in_cross(x - 1, y) || !in_cross(x, y - 1);
+            let dark = !in_cross(x + 1, y) || !in_cross(x, y + 1);
+            let c = if lit && !dark { [238, 78, 78, 255] } else if dark { [132, 14, 28, 255] } else { [200, 28, 40, 255] };
+            put(&mut img, x, y, c);
+        }
+    }
+    // a dark outline round the cross
+    let copy = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            if in_cross(x, y) {
+                continue;
+            }
+            let near = (-1..=1).any(|dy| (-1..=1).any(|dx| in_cross(x + dx, y + dy)));
+            if near && copy.get_pixel(x as u32, y as u32)[3] > 0 {
+                put(&mut img, x, y, [70, 8, 18, 255]);
+            }
+        }
+    }
+    // a gloss on the upper left of the shield
+    for y in 6..22 {
+        for x in 8..22 {
+            if x + y < 24 && inside(x, y) && copy.get_pixel(x as u32, y as u32) == &Rgba([252, 252, 244, 255]) {
+                put(&mut img, x, y, [255, 255, 255, 255]);
+            }
+        }
+    }
+    img
+}
+
+/// The wordmark, small enough to sit beside the emblem (200 x 62).
+fn wordmark() -> RgbaImage {
+    let (w, h) = (200i32, 62i32);
+    let mut img = RgbaImage::new(w as u32, h as u32);
+    const BAYER: [[i32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let (cx, cy) = (w as f32 / 2.0, 38.0);
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = ((x as f32 - cx) / 100.0, (y as f32 - cy) / 26.0);
             let d = dx * dx + dy * dy;
             if d < 1.0 {
                 let strength = ((1.0 - d) * 16.0) as i32;
                 if strength > BAYER[(y % 4) as usize][(x % 4) as usize] {
-                    let c = if d < 0.45 { [150, 60, 200, 255] } else { [96, 38, 150, 255] };
-                    put(&mut img, x, y, c);
+                    put(&mut img, x, y, if d < 0.45 { [150, 60, 200, 255] } else { [96, 38, 150, 255] });
                 }
             }
         }
     }
-
-    // ROAD TO in silver with gold ornaments either side
-    let road = text_mask("ROAD TO", 3);
-    let rx = (w - road.w) / 2;
-    draw_text(&mut img, &road, rx, 6, [246, 248, 255], [150, 160, 206], [255, 255, 255, 255], [96, 104, 150, 255]);
-    for (x0, x1) in [(8, rx - 8), (rx + road.w + 8, w - 8)] {
-        for x in x0..x1 {
-            put(&mut img, x, 16, [255, 214, 90, 255]);
-            put(&mut img, x, 17, [160, 96, 30, 255]);
-        }
-        // a diamond at the inner end
-        let dx = if x0 == 8 { x1 } else { x0 };
-        for (ox, oy) in [(0, -2), (-1, -1), (0, -1), (1, -1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)] {
-            put(&mut img, dx + ox, 16 + oy, [255, 232, 140, 255]);
-        }
-    }
-
-    // ALFENDROF, big and golden
-    let big = text_mask("ALFENDROF", 4);
-    let bx = (w - big.w) / 2;
-    draw_text(&mut img, &big, bx, 42, [255, 232, 130], [226, 116, 34], [255, 250, 206, 255], [140, 58, 26, 255]);
-
-    // sparkles
-    for (x, y) in [(14, 40), (284, 44), (30, 78), (268, 80), (150, 4)] {
+    let road = text_mask("ROAD TO", 2);
+    draw_text(&mut img, &road, (w - road.w) / 2, 5, [246, 248, 255], [150, 160, 206], [255, 255, 255, 255], [96, 104, 150, 255]);
+    let big = text_mask("ALFENDROF", 3);
+    draw_text(&mut img, &big, (w - big.w) / 2, 28, [255, 232, 130], [226, 116, 34], [255, 250, 206, 255], [140, 58, 26, 255]);
+    for (x, y) in [(6, 30), (192, 34), (14, 56), (184, 58)] {
         for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
             put(&mut img, x + dx, y + dy, [255, 255, 235, 255]);
         }
     }
+    img
+}
 
-    if let Some(dir) = std::path::Path::new(&out).parent() {
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let logo = args.next().unwrap_or_else(|| "assets/ui/logo.png".into());
+    let emblem_path = args.next().unwrap_or_else(|| "assets/ui/emblem.png".into());
+    if let Some(dir) = std::path::Path::new(&logo).parent() {
         std::fs::create_dir_all(dir).unwrap();
     }
-    img.save(&out).unwrap();
-    println!("wrote {out}");
+    wordmark().save(&logo).unwrap();
+    emblem().save(&emblem_path).unwrap();
+    println!("wrote {logo} and {emblem_path}");
 }

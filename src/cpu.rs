@@ -330,30 +330,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zoner_backs_away_when_the_opponent_is_close_and_shoots_from_a_distance() {
-        let g = CharacterData::from_ron(include_str!("../assets/characters/gunslinger.ron")).unwrap();
-        assert!(g.keeps_distance);
-        // the opponent (P1) is 40 px away: P2 backs off to the right
-        let mut s = GameState::new();
-        s.fighters[0].x = 0;
-        s.fighters[1].x = 40 * PX;
-        let i = cpu_input(&s, 1, &g);
-        assert!(i.has(Input::RIGHT) || i.has(Input::LIGHT), "should back off or poke, got {i:?}");
-        assert!(!i.has(Input::LEFT), "must not walk into them");
-        // over time it ends up further away than a normal CPU would
-        let c = chars();
-        let mut s = GameState::new();
-        s.fighters[0].x = -40 * PX;
-        s.fighters[1].x = 20 * PX;
-        for _ in 0..300 {
-            let cpu = cpu_input(&s, 1, &g);
-            s.step([Input::default(), cpu], [&c[0], &g]);
-        }
-        let gap = (s.fighters[1].x - s.fighters[0].x) / PX;
-        assert!(gap > 70, "the zoner should have made some room, gap {gap}");
-    }
-
-    #[test]
     fn cpu_turns_on_a_goblin_that_is_nearer_than_the_player() {
         use crate::sim::{Minion, MinionMode};
         let c = chars();
@@ -481,10 +457,10 @@ mod tests {
 
     #[test]
     fn the_champions_are_sorted_into_ranged_and_close_range() {
-        for ranged in ["ayz", "evilayz", "anaran", "gunslinger", "cowboy"] {
+        for ranged in ["ayz", "evilayz", "anaran", "cowboy"] {
             assert_eq!(style_of(&load(ranged)), Style::Ranged, "{ranged}");
         }
-        for melee in ["junkhead"] {
+        for melee in ["junkhead", "scribe"] {
             assert_eq!(style_of(&load(melee)), Style::Melee, "{melee}");
         }
     }
@@ -511,14 +487,14 @@ mod tests {
 
     #[test]
     fn a_ranged_cpu_keeps_further_away_from_a_close_range_fighter_than_from_another_shooter() {
-        let (professor, cowboy, gunslinger) = (load("ayz"), load("junkhead"), load("gunslinger"));
-        let (vs_melee, vs_ranged) = (mean_gap(&professor, &cowboy), mean_gap(&professor, &gunslinger));
-        assert!(vs_melee > vs_ranged + 8, "the Professor sat {vs_melee} px from the cowboy but {vs_ranged} px from the Gunslinger");
+        let (professor, cowboy, ranged) = (load("ayz"), load("junkhead"), load("anaran"));
+        let (vs_melee, vs_ranged) = (mean_gap(&professor, &cowboy), mean_gap(&professor, &ranged));
+        assert!(vs_melee > vs_ranged + 8, "the Professor sat {vs_melee} px from the cowboy but {vs_ranged} px from Anaran");
     }
 
     #[test]
     fn a_close_range_cpu_answers_shots_a_ranged_opponent_fires_and_ignores_them_from_a_melee_one() {
-        let (cowboy, gunslinger) = (load("cowboy"), load("gunslinger"));
+        let (cowboy, gunslinger) = (load("cowboy"), load("anaran"));
         // the player's (P1) bullet is 50 px from the cowboy CPU (P2)
         let mut s = GameState::new();
         s.fighters[0].x = -150 * PX;
@@ -544,7 +520,7 @@ mod tests {
 
     #[test]
     fn anaran_answers_a_shot_close_to_him_with_the_shockwave_that_destroys_it() {
-        let (anaran, gunslinger) = (load("anaran"), load("gunslinger"));
+        let (anaran, gunslinger) = (load("anaran"), load("ayz"));
         let mut s = GameState::new();
         s.fighters[0].x = -150 * PX;
         s.fighters[1].x = 50 * PX;
@@ -563,7 +539,7 @@ mod tests {
     #[test]
     fn a_close_range_cpu_closes_the_gap_on_a_shooter_and_a_ranged_cpu_still_fights_without_breaking() {
         // every pairing of champions plays on without panicking or standing still for good
-        let names = ["ayz", "anaran", "cowboy", "gunslinger", "junkhead", "evilayz"];
+        let names = ["ayz", "anaran", "cowboy", "scribe", "junkhead", "evilayz"];
         for a in names {
             for b in names {
                 let (ca, cb) = (load(a), load(b));

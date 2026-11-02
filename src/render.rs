@@ -49,9 +49,26 @@ pub struct WhipOf(pub usize);
 pub struct MoonOf(pub usize);
 #[derive(Component)]
 pub struct MoonStarOf(pub usize);
-/// Speech bubble over a lecturing fighter (world space, so the text isn't mirrored).
+/// Which drawing a moon uses (`<name>_0`, `<name>_1`): the crescent, or a portal.
+#[derive(Component)]
+pub struct MoonImage(pub String);
+/// The black border (true) and the white fill (false) of a speech bubble, resized to fit its words.
+#[derive(Component)]
+pub struct BubbleBack(pub usize, pub bool);
+/// Speech bubble over a lecturing or writing fighter (world space, so the text isn't mirrored).
 #[derive(Component)]
 pub struct BubbleOf(pub usize);
+/// The two layers of a speech bubble's tail (black border, white fill), which sits on its bottom edge.
+#[derive(Component)]
+pub struct BubbleTail(pub usize, pub bool);
+/// One of the three red worry lines round the head of a futile fighter.
+#[derive(Component)]
+pub struct WorryLine(pub usize, pub usize);
+/// Jesus in the sky, and the two layers (glow, core) of his beam.
+#[derive(Component)]
+pub struct JesusOf(pub usize);
+#[derive(Component)]
+pub struct BeamPart(pub usize, pub bool);
 #[derive(Component)]
 pub struct BubbleText(pub usize);
 
@@ -179,41 +196,71 @@ pub fn spawn_fighter(
             }
         }
         if let Some(p) = summon.filter(|p| p.lob) {
-            // the moon and star hang in the sky at a fixed spot, so they're not children of the body
+            // the moon (or portal) and star hang in the sky at a fixed spot, so they're not children of the body
+            let base = p.summon_name().to_string();
             commands.spawn((
                 MoonOf(fighter),
+                MoonImage(base.clone()),
                 DespawnOnExit(AppState::Fight),
-                Sprite::from_image(get("crescent_0").expect("loaded with the rest")),
+                Sprite::from_image(get(&format!("{base}_0")).expect("loaded with the rest")),
                 Transform::from_xyz(0.0, 0.0, -7.0),
                 Visibility::Hidden,
             ));
-            commands.spawn((
-                MoonStarOf(fighter),
-                DespawnOnExit(AppState::Fight),
-                Sprite::from_image(get("moon_star_0").expect("loaded with the rest")),
-                Transform::from_xyz(0.0, 0.0, -6.9),
-                Visibility::Hidden,
-            ));
-            let _ = p;
+            if !p.over_target {
+                commands.spawn((
+                    MoonStarOf(fighter),
+                    DespawnOnExit(AppState::Fight),
+                    Sprite::from_image(get("moon_star_0").expect("loaded with the rest")),
+                    Transform::from_xyz(0.0, 0.0, -6.9),
+                    Visibility::Hidden,
+                ));
+            }
         }
-        if frames.iter().any(|f| matches!(f, Frame::Lecture(_) | Frame::Grab(_))) {
+        if frames.iter().any(|f| matches!(f, Frame::Lecture(_) | Frame::Grab(_) | Frame::Write(_))) {
             let width = LECTURE_LINE.len() as f32 * 5.0 + 10.0;
             commands
                 .spawn((BubbleOf(fighter), DespawnOnExit(AppState::Fight), Transform::from_xyz(0.0, 0.0, 7.0), Visibility::Hidden))
                 .with_children(|b| {
-                    b.spawn((Sprite::from_color(Color::BLACK, Vec2::new(width + 2.0, 18.0)), Transform::from_xyz(0.0, 0.0, 0.0)));
-                    b.spawn((Sprite::from_color(Color::WHITE, Vec2::new(width, 16.0)), Transform::from_xyz(0.0, 0.0, 0.1)));
+                    b.spawn((BubbleBack(fighter, true), Sprite::from_color(Color::BLACK, Vec2::new(width + 2.0, 18.0)), Transform::from_xyz(0.0, 0.0, 0.0)));
+                    b.spawn((BubbleBack(fighter, false), Sprite::from_color(Color::WHITE, Vec2::new(width, 16.0)), Transform::from_xyz(0.0, 0.0, 0.1)));
                     // the tail pointing at the speaker
-                    b.spawn((Sprite::from_color(Color::BLACK, Vec2::new(6.0, 6.0)), Transform::from_xyz(-6.0, -9.0, 0.0).with_rotation(Quat::from_rotation_z(0.785))));
-                    b.spawn((Sprite::from_color(Color::WHITE, Vec2::new(4.0, 4.0)), Transform::from_xyz(-6.0, -8.0, 0.2).with_rotation(Quat::from_rotation_z(0.785))));
+                    b.spawn((BubbleTail(fighter, true), Sprite::from_color(Color::BLACK, Vec2::new(6.0, 6.0)), Transform::from_xyz(-6.0, -9.0, 0.0).with_rotation(Quat::from_rotation_z(0.785))));
+                    b.spawn((BubbleTail(fighter, false), Sprite::from_color(Color::WHITE, Vec2::new(4.0, 4.0)), Transform::from_xyz(-6.0, -8.0, 0.2).with_rotation(Quat::from_rotation_z(0.785))));
                     b.spawn((
                         BubbleText(fighter),
                         Text2d::new(""),
+                        bevy::text::TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::NoWrap),
                         crate::pixel_font(8.0),
                         TextColor(Color::BLACK),
                         Transform::from_xyz(0.0, 0.0, 0.3),
                     ));
                 });
+        }
+        // red worry lines round the head, shown while futile
+        for index in 0..3 {
+            let line = commands
+                .spawn((WorryLine(fighter, index), Sprite::from_color(Color::srgb(0.92, 0.1, 0.14), Vec2::new(1.0, 5.0)), Transform::from_xyz(0.0, 0.0, 0.4), Visibility::Hidden))
+                .id();
+            commands.entity(root).add_child(line);
+        }
+        // Jesus and his beam, in the sky
+        if effects.iter().any(|e| e == "jesus") {
+            commands.spawn((
+                JesusOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("jesus_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, -6.5),
+                Visibility::Hidden,
+            ));
+            for core in [false, true] {
+                commands.spawn((
+                    BeamPart(fighter, core),
+                    DespawnOnExit(AppState::Fight),
+                    Sprite::from_color(if core { Color::srgb(1.0, 1.0, 0.95) } else { Color::srgba(1.0, 0.88, 0.45, 0.55) }, Vec2::new(10.0, 10.0)),
+                    Transform::from_xyz(0.0, 0.0, if core { 0.45 } else { 0.4 }),
+                    Visibility::Hidden,
+                ));
+            }
         }
         if let Some(p) = summon.filter(|p| p.summon_name() != "none" && !p.lob) {
             let crescent = commands
@@ -267,44 +314,19 @@ fn tint(state: FighterState) -> Color {
     }
 }
 
-/// How far back (radians) a fighter who shoots in the air leans, at most.
-const AIR_SHOT_TILT: f32 = 0.5;
-/// Height of the body's middle, which the tilt turns about (pixels above the feet).
-const TILT_PIVOT: f32 = 26.0;
-
-/// How far back a fighter is leaning right now (0 = upright, `AIR_SHOT_TILT` at most): he leans into each air shot,
-/// holds it while the shots go out and straightens up afterwards.
-fn air_shot_tilt(f: &Fighter, data: &t2f::sim::CharacterData) -> f32 {
-    if !data.air_shot_tilt || f.state != FighterState::Attack || f.y <= 0 {
-        return 0.0;
-    }
-    let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-    if mv.projectile.is_none() || mv.curse.is_some() {
-        return 0.0;
-    }
-    let first = (mv.startup + mv.volley_delay) as i32;
-    let last = first + (mv.volley.max(1) as i32 - 1) * mv.volley_gap as i32;
-    let frame = f.state_frame as i32;
-    let lean_in = ((frame + 8 - first) as f32 / 8.0).clamp(0.0, 1.0);
-    let lean_out = ((last + 18 - frame) as f32 / 10.0).clamp(0.0, 1.0);
-    // he only tilts once he is off the ground
-    let height = (f.y as f32 / (6 * PX) as f32).min(1.0);
-    AIR_SHOT_TILT * lean_in.min(lean_out) * height
+/// A futile fighter is drawn washed over with blue.
+fn futile_tint(c: Color) -> Color {
+    let s = c.to_srgba();
+    Color::srgba(s.red * 0.6, s.green * 0.74, s.blue, s.alpha)
 }
 
 /// Place each fighter, face the opponent, and knock them over when KO'd.
-pub fn pose_bodies(sim: Res<Sim>, roster: Res<Roster>, sel: Res<Selection>, mut bodies: Query<(&Body, &mut Transform)>) {
+pub fn pose_bodies(sim: Res<Sim>, mut bodies: Query<(&Body, &mut Transform)>) {
     for (Body(i), mut tf) in &mut bodies {
         let f = &sim.0.fighters[*i];
         tf.translation.x = (f.x / PX) as f32;
         tf.translation.y = GROUND_Y + (f.y / PX) as f32;
         tf.scale.x = f.facing as f32;
-        // leaning back is a turn away from the way he faces, about the middle of his body
-        let tilt = air_shot_tilt(f, &roster.0[sel.chars[*i]]);
-        let angle = tilt * f.facing as f32;
-        tf.rotation = Quat::from_rotation_z(angle);
-        tf.translation.x += TILT_PIVOT * angle.sin();
-        tf.translation.y += TILT_PIVOT * (1.0 - angle.cos());
     }
 }
 
@@ -333,6 +355,9 @@ pub fn animate_body(
         // a fighter who can't attack (the staff's shockwave) is tinted violet
         if f.silenced > 0 && f.state != FighterState::Hitstun {
             sprite.color = Color::srgb(0.78, 0.68, 1.0);
+        }
+        if f.futile > 0 {
+            sprite.color = futile_tint(sprite.color);
         }
     }
 }
@@ -648,20 +673,22 @@ pub fn animate_moons(
     sim: Res<Sim>,
     handles: Res<FrameHandles>,
     time: Res<Time>,
-    mut moons: Query<(&MoonOf, &mut Sprite, &mut Transform, &mut Visibility), Without<MoonStarOf>>,
+    mut moons: Query<(&MoonOf, &MoonImage, &mut Sprite, &mut Transform, &mut Visibility), Without<MoonStarOf>>,
     mut stars: Query<(&MoonStarOf, &mut Sprite, &mut Transform, &mut Visibility), Without<MoonOf>>,
 ) {
-    for (MoonOf(i), mut sprite, mut tf, mut visibility) in &mut moons {
+    for (MoonOf(i), MoonImage(base), mut sprite, mut tf, mut visibility) in &mut moons {
         match sim.0.fighters[*i].moon {
             Some((x, y, age)) => {
                 *visibility = Visibility::Inherited;
                 tf.translation.x = (x / PX) as f32;
                 tf.translation.y = GROUND_Y + (y / PX) as f32;
-                tf.scale = Vec3::splat((age as f32 / 12.0).min(1.0).max(0.1));
+                let grow = (age as f32 / 12.0).min(1.0).max(0.1);
+                // a portal over the opponent is wide
+                tf.scale = if base == "portal" { Vec3::new(grow * 1.9, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
                 let fade = ((Fighter::MOON_LIFE - age.min(Fighter::MOON_LIFE)) as f32 / 25.0).min(1.0);
                 sprite.color = Color::srgba(1.0, 1.0, 1.0, fade);
                 let twinkle = (sim.0.frame / 8 % CRESCENT_FRAMES as u32) as usize;
-                if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("crescent_{twinkle}"))) {
+                if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("{base}_{twinkle}"))) {
                     sprite.image = image.clone();
                 }
             }
@@ -688,37 +715,60 @@ pub fn animate_moons(
     }
 }
 
-/// The speech bubble over a lecturing fighter, with the words typed out as the lecture winds up.
+/// The speech bubble over a lecturing or writing fighter, with the words typed out as the move winds up.
 pub fn animate_bubbles(
     sim: Res<Sim>,
     roster: Res<Roster>,
     sel: Res<Selection>,
     mut roots: Query<(&BubbleOf, &mut Transform, &mut Visibility)>,
     mut texts: Query<(&BubbleText, &mut Text2d)>,
+    mut backs: Query<(&BubbleBack, &mut Sprite), Without<BubbleTail>>,
+    mut tails: Query<(&BubbleTail, &mut Transform), (Without<BubbleOf>, Without<BubbleText>)>,
 ) {
     for (BubbleOf(i), mut tf, mut visibility) in &mut roots {
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        // a writing move says its line (with the enemy's name in it) while it plays
+        let line = mv.say.as_ref().map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
         // a grab says it while he holds the enemy (after the pull); the others while they wind up
         let grabbing = mv.hits > 1;
         let lecturing = f.state == FighterState::Attack
-            && matches!(mv.anim, t2f::sim::AnimKind::Lecture | t2f::sim::AnimKind::Grab)
+            && (line.is_some() || matches!(mv.anim, t2f::sim::AnimKind::Lecture | t2f::sim::AnimKind::Grab))
             && f.state_frame + 3 < mv.total_frames()
             && (!grabbing || f.state_frame > mv.startup);
         *visibility = if lecturing { Visibility::Inherited } else { Visibility::Hidden };
         tf.translation.x = (f.x / PX) as f32;
         tf.translation.y = GROUND_Y + (f.y / PX) as f32 + 84.0;
         if lecturing {
+            // a long line goes onto several rows
+            let full = wrap_words(&line.clone().unwrap_or_else(|| LECTURE_LINE.to_string()), BUBBLE_LINE);
             let progress = if grabbing {
                 (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
             } else {
                 (f.state_frame as f32 / (mv.startup as f32 * 0.85).max(1.0)).min(1.0)
             };
-            let shown = ((LECTURE_LINE.len() as f32 * progress).ceil() as usize).min(LECTURE_LINE.len());
+            let total = full.chars().count();
+            let shown = ((total as f32 * progress).ceil() as usize).min(total);
+            let typed: String = full.chars().take(shown).collect();
             for (BubbleText(owner), mut text) in &mut texts {
-                if owner == i && text.0.len() != shown {
-                    text.0 = LECTURE_LINE[..shown].to_string();
+                if owner == i && text.0 != typed {
+                    text.0 = typed.clone();
+                }
+            }
+            // the bubble is as big as the whole line, so it doesn't grow while it is typed; its bottom edge stays put
+            let rows = full.lines().count().max(1);
+            let width = full.lines().map(|l| l.chars().count()).max().unwrap_or(1) as f32 * 5.0 + 10.0;
+            let height = if rows > 1 { rows as f32 * 10.0 + 6.0 } else { 16.0 };
+            tf.translation.y += (height - 16.0) / 2.0;
+            for (BubbleBack(owner, border), mut sprite) in &mut backs {
+                if owner == i {
+                    sprite.custom_size = Some(Vec2::new(if *border { width + 2.0 } else { width }, if *border { height + 2.0 } else { height }));
+                }
+            }
+            for (BubbleTail(owner, border), mut tail) in &mut tails {
+                if owner == i {
+                    tail.translation.y = -(height / 2.0) - if *border { 1.0 } else { 0.0 };
                 }
             }
         }
@@ -1015,56 +1065,105 @@ pub fn animate_minions(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use t2f::sim::CharacterData;
+/// The most characters on one row of a speech bubble.
+const BUBBLE_LINE: usize = 22;
 
-    fn cowboy() -> CharacterData {
-        CharacterData::from_ron(include_str!("../assets/characters/cowboy.ron")).unwrap()
+/// Break `text` into rows of at most `width` characters, at spaces.
+fn wrap_words(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut row = 0;
+    for word in text.split_whitespace() {
+        let len = word.chars().count();
+        if row > 0 && row + 1 + len > width {
+            out.push('\n');
+            row = 0;
+        } else if row > 0 {
+            out.push(' ');
+            row += 1;
+        }
+        out.push_str(word);
+        row += len;
     }
+    out
+}
 
-    #[test]
-    fn he_leans_back_into_an_air_shot_and_straightens_up_after_it() {
-        let c = cowboy();
-        let shot = c.moves.iter().position(|m| m.name == "Air Shot").unwrap();
-        let mut f = Fighter::new(0, 1);
-        f.state = FighterState::Attack;
-        f.attack = shot;
-        f.y = 40 * PX;
-        let tilt_at = |f: &mut Fighter, frame: u32| {
-            f.state_frame = frame;
-            air_shot_tilt(f, &c)
+/// The red worry lines round the head of a futile fighter (they tremble), and Jesus with his beam.
+pub fn animate_scribe_effects(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    handles: Res<FrameHandles>,
+    time: Res<Time>,
+    mut worry: Query<(&WorryLine, &mut Transform, &mut Visibility), (Without<JesusOf>, Without<BeamPart>)>,
+    mut jesus: Query<(&JesusOf, &mut Sprite, &mut Transform, &mut Visibility), (Without<WorryLine>, Without<BeamPart>)>,
+    mut beams: Query<(&BeamPart, &mut Sprite, &mut Transform, &mut Visibility), (Without<WorryLine>, Without<JesusOf>)>,
+) {
+    for (WorryLine(i, index), mut tf, mut visibility) in &mut worry {
+        let f = &sim.0.fighters[*i];
+        *visibility = if f.futile > 0 { Visibility::Inherited } else { Visibility::Hidden };
+        // three short strokes fanning out above the head, trembling
+        let shake = if (sim.0.frame / 4 + *index as u32) % 2 == 0 { 0.0 } else { 1.0 };
+        let (x, y, angle) = match index {
+            0 => (-10.0, 60.0 + shake, 0.55),
+            1 => (0.0, 64.0 - shake, 0.0),
+            _ => (10.0, 60.0 + shake, -0.55),
         };
-        let startup = c.moves[shot].startup;
-        assert_eq!(tilt_at(&mut f, 1), 0.0, "upright as the move starts");
-        let mid = tilt_at(&mut f, startup / 2 + 3);
-        let at_shot = tilt_at(&mut f, startup + 1);
-        assert!(mid > 0.0 && mid < at_shot, "he leans in over the wind-up: {mid} then {at_shot}");
-        assert!((at_shot - AIR_SHOT_TILT).abs() < 1e-4, "fully back when the shot goes out, got {at_shot}");
-        assert_eq!(tilt_at(&mut f, startup + 40), 0.0, "upright again afterwards");
-        // on the ground he doesn't tilt, and only characters with the flag do
-        f.y = 0;
-        assert_eq!(tilt_at(&mut f, startup + 1), 0.0);
-        f.y = 40 * PX;
-        let mut other = c.clone();
-        other.air_shot_tilt = false;
-        f.state_frame = startup + 1;
-        assert_eq!(air_shot_tilt(&f, &other), 0.0);
+        // the head is a little right of the body centre in the drawings
+        tf.translation = Vec3::new(x + 2.0, y, 0.4);
+        tf.rotation = Quat::from_rotation_z(angle);
     }
-
-    #[test]
-    fn the_gun_boost_volley_also_tilts_him_but_the_hat_throw_does_not() {
-        let c = cowboy();
-        let boost = c.moves.iter().position(|m| m.name == "Gun Boost").unwrap();
-        let hat = c.moves.iter().position(|m| m.name == "Hell's Hat").unwrap();
-        let mut f = Fighter::new(0, 1);
-        f.state = FighterState::Attack;
-        f.y = 40 * PX;
-        f.attack = boost;
-        f.state_frame = c.moves[boost].startup + c.moves[boost].volley_delay + 1;
-        assert!(air_shot_tilt(&f, &c) > 0.4, "he leans back while the volley goes out");
-        f.attack = hat;
-        assert_eq!(air_shot_tilt(&f, &c), 0.0);
+    for (JesusOf(i), mut sprite, mut tf, mut visibility) in &mut jesus {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        match (f.state == FighterState::Attack, mv.beam, f.beam_lock) {
+            (true, Some(b), Some(lock)) => {
+                *visibility = Visibility::Inherited;
+                let age = f.state_frame.saturating_sub(b.lock_frame);
+                let rise = (age as f32 / 14.0).min(1.0);
+                let leave = if f.state_frame > mv.startup + mv.active { ((mv.total_frames() - f.state_frame.min(mv.total_frames())) as f32 / 12.0).min(1.0) } else { 1.0 };
+                tf.translation.x = (lock / PX) as f32 - f.facing as f32 * b.lead as f32;
+                tf.translation.y = GROUND_Y + 128.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5;
+                sprite.color = Color::srgba(1.0, 1.0, 1.0, rise * leave);
+                let frame = (sim.0.frame / 8 % 2) as usize;
+                if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("jesus_{frame}"))) {
+                    sprite.image = image.clone();
+                }
+            }
+            _ => *visibility = Visibility::Hidden,
+        }
+    }
+    for (BeamPart(i, core), mut sprite, mut tf, mut visibility) in &mut beams {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        // charging before it fires, then the sweep, then it fades
+        let firing = f.state == FighterState::Attack && f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.active + 6;
+        if !firing {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        *visibility = Visibility::Inherited;
+        let progress = (f.state_frame.saturating_sub(mv.startup) as f32).min(mv.active as f32) / mv.active.max(1) as f32;
+        let lock_x = (lock / PX) as f32;
+        let (start, end) = (lock_x - f.facing as f32 * b.lead as f32, lock_x + f.facing as f32 * b.sweep as f32);
+        let from = Vec2::new(lock_x - f.facing as f32 * b.lead as f32, GROUND_Y + 118.0);
+        let to = Vec2::new(start + (end - start) * progress, GROUND_Y + 4.0);
+        let (dx, dy) = (to.x - from.x, to.y - from.y);
+        let length = (dx * dx + dy * dy).sqrt().max(1.0);
+        let fade = if f.state_frame > mv.startup + mv.active { 1.0 - (f.state_frame - mv.startup - mv.active) as f32 / 6.0 } else { 1.0 };
+        let pulse = 1.0 + 0.15 * (time.elapsed_secs() * 40.0).sin();
+        let thick = if *core { 9.0 } else { 20.0 } * pulse * fade.max(0.1);
+        sprite.custom_size = Some(Vec2::new(thick, length));
+        let mid = (from + to) / 2.0;
+        tf.translation.x = mid.x;
+        tf.translation.y = mid.y;
+        // a rectangle is tall by default: turn it to lie along the beam
+        tf.rotation = Quat::from_rotation_z(-(dx.atan2(-dy)) + std::f32::consts::PI);
+        sprite.color = if *core { Color::srgba(1.0, 1.0, 0.95, fade) } else { Color::srgba(1.0, 0.88, 0.45, 0.55 * fade) };
     }
 }

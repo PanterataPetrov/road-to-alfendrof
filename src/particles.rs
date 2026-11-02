@@ -25,6 +25,7 @@ struct Snap {
     health: i32,
     y: i32,
     slamming: bool,
+    futile: bool,
 }
 
 /// A comic-book word ("BAM!") that pops up and fades.
@@ -46,6 +47,8 @@ pub struct Seen {
     lobs: Vec<(usize, i32, i32)>,
     /// The last frame whose destroyed projectiles got a puff.
     cleared_until: u32,
+    /// The last frame whose floor impacts (shots aimed at the ground) got their sparks.
+    impacts_until: u32,
     seed: u32,
 }
 
@@ -118,6 +121,13 @@ pub fn emit(
         let feet = Vec2::new((f.x / PX) as f32, GROUND_Y + (f.y / PX) as f32);
         let towards = if s.fighters[1 - i].x >= f.x { 1.0 } else { -1.0 };
         if let Some(prev) = seen.fighters[i] {
+            // futility lands: a blue burst round the head
+            if f.futile > 0 && !prev.futile {
+                let head = feet + Vec2::new(2.0, 50.0);
+                let blue = [Color::srgb(0.45, 0.7, 1.0), Color::srgb(0.7, 0.88, 1.0), Color::WHITE];
+                burst(&mut commands, &mut seen, head, 24, 40.0, 130.0, &blue, 3.0, 0.5, 0.0);
+                spawn(&mut commands, head, Vec2::ZERO, Color::srgb(0.7, 0.85, 1.0), 16.0, 0.12, 0.0, true);
+            }
             // hits and blocks: health dropped this tick
             if f.health < prev.health {
                 let lost = prev.health - f.health;
@@ -336,6 +346,38 @@ pub fn emit(
                 shake.0 = shake.0.max(9.0);
             }
         }
+        // the Cowboy's Gun Boost: both guns go off at the ground, throwing sparks and dust up off the floor on either side of him
+        if f.state == FighterState::Attack && data.moves[f.attack].anim == AnimKind::Boost {
+            let mv = &data.moves[f.attack];
+            if f.state_frame + 1 >= mv.startup && f.state_frame <= mv.startup + 3 {
+                let fire = [Color::srgb(1.0, 0.95, 0.6), Color::srgb(1.0, 0.7, 0.2), Color::srgb(1.0, 0.45, 0.1)];
+                let dust = [Color::srgb(0.75, 0.68, 0.6), Color::srgb(0.55, 0.5, 0.45)];
+                for side in [-1.0f32, 1.0] {
+                    let at = feet + Vec2::new(side * 13.0, 3.0);
+                    burst(&mut commands, &mut seen, at, 9, 50.0, 190.0, &fire, 3.0, 0.4, -260.0);
+                    burst(&mut commands, &mut seen, at, 6, 20.0, 90.0, &dust, 4.0, 0.55, -40.0);
+                    // dust races out along the floor
+                    for k in 0..3 {
+                        let along = feet + Vec2::new(side * (16.0 + k as f32 * 5.0), 2.0);
+                        spawn(&mut commands, along, Vec2::new(side * seen.range(90.0, 170.0), seen.range(0.0, 14.0)), dust[k % 2], 3.0, 0.4, 0.0, true);
+                    }
+                }
+                shake.0 = shake.0.max(4.0);
+            }
+        }
+        // a bullet that lands on the floor: sparks and a puff of dust where it hit
+        if i == 0 {
+            let newest = s.impacts.iter().map(|c| c.2).max().unwrap_or(0);
+            let already = seen.impacts_until;
+            for &(x, _, _) in s.impacts.iter().filter(|c| c.2 > already) {
+                let at = Vec2::new((x / PX) as f32, GROUND_Y + 2.0);
+                let fire = [Color::srgb(1.0, 0.95, 0.6), Color::srgb(1.0, 0.7, 0.2)];
+                let dust = [Color::srgb(0.75, 0.68, 0.6), Color::srgb(0.55, 0.5, 0.45)];
+                burst(&mut commands, &mut seen, at, 8, 40.0, 150.0, &fire, 2.0, 0.3, -300.0);
+                burst(&mut commands, &mut seen, at, 5, 15.0, 60.0, &dust, 4.0, 0.45, -30.0);
+            }
+            seen.impacts_until = seen.impacts_until.max(newest);
+        }
         // heat-seeking missiles leave a trail of golden sparks
         for p in s.projectiles.iter().filter(|p| p.owner == i) {
             if data.moves[p.move_index].projectile.as_ref().is_some_and(|d| d.homing) && s.frame % 2 == 0 {
@@ -381,10 +423,49 @@ pub fn emit(
             }
         }
 
+        // writing: sparks fly off the pen while the move winds up (purple for the hail, gold for the beam)
+        if f.state == FighterState::Attack {
+            let mv = &data.moves[f.attack];
+            if let (Some((r, g, b)), true) = (mv.sparks, f.state_frame <= mv.startup) {
+                let colour = Color::srgb(r, g, b);
+                let pale = Color::srgb((r + 1.0) / 2.0, (g + 1.0) / 2.0, (b + 1.0) / 2.0);
+                if s.frame % 2 == 0 {
+                    let at = feet + Vec2::new(towards * 17.0, 33.0);
+                    for k in 0..2 {
+                        let v = Vec2::new(towards * seen.range(5.0, 40.0), seen.range(14.0, 50.0));
+                        spawn(&mut commands, at + Vec2::new(seen.range(-3.0, 3.0), seen.range(-2.0, 4.0)), v, if k == 0 { colour } else { pale }, 2.0, 0.55, -30.0, true);
+                    }
+                }
+            }
+            // the beam of light: sparks and a shake where it lands as it sweeps
+            if let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) {
+                if f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.active {
+                    let progress = (f.state_frame - mv.startup) as f32 / mv.active.max(1) as f32;
+                    let lock_x = (lock / PX) as f32;
+                    let (start, end) = (lock_x - towards * b.lead as f32, lock_x + towards * b.sweep as f32);
+                    let at = Vec2::new(start + (end - start) * progress, GROUND_Y + 2.0);
+                    let light = [Color::WHITE, Color::srgb(1.0, 0.95, 0.6), Color::srgb(1.0, 0.85, 0.35)];
+                    for _ in 0..4 {
+                        let v = Vec2::new(seen.range(-60.0, 60.0), seen.range(20.0, 110.0));
+                        spawn(&mut commands, at + Vec2::new(seen.range(-8.0, 8.0), 0.0), v, light[(seen.rand() * 3.0) as usize % 3], 3.0, 0.45, -200.0, true);
+                    }
+                    shake.0 = shake.0.max(2.5);
+                }
+            }
+        }
         // the moon appearing: sparkles where it hangs
         if let Some((mx, my, age)) = f.moon {
             let at = Vec2::new((mx / PX) as f32, GROUND_Y + (my / PX) as f32);
-            if age == 1 {
+            let portal = f.state == FighterState::Attack && data.moves[f.attack].projectile.as_ref().is_some_and(|p| p.over_target);
+            if portal {
+                let violet = [Color::srgb(0.72, 0.3, 1.0), Color::srgb(0.9, 0.7, 1.0), Color::WHITE];
+                if age == 1 {
+                    burst(&mut commands, &mut seen, at, 24, 40.0, 130.0, &violet, 3.0, 0.6, 0.0);
+                } else if s.frame % 3 == 0 {
+                    let off = Vec2::new(seen.range(-16.0, 16.0), seen.range(-10.0, 10.0));
+                    spawn(&mut commands, at + off, Vec2::new(0.0, -seen.range(5.0, 25.0)), violet[(s.frame as usize / 3) % 3], 2.0, 0.5, 0.0, true);
+                }
+            } else if age == 1 {
                 burst(&mut commands, &mut seen, at, 20, 40.0, 120.0, &gold, 3.0, 0.6, 0.0);
             } else if age < 50 && s.frame % 5 == 0 {
                 let off = Vec2::new(seen.range(-14.0, 14.0), seen.range(-14.0, 14.0));
@@ -397,6 +478,17 @@ pub fn emit(
         let mut lobs_now: Vec<(usize, i32, i32)> = Vec::new();
         for p in s.projectiles.iter().filter(|p| p.owner == i) {
             let Some(pd) = data.moves[p.move_index].projectile.as_ref().filter(|d| d.lob) else { continue };
+            if pd.over_target {
+                // a falling knife: a silver trail, and a few sparks where it lands
+                let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
+                let silver = [Color::WHITE, Color::srgb(0.75, 0.8, 0.9), Color::srgb(0.72, 0.4, 1.0)];
+                spawn(&mut commands, at + Vec2::new(seen.range(-2.0, 2.0), 4.0), Vec2::new(0.0, 12.0), silver[(s.frame as usize) % 3], 2.0, 0.25, 0.0, true);
+                if p.age + 1 >= pd.travel_frames {
+                    let ground = Vec2::new((p.land_x / PX) as f32, GROUND_Y + 1.0);
+                    burst(&mut commands, &mut seen, ground, 7, 30.0, 110.0, &silver, 2.0, 0.3, -240.0);
+                }
+                continue;
+            }
             let (land, radius) = ((p.land_x / PX), pd.splash_radius);
             lobs_now.push((i, land, radius));
             for _ in 0..2 {
@@ -416,7 +508,7 @@ pub fn emit(
         }
         // before the fish is shot, the landing spot is already marked with bubbles
         if f.state == FighterState::Attack && !f.launched {
-            if let (Some(land), Some(pd)) = (f.lob_target, data.moves[f.attack].projectile.as_ref().filter(|d| d.lob)) {
+            if let (Some(land), Some(pd)) = (f.lob_target, data.moves[f.attack].projectile.as_ref().filter(|d| d.lob && !d.over_target)) {
                 let (land, radius) = (land / PX, pd.splash_radius);
                 for _ in 0..2 {
                     let x = land as f32 + seen.range(-(radius as f32), radius as f32);
@@ -459,8 +551,11 @@ pub fn emit(
         for p in s.projectiles.iter().filter(|p| p.owner == i) {
             let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
             let mv = &data.moves[p.move_index];
+            // the blue particle is blue, everything else glitters gold
+            let blue_orb = [Color::srgb(0.4, 0.65, 1.0), Color::srgb(0.7, 0.88, 1.0), Color::WHITE];
+            let gold = if mv.projectile.as_ref().is_some_and(|d| d.image_name() == "orb") { &blue_orb } else { &gold };
             if p.age == 1 {
-                burst(&mut commands, &mut seen, at, 14, 50.0, 150.0, &gold, 3.0, 0.4, 0.0);
+                burst(&mut commands, &mut seen, at, 14, 50.0, 150.0, gold, 3.0, 0.4, 0.0);
                 if mv.anim == AnimKind::Volley {
                     spawn(&mut commands, at, Vec2::ZERO, Color::WHITE, 12.0, 0.1, 0.0, true);
                     shake.0 = shake.0.max(2.0);
@@ -494,7 +589,7 @@ pub fn emit(
             spawn(&mut commands, head + off, Vec2::new(0.0, 18.0), gold[(s.frame as usize / 6) % 3], 2.0, 0.5, 0.0, true);
         }
         seen.ready[i] = ready;
-        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y, slamming: f.slamming });
+        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y, slamming: f.slamming, futile: f.futile > 0 });
     }
 }
 

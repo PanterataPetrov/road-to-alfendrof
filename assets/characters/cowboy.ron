@@ -3,12 +3,14 @@
 // Light: the Gunslinger's lights (a finger-gun shot, a low slap, an aimed shot in the air). The combo is two shots and
 //        then a lasso that pulls the opponent in a little and stuns them.
 // Heavy: he fires both finger guns at the ground (the splash hurts anyone close), the recoil launches him up, and at the
-//        top he shoots the Gunslinger's three-bullet volley at the enemy (each bullet half as strong as the Gunslinger's).
+//        top (three times as high as before, then he floats down slowly) he shoots three bullets (half as strong as the
+//        Gunslinger's) at the floor where the enemy stands, never at the enemy's body, so the enemy can jump them. He can
+//        use it while being hit to get out of a combo.
 // Special: he throws his hat. It sits on his head the whole fight and glows once the meter is full. It is gone while
 //        the throw itself recharges. Where it lands it puts the curse on the opponent: a glowing blue ring split into a
 //        left and a right half. Hitting them with any other attack from the left removes the left half, from the right
 //        the right half; with both gone the ring squeezes shut and deals the special's damage.
-// Shooting in the air tilts his whole body back (air_shot_tilt).
+// Shooting in the air leans him back (air_shot_tilt: separate drawings, three stages of the lean).
 // See ayz.ron for what each field means; leap / leap_vx / radial / volley_delay / shot_damage / curse are explained in
 // src/sim/data.rs.
 (
@@ -50,12 +52,12 @@
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 26, y: 26, aim_y: 28, travel_frames: 12, lifetime: 40, size: (10, 6), image: Some("bullet"), aimed: true))),
         // both guns at the ground (the splash), up he goes, then the volley at the enemy; needs the ground
-        (name: "Gun Boost", button: Heavy, crouching: false, anim: Kicks, walk_pct: 0,
-         leap: 750, leap_vx: 60, radial: true, guard_hits: Some(2), cooldown: 150,
-         volley: 3, volley_gap: 8, volley_delay: 3, shot_damage: Some(11),
-         startup: 14, active: 5, recovery: 22, damage: 44, hitstun: 22, blockstun: 12, knockback: 5, hitstop: 7,
+        (name: "Gun Boost", button: Heavy, crouching: false, anim: Boost, walk_pct: 0,
+         leap: 1296, leap_vx: 40, slow_fall: 20, escape: true, radial: true, guard_hits: Some(2), cooldown: 150,
+         volley: 3, volley_gap: 8, volley_delay: 24, shot_damage: Some(11),
+         startup: 14, active: 5, recovery: 55, damage: 44, hitstun: 22, blockstun: 12, knockback: 5, hitstop: 7,
          hitbox: (x: -48, y: 0, w: 96, h: 30),
-         projectile: Some((x: 30, y: 30, aim_y: 30, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet"), aimed: true))),
+         projectile: Some((x: 30, y: 30, aim_y: 30, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet"), aimed: true, aim_ground: true))),
         // the hat: it flies at the enemy and the curse starts where it lands (the damage comes when the ring closes)
         (name: "Hell's Hat", button: Special, crouching: false, anim: Summon, walk_pct: 0, cooldown: 420,
          curse: Some((duration: 420, squeeze: 24)),

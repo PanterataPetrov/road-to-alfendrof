@@ -158,7 +158,14 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
         DespawnOnExit(state.clone()),
         TitleLogo,
         Sprite::from_image(asset_server.load("ui/logo.png")),
-        Transform::from_xyz(0.0, 58.0, 3.0),
+        Transform::from_xyz(39.0, 58.0, 3.0),
+    ));
+    // the Templar-cross shield beside the wordmark
+    commands.spawn((
+        DespawnOnExit(state.clone()),
+        TitleLogo,
+        Sprite::from_image(asset_server.load("ui/emblem.png")),
+        Transform::from_xyz(-105.0, 58.0, 3.0),
     ));
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.7), Vec2::new(86.0, 12.0)), Transform::from_xyz(0.0, 8.0, 4.0)));
     let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);

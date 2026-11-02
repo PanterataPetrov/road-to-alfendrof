@@ -53,6 +53,12 @@ pub enum Frame {
     Read(usize),
     /// The staff slam: raised, the top of the swing, the slam, recovery.
     Staff(usize),
+    /// The Gun Boost: guns down ready, firing at the ground, launched up, shooting down from the air.
+    Boost(usize),
+    /// Leaning back as he shoots in the air: a little, more, all the way.
+    Lean(usize),
+    /// Writing in a book: it opens, two strokes alternate while he writes, a flourish at the end.
+    Write(usize),
     /// The roll: tuck in, a tight ball turning in eighths of a turn (1..=8), then rise (9).
     Roll(usize),
 }
@@ -87,6 +93,9 @@ impl Frame {
             Frame::Read(i) => format!("read_{i}"),
             Frame::Staff(i) => format!("staff_{i}"),
             Frame::Roll(i) => format!("roll_{i}"),
+            Frame::Boost(i) => format!("boost_{i}"),
+            Frame::Write(i) => format!("write_{i}"),
+            Frame::Lean(i) => format!("lean_{i}"),
         }
     }
 
@@ -126,6 +135,12 @@ pub const GRAB_FRAMES: usize = 6;
 pub const READ_FRAMES: usize = 4;
 pub const STAFF_FRAMES: usize = 4;
 
+/// The Gun Boost drawings, and the stages of leaning back while shooting in the air.
+pub const BOOST_FRAMES: usize = 4;
+/// Book-writing drawings.
+pub const WRITE_FRAMES: usize = 4;
+pub const LEAN_FRAMES: usize = 3;
+
 /// Finger-gun volley drawings.
 pub const GUN_FRAMES: usize = 5;
 
@@ -156,6 +171,15 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Staff) {
         v.extend((0..STAFF_FRAMES).map(Frame::Staff));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Boost) {
+        v.extend((0..BOOST_FRAMES).map(Frame::Boost));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Write) {
+        v.extend((0..WRITE_FRAMES).map(Frame::Write));
+    }
+    if data.air_shot_tilt {
+        v.extend((0..LEAN_FRAMES).map(Frame::Lean));
     }
     v
 }
@@ -310,6 +334,22 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
     let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
     let frame = f.state_frame;
     let startup = mv.startup.max(1);
+    // shooting in the air leans him back: a little as he aims, all the way as the shot goes, and back up
+    if data.air_shot_tilt && mv.air && mv.projectile.is_some() {
+        let shot = startup + mv.volley_delay;
+        let hold = shot + mv.active + 4;
+        return Frame::Lean(if frame + 8 <= shot {
+            0
+        } else if frame < shot {
+            1
+        } else if frame <= hold {
+            2
+        } else if frame <= hold + 6 {
+            1
+        } else {
+            0
+        });
+    }
     if mv.air && mv.anim != AnimKind::Summon {
         let strike = (frame > mv.startup) as usize;
         return match mv.anim {
@@ -333,6 +373,20 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
                 Frame::Kick(2 + (k % 2) as usize)
             } else {
                 Frame::Kick(1)
+            }
+        }
+        AnimKind::Boost => {
+            // crouched with the guns down, then firing at the ground; once launched, up in the air until
+            // the volley begins, which is shot leaning back with the guns pointing down
+            let first_shot = mv.startup + mv.volley_delay;
+            if frame * 2 <= mv.startup {
+                Frame::Boost(0)
+            } else if frame <= mv.startup + 3 {
+                Frame::Boost(1)
+            } else if frame + 2 < first_shot {
+                Frame::Boost(2)
+            } else {
+                Frame::Boost(3)
             }
         }
         AnimKind::Lecture => {
@@ -372,6 +426,14 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
                 3
             })
         }
+        // the book opens, two strokes alternate while he writes, then the flourish
+        AnimKind::Write => Frame::Write(if frame * 100 <= mv.startup * 18 {
+            0
+        } else if frame <= mv.startup {
+            1 + ((frame / 6) % 2) as usize
+        } else {
+            3
+        }),
         AnimKind::Staff => Frame::Staff(if frame * 2 <= mv.startup {
             0
         } else if frame <= mv.startup {
@@ -685,5 +747,51 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), count);
         assert_eq!(count, 2 + 6 + 5 + 3 + 4 + 2 + 2 + 2 + 4 + 6 + 2);
+    }
+
+    fn cowboy() -> CharacterData {
+        CharacterData::from_ron(include_str!("../assets/characters/cowboy.ron")).unwrap()
+    }
+
+    #[test]
+    fn the_air_shot_leans_back_in_three_separate_drawings_and_straightens_up() {
+        let c = cowboy();
+        let shot = c.moves.iter().position(|m| m.name == "Air Shot").unwrap();
+        let mut f = Fighter::new(0, 1);
+        f.state = FighterState::Attack;
+        f.attack = shot;
+        f.y = 40 * 100;
+        let at = |f: &mut Fighter, frame: u32| {
+            f.state_frame = frame;
+            frame_for(f, &c, false, 0)
+        };
+        let m = &c.moves[shot];
+        assert_eq!(at(&mut f, 1), Frame::Lean(0));
+        assert_eq!(at(&mut f, m.startup - 3), Frame::Lean(1));
+        assert_eq!(at(&mut f, m.startup + 1), Frame::Lean(2));
+        assert_eq!(at(&mut f, m.startup + m.active + 8), Frame::Lean(1), "coming back up");
+        assert_eq!(at(&mut f, m.total_frames()), Frame::Lean(0));
+        let needed = frames_for(&c);
+        assert!((0..LEAN_FRAMES).all(|i| needed.contains(&Frame::Lean(i))), "his folder needs the three leaning drawings");
+    }
+
+    #[test]
+    fn the_gun_boost_is_drawn_guns_down_then_firing_then_launched_then_shooting_down() {
+        let c = cowboy();
+        let boost = c.moves.iter().position(|m| m.name == "Gun Boost").unwrap();
+        let m = &c.moves[boost];
+        let mut f = Fighter::new(0, 1);
+        f.state = FighterState::Attack;
+        f.attack = boost;
+        let at = |f: &mut Fighter, frame: u32| {
+            f.state_frame = frame;
+            frame_for(f, &c, false, 0)
+        };
+        assert_eq!(at(&mut f, 1), Frame::Boost(0));
+        assert_eq!(at(&mut f, m.startup), Frame::Boost(1), "the guns go off at the ground");
+        assert_eq!(at(&mut f, m.startup + m.active + 1), Frame::Boost(2), "launched up");
+        assert_eq!(at(&mut f, m.startup + m.volley_delay + 1), Frame::Boost(3), "the volley");
+        let needed = frames_for(&c);
+        assert!((0..BOOST_FRAMES).all(|i| needed.contains(&Frame::Boost(i))));
     }
 }

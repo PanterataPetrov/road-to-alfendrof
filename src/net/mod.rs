@@ -148,7 +148,7 @@ mod tests {
     /// each time (ggrs errors if not).
     #[test]
     fn the_simulation_survives_rollback_every_frame() {
-        let names = ["ayz", "anaran", "junkhead", "gunslinger", "cowboy", "evilayz"];
+        let names = ["ayz", "anaran", "junkhead", "scribe", "cowboy", "evilayz"];
         for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0)] {
             let (ca, cb) = (load(names[a]), load(names[b]));
             let mut session = start_synctest(7).unwrap();
