@@ -2,6 +2,7 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod menus;
+mod music;
 mod online;
 mod particles;
 mod render;
@@ -283,6 +284,7 @@ fn main() {
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
         .add_plugins(menus::MenuPlugin)
+        .add_plugins(music::MusicPlugin)
         .add_plugins(update::UpdatePlugin)
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)

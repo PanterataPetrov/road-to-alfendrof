@@ -2,7 +2,7 @@
 ; `ISCC.exe installer\road-to-alfendrof.iss`. The installer is written to installer\Output.
 
 #define AppName "Road to Alfendrof"
-#define AppVersion "0.1.1"
+#define AppVersion "0.1.2"
 #define AppExe "RoadToAlfendrof.exe"
 
 [Setup]
@@ -43,3 +43,11 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Play {#AppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+; an update started by the game itself (it passes /relaunch=1) starts the game again when done
+Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: Relaunch
+
+[Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
