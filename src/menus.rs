@@ -92,7 +92,7 @@ fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32,
         .spawn((
             DespawnOnExit(state),
             Text2d::new(text),
-            TextFont { font_size: FontSize::Px(size), ..default() },
+            crate::pixel_font(size),
             TextColor(color),
             Transform::from_xyz(0.0, y, 5.0),
         ))

@@ -51,6 +51,9 @@ pub struct CharacterData {
     /// How fast the special meter fills, in percent of normal (default 100).
     #[serde(default)]
     pub meter_gain_pct: Option<i32>,
+    /// Shooting in the air tilts his whole body back (see `render::pose_bodies`).
+    #[serde(default)]
+    pub air_shot_tilt: bool,
     pub moves: Vec<MoveData>,
     /// How the special being ready is shown.
     #[serde(default)]
@@ -64,6 +67,9 @@ pub enum MarkKind {
     Scar { color: (f32, f32, f32), glow: (f32, f32, f32) },
     /// A hat that is only on the head when the special is ready.
     Hat,
+    /// A hat that is always on the head, glows when the special is ready, and is gone while the special
+    /// (the throw itself, not the meter) recharges.
+    GlowingHat,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -297,6 +303,14 @@ pub struct MoveData {
     pub volley: u32,
     #[serde(default)]
     pub volley_gap: u32,
+    /// Frames after the startup ends before the first shot goes out (the cowboy's volley waits until
+    /// he is up in the air).
+    #[serde(default)]
+    pub volley_delay: u32,
+    /// What each projectile hits for, if that isn't the move's `damage` (the cowboy's heavy splashes
+    /// for `damage` on the ground and then shoots weaker bullets).
+    #[serde(default)]
+    pub shot_damage: Option<i32>,
     /// Projectile launched on the first active frame, using this move's damage and stun.
     #[serde(default)]
     pub projectile: Option<ProjectileData>,
@@ -323,6 +337,9 @@ pub struct MoveData {
     /// Air move that hangs (no gravity) from its start to its last active frame.
     #[serde(default)]
     pub hover: bool,
+    /// The whip layer is drawn for this move even though the character isn't a whip fighter (the cowboy's lasso).
+    #[serde(default)]
+    pub rope: bool,
     /// Hitbox heights are measured from the ground instead of the feet (an air move that lashes at
     /// the floor).
     #[serde(default)]
@@ -366,6 +383,18 @@ pub struct ChannelData {
 }
 
 impl MoveData {
+    /// The move as its projectiles hit: with `shot_damage` in place of `damage` if it has one.
+    pub fn as_shot(&self) -> std::borrow::Cow<'_, MoveData> {
+        match self.shot_damage {
+            Some(damage) => {
+                let mut m = self.clone();
+                m.damage = damage;
+                std::borrow::Cow::Owned(m)
+            }
+            None => std::borrow::Cow::Borrowed(self),
+        }
+    }
+
     pub fn guard_need(&self) -> u32 {
         self.guard_hits.unwrap_or(if self.button == Button::Light { 0 } else { 1 })
     }

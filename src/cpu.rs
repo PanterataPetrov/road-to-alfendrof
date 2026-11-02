@@ -49,6 +49,16 @@ pub fn cpu_input(state: &GameState, me: usize, data: &CharacterData) -> Input {
 /// close-range one (a ranged CPU then keeps further away and shoots more), and every champion uses
 /// its own tools.
 pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &CharacterData) -> Input {
+    let input = choose_input(state, me, data, opp);
+    // a heavy that's cooling down does nothing, so don't waste the press (a light goes out instead)
+    let cooling = data.find_move(Button::Heavy, false, false).is_some_and(|i| state.fighters[me].on_cooldown(i, data));
+    if cooling && input.has(Input::HEAVY) {
+        return Input(input.0 & !Input::HEAVY | Input::LIGHT);
+    }
+    input
+}
+
+fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &CharacterData) -> Input {
     if state.phase != Phase::Fighting {
         return Input::default();
     }
@@ -75,6 +85,8 @@ pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &Ch
     // a shot of theirs (or a homing missile) is close to me
     let incoming = state.projectiles.iter().any(|p| p.owner != me && (p.x - m.x).abs() / PX < 90);
     let button = |flag: u16| Input(if first_frame { flag } else { 0 });
+    // the standing heavy is still cooling down
+    let heavy_cooling = data.find_move(Button::Heavy, false, false).is_some_and(|i| m.on_cooldown(i, data));
 
     // a zoner stays out of reach; near a wall it can't back off any further
     let wall = (GameState::STAGE_HALF_WIDTH - Fighter::HALF_WIDTH) / PX;
@@ -92,7 +104,7 @@ pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &Ch
     // a ranged opponent shooting from afar, or a shot already on its way: dodge it, block it, or answer it
     if m.is_neutral() && ((vs_ranged && o.state == FighterState::Attack && opponent_dist >= DANGER_RANGE) || incoming) && roll < 60 {
         // a shockwave around himself destroys the shots near him (Anaran's staff slam)
-        if incoming && m.cooldown_left == 0 && data.moves.iter().any(|mv| mv.clears_projectiles && mv.button == Button::Heavy) {
+        if incoming && data.moves.iter().enumerate().any(|(i, mv)| mv.clears_projectiles && mv.button == Button::Heavy && !m.on_cooldown(i, data)) {
             return button(Input::HEAVY);
         }
         return Input(match (my_style, roll) {
@@ -162,7 +174,7 @@ pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &Ch
         // the heavy is only worth using if it reaches from here
         let heavy_reaches = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]).is_some_and(|h| h.hitbox.w <= 0 || dist <= reach(h, false) - 8);
         if dist < close {
-            if slam && m.cooldown_left == 0 && dist < 60 && roll < 50 {
+            if slam && !heavy_cooling && dist < 60 && roll < 50 {
                 return button(Input::HEAVY);
             }
             if cornered {
@@ -204,16 +216,16 @@ pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &Ch
         }
         let heavy = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]);
         // against someone who shoots from afar, the pulling lash is used much more to close the gap
-        if heavy.is_some_and(|h| h.pull_self && m.cooldown_left == 0 && dist <= reach(h, false) - 15) && roll < if vs_ranged { 80 } else { 50 } {
+        if heavy.is_some_and(|h| h.pull_self && !heavy_cooling && dist <= reach(h, false) - 15) && roll < if vs_ranged { 80 } else { 50 } {
             return button(Input::HEAVY);
         }
         // a leaping heavy (the dive kicks) jumps the gap
-        if vs_ranged && heavy.is_some_and(|h| h.leap > 0) && dist > 60 && dist < 140 && roll < 35 {
+        if vs_ranged && heavy.is_some_and(jumps_the_gap) && dist > 60 && dist < 140 && roll < 35 {
             return button(Input::HEAVY);
         }
         // a rusher dashes in (tapping the direction twice), dives from further out and hops all the time
         if data.cpu_rush {
-            if heavy.is_some_and(|h| h.leap > 0) && dist > 55 && dist < 170 && roll < 30 {
+            if heavy.is_some_and(jumps_the_gap) && dist > 55 && dist < 170 && roll < 30 {
                 return button(Input::HEAVY);
             }
             if dist > 85 && roll < 60 {
@@ -243,6 +255,11 @@ pub fn cpu_input_vs(state: &GameState, me: usize, data: &CharacterData, opp: &Ch
         75..=84 => Input(if vs_ranged { toward } else { away }),
         _ => Input::default(),
     }
+}
+
+/// A heavy that leaps far enough forward to close a gap (the cowboy's gun boost goes almost straight up).
+fn jumps_the_gap(h: &crate::sim::MoveData) -> bool {
+    h.leap > 0 && h.leap_vx >= 100
 }
 
 #[cfg(test)]
@@ -464,10 +481,10 @@ mod tests {
 
     #[test]
     fn the_champions_are_sorted_into_ranged_and_close_range() {
-        for ranged in ["ayz", "evilayz", "anaran", "gunslinger"] {
+        for ranged in ["ayz", "evilayz", "anaran", "gunslinger", "cowboy"] {
             assert_eq!(style_of(&load(ranged)), Style::Ranged, "{ranged}");
         }
-        for melee in ["cowboy", "junkhead"] {
+        for melee in ["junkhead"] {
             assert_eq!(style_of(&load(melee)), Style::Melee, "{melee}");
         }
     }
@@ -494,7 +511,7 @@ mod tests {
 
     #[test]
     fn a_ranged_cpu_keeps_further_away_from_a_close_range_fighter_than_from_another_shooter() {
-        let (professor, cowboy, gunslinger) = (load("ayz"), load("cowboy"), load("gunslinger"));
+        let (professor, cowboy, gunslinger) = (load("ayz"), load("junkhead"), load("gunslinger"));
         let (vs_melee, vs_ranged) = (mean_gap(&professor, &cowboy), mean_gap(&professor, &gunslinger));
         assert!(vs_melee > vs_ranged + 8, "the Professor sat {vs_melee} px from the cowboy but {vs_ranged} px from the Gunslinger");
     }
@@ -538,8 +555,8 @@ mod tests {
         });
         assert!(slams.count() >= 10, "the staff slam is the answer to a shot");
         // while it is cooling down he does something else
-        s.fighters[1].cooldown_move = anaran.moves.iter().position(|m| m.name == "Staff Slam").unwrap();
-        s.fighters[1].cooldown_left = 100;
+        let slam = anaran.moves.iter().position(|m| m.name == "Staff Slam").unwrap();
+        s.fighters[1].cooldowns[slam] = 100;
         assert_eq!((0..40u32).filter(|w| { s.frame = w * 8; cpu_input_vs(&s, 1, &anaran, &gunslinger).has(Input::HEAVY) }).count(), 0);
     }
 

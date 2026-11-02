@@ -1,10 +1,16 @@
-// Cowboy From Hell: completely bald, a dark brown ribbed tank top, silver chain and earrings, grey jeans, big brown
-// cowboy boots with spurs and a whale tattoo on his left arm.
-// Light: a punch that alternates arms while you spam it. Heavy: a leap with three kicks downwards.
-// Special (the tattoo glows when the meter is full): curses the opponent with a glowing blue ring split into a left
-// and a right half. Hitting them with any other attack from the left removes the left half, from the right the right
-// half; with both gone the ring squeezes shut and deals the special's damage.
-// See ayz.ron for what each field means; leap / leap_vx / hits / hit_gap / curse are explained in src/sim/data.rs.
+// Cowboy From Hell: completely bald under a cowboy hat, a dark brown ribbed tank top, silver chain and earrings, grey
+// jeans, big brown cowboy boots with spurs and a whale tattoo on his left arm.
+// Light: the Gunslinger's lights (a finger-gun shot, a low slap, an aimed shot in the air). The combo is two shots and
+//        then a lasso that pulls the opponent in a little and stuns them.
+// Heavy: he fires both finger guns at the ground (the splash hurts anyone close), the recoil launches him up, and at the
+//        top he shoots the Gunslinger's three-bullet volley at the enemy (each bullet half as strong as the Gunslinger's).
+// Special: he throws his hat. It sits on his head the whole fight and glows once the meter is full. It is gone while
+//        the throw itself recharges. Where it lands it puts the curse on the opponent: a glowing blue ring split into a
+//        left and a right half. Hitting them with any other attack from the left removes the left half, from the right
+//        the right half; with both gone the ring squeezes shut and deals the special's damage.
+// Shooting in the air tilts his whole body back (air_shot_tilt).
+// See ayz.ron for what each field means; leap / leap_vx / radial / volley_delay / shot_damage / curse are explained in
+// src/sim/data.rs.
 (
     name: "Cowboy From Hell",
     subtitle: Some("Proud owner of real cattle"),
@@ -12,33 +18,49 @@
     color: (0.85, 0.58, 0.32),
     walk_speed: 210,
     jump_speed: 1050,
-    // the CPU rushes in: dashes, dive kicks and hops towards the opponent
+    // the CPU rushes in: dashes, leaps and hops towards the opponent
     cpu_rush: true,
     // a third less health than the others (667 of 1000)
     health: Some(667),
     // the special meter fills at 43% of the normal rate
     meter_gain_pct: Some(43),
-    special_mark: Some(Scar(color: (0.25, 0.5, 0.85), glow: (0.35, 0.72, 1.0))),
+    special_mark: Some(GlowingHat),
+    air_shot_tilt: true,
     moves: [
-        (name: "Punch", button: Light, crouching: false, anim: Punch, walk_pct: 60,
-         startup: 4, active: 3, recovery: 7, damage: 30, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 12, y: 28, w: 27, h: 12)),
-        (name: "Low Punch", button: Light, crouching: true, anim: Soft, walk_pct: 0,
-         startup: 5, active: 3, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 12, y: 0, w: 27, h: 12)),
-        (name: "Dive Kicks", button: Heavy, crouching: false, anim: Kicks, walk_pct: 0,
-         leap: 750, leap_vx: 150, hits: 3, hit_gap: 8, guard_hits: Some(3),
-         startup: 6, active: 6, recovery: 12, damage: 28, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 2, y: -6, w: 32, h: 28)),
-        (name: "Air Punch", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
-         startup: 4, active: 8, recovery: 8, damage: 32, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
-         hitbox: (x: 8, y: 0, w: 28, h: 24)),
-        (name: "Air Slam", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
-         startup: 9, active: 7, recovery: 10, damage: 66, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
-         hitbox: (x: 6, y: -4, w: 30, h: 34)),
-        (name: "Hell's Rose", button: Special, crouching: false, anim: Summon, walk_pct: 0,
-         startup: 22, active: 3, recovery: 22, damage: 200, hitstun: 0, blockstun: 0, knockback: 0, hitstop: 0,
+        // the combo: shot, shot, lasso
+        (name: "Finger Shot", button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(0),
+         startup: 9, active: 2, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         curse: Some((duration: 420, squeeze: 24))),
+         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
+        (name: "Finger Shot 2", button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(1),
+         startup: 9, active: 2, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
+        // third hit: the lasso drags the opponent in a little and leaves them stunned
+        (name: "Lasso", button: Light, crouching: false, anim: Punch, walk_pct: 0, finisher_move: true,
+         pull_foe: true, pull_gap: 38, assist: 8, rope: true,
+         startup: 11, active: 4, recovery: 16, damage: 30, hitstun: 48, blockstun: 10, knockback: 0, hitstop: 5,
+         hitbox: (x: 10, y: 26, w: 120, h: 18)),
+        (name: "Low Slap", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 10, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 12, y: 0, w: 26, h: 12)),
+        // the one aimed shot, from the air
+        (name: "Air Shot", button: Light, crouching: false, air: true, anim: Hard, walk_pct: 100,
+         startup: 15, active: 2, recovery: 14, damage: 45, hitstun: 18, blockstun: 12, knockback: 3, hitstop: 6,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 26, y: 26, aim_y: 28, travel_frames: 12, lifetime: 40, size: (10, 6), image: Some("bullet"), aimed: true))),
+        // both guns at the ground (the splash), up he goes, then the volley at the enemy; needs the ground
+        (name: "Gun Boost", button: Heavy, crouching: false, anim: Kicks, walk_pct: 0,
+         leap: 750, leap_vx: 60, radial: true, guard_hits: Some(2), cooldown: 150,
+         volley: 3, volley_gap: 8, volley_delay: 3, shot_damage: Some(11),
+         startup: 14, active: 5, recovery: 22, damage: 44, hitstun: 22, blockstun: 12, knockback: 5, hitstop: 7,
+         hitbox: (x: -48, y: 0, w: 96, h: 30),
+         projectile: Some((x: 30, y: 30, aim_y: 30, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet"), aimed: true))),
+        // the hat: it flies at the enemy and the curse starts where it lands (the damage comes when the ring closes)
+        (name: "Hell's Hat", button: Special, crouching: false, anim: Summon, walk_pct: 0, cooldown: 420,
+         curse: Some((duration: 420, squeeze: 24)),
+         startup: 22, active: 3, recovery: 22, damage: 200, hitstun: 24, blockstun: 16, knockback: 0, hitstop: 8,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 20, y: 58, aim_y: 40, travel_frames: 30, lifetime: 90, size: (22, 14), image: Some("hat"), summon_image: Some("none"), spin: true))),
     ],
 )

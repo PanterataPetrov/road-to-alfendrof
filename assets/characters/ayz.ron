@@ -47,7 +47,7 @@
          projectile: Some((x: 14, y: 36, aim_y: 30, travel_frames: 25, lifetime: 100, size: (30, 13), image: Some("word_meh"), summon_image: Some("none"), aimed: true, upright: true))),
         // the grab: the first window pulls the enemy in and holds them (no damage, a long stun while he talks), the second shoves them away for the damage
         (name: "Here's the Thing", button: Heavy, crouching: false, anim: Grab, walk_pct: 0,
-         pull_foe: true, pull_gap: 26, hits: 2, hit_gap: 80,
+         pull_foe: true, pull_gap: 26, hits: 2, hit_gap: 80, cooldown: 240,
          hit_overrides: [(damage: 0, hitstun: 100, knockback: 0), (damage: 95, hitstun: 26, knockback: 10)],
          startup: 22, active: 4, recovery: 24, damage: 95, hitstun: 26, blockstun: 14, knockback: 10, hitstop: 6,
          hitbox: (x: 6, y: 8, w: 135, h: 48)),

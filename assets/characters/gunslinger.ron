@@ -24,7 +24,7 @@
         (name: "Low Slap", button: Light, crouching: true, anim: Soft, walk_pct: 0,
          startup: 10, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 12, y: 0, w: 26, h: 12)),
-        (name: "Finger Guns", button: Heavy, crouching: false, anim: Volley, walk_pct: 0, volley: 3, volley_gap: 10, guard_hits: Some(3),
+        (name: "Finger Guns", button: Heavy, crouching: false, anim: Volley, walk_pct: 0, volley: 3, volley_gap: 10, guard_hits: Some(3), cooldown: 90,
          startup: 20, active: 20, recovery: 34, damage: 22, hitstun: 16, blockstun: 10, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 34, y: 44, aim_y: 44, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet")))),

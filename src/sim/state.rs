@@ -678,7 +678,7 @@ impl GameState {
                 continue; // fired by fire_channels
             }
             let total = mv.volley.max(1);
-            if f.shots >= total || f.state_frame <= mv.startup + f.shots * mv.volley_gap {
+            if f.shots >= total || f.state_frame <= mv.startup + mv.volley_delay + f.shots * mv.volley_gap {
                 continue;
             }
             let (mut x, mut y) = (f.x + f.facing * p.x * PX, f.y + p.y * PX);
@@ -797,7 +797,8 @@ impl GameState {
             }
             let mv = &chars[owner].moves[f.attack];
             let Some(c) = mv.curse else { continue };
-            if f.state_frame != mv.startup + 1 || self.fighters[1 - owner].curse.is_some() {
+            // a curse that rides on a projectile (the thrown hat) is put on when that lands
+            if mv.projectile.is_some() || f.state_frame != mv.startup + 1 || self.fighters[1 - owner].curse.is_some() {
                 continue;
             }
             self.fighters[1 - owner].curse = Some(Curse {
@@ -1024,10 +1025,31 @@ impl GameState {
 
             if hit {
                 let blocked = self.can_block(defender, inputs[defender]);
-                let blocked = self.apply_hit(defender, mv, if p.vx >= 0 { 1 } else { -1 }, blocked, p.power);
-                self.gain_meter(owner, mv, mv.damage * p.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
-                self.register_light_hit(owner, mv, blocked);
-            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.damage * p.power / 100) {
+                let dir = if p.vx >= 0 { 1 } else { -1 };
+                if let Some(c) = mv.curse {
+                    // a thrown hat curses whoever it lands on instead of hurting them (the damage comes when the curse closes)
+                    let mut landed = mv.clone();
+                    landed.damage = 0;
+                    let blocked = self.apply_hit(defender, &landed, dir, blocked, p.power);
+                    if !blocked && self.fighters[defender].curse.is_none() {
+                        self.fighters[defender].curse = Some(Curse {
+                            owner,
+                            left: true,
+                            right: true,
+                            age: 0,
+                            squeeze: 0,
+                            squeeze_frames: c.squeeze,
+                            duration: c.duration,
+                            damage: mv.damage,
+                        });
+                    }
+                } else {
+                    let shot = mv.as_shot();
+                    let blocked = self.apply_hit(defender, &shot, dir, blocked, p.power);
+                    self.gain_meter(owner, &shot, shot.damage * p.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
+                    self.register_light_hit(owner, mv, blocked);
+                }
+            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.as_shot().damage * p.power / 100) {
                 // the shot is spent on the goblin
             } else if !gone {
                 self.projectiles.push(p);
@@ -1272,44 +1294,80 @@ mod tests {
     }
 
     #[test]
-    fn the_cowboys_punches_alternate_arms_when_spammed_and_reset_after_a_pause() {
+    fn the_cowboys_combo_is_two_finger_shots_and_then_a_lasso_that_drags_and_stuns() {
         let c = cowboy();
         let mut s = GameState::new();
-        let mut sides = Vec::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 90 * PX;
+        let mut thrown = Vec::new();
         for _ in 0..3 {
             s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
-            sides.push(s.fighters[0].punch_side);
-            for _ in 0..18 {
+            thrown.push(c.moves[s.fighters[0].attack].name.clone());
+            // let it land and the foe recover a little (the next light has to come inside the combo window)
+            for _ in 0..28 {
                 s.step([Input(0), Input(0)], [&c, &evilayz()]);
             }
+            s.fighters[1].x = 90 * PX;
+            s.fighters[1].stun = 0;
         }
-        assert_eq!(sides, [0, 1, 0], "right, left, right while spamming");
+        assert_eq!(thrown, ["Finger Shot", "Finger Shot 2", "Lasso"]);
+    }
+
+    #[test]
+    fn the_lasso_pulls_the_opponent_in_a_little_and_stuns_them_for_a_long_time() {
+        let c = cowboy();
+        let lasso = c.moves.iter().find(|m| m.name == "Lasso").unwrap();
+        assert!(lasso.pull_foe && lasso.hitstun >= 40 && lasso.rope);
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].combo = 2;
+        s.fighters[0].combo_timer = 20;
+        s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
+        assert_eq!(c.moves[s.fighters[0].attack].name, "Lasso");
+        for _ in 0..24 {
+            s.step([Input(0), Input(0)], [&c, &evilayz()]);
+        }
+        let gap = (s.fighters[1].x - s.fighters[0].x).abs() / PX;
+        assert!(gap <= lasso.pull_gap + 2, "the lasso should drag him in to about {} px, he is {gap} px away", lasso.pull_gap);
+        assert_eq!(s.fighters[1].state, FighterState::Hitstun, "and he is stunned");
+    }
+
+    #[test]
+    fn the_gun_boost_splashes_the_ground_launches_him_and_then_shoots_three_weak_bullets() {
+        let c = cowboy();
+        let boost = c.moves.iter().find(|m| m.name == "Gun Boost").unwrap();
+        let gunslinger_bullet = gunslinger().moves.iter().find(|m| m.name == "Finger Guns").unwrap().damage;
+        assert_eq!(boost.shot_damage, Some(gunslinger_bullet / 2), "his bullets are half as strong as the Gunslinger's");
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 40 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
+        let (mut highest, mut splash_taken) = (0, None);
         for _ in 0..80 {
             s.step([Input(0), Input(0)], [&c, &evilayz()]);
-        }
-        s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
-        assert_eq!(s.fighters[0].punch_side, 0, "after a pause the right arm starts again");
-    }
-
-    #[test]
-    fn the_dive_kicks_leap_and_hit_up_to_three_times_in_the_air() {
-        let c = cowboy();
-        let mut s = GameState::new();
-        s.fighters[1].x = s.fighters[0].x + 40 * PX;
-        s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
-        let mut highest = 0;
-        for _ in 0..70 {
-            s.step([Input(0), Input(0)], [&c, &evilayz()]);
             highest = highest.max(s.fighters[0].y);
+            if splash_taken.is_none() && s.fighters[1].health < Fighter::MAX_HEALTH && s.fighters[0].shots == 0 {
+                splash_taken = Some(Fighter::MAX_HEALTH - s.fighters[1].health);
+            }
         }
-        assert!(highest > 30 * PX, "he should leap, got {} px", highest / PX);
+        assert!(highest > 30 * PX, "he should be launched up, got {} px", highest / PX);
+        assert_eq!(splash_taken, Some(boost.damage), "the splash on the ground comes first, before any bullet");
+        assert_eq!(s.fighters[0].shots, 3, "then the volley of three");
         let taken = Fighter::MAX_HEALTH - s.fighters[1].health;
-        assert!(taken >= 2 * 28 && taken <= 3 * 28, "two or three kicks should land, took {taken}");
-        assert_eq!(s.fighters[0].state, FighterState::Idle, "he lands and the move ends");
+        assert!((taken - boost.damage) % boost.shot_damage.unwrap() == 0 && taken >= boost.damage, "the rest is bullets of {:?} each, took {taken}", boost.shot_damage);
     }
 
     #[test]
-    fn the_curse_needs_a_hit_from_each_side_and_then_squeezes_shut_for_the_damage() {
+    fn every_cowboy_heavy_and_the_hat_throw_have_cooldowns() {
+        let c = cowboy();
+        for m in c.moves.iter().filter(|m| m.button != Button::Light) {
+            assert!(m.cooldown > 0, "{} needs a cooldown", m.name);
+        }
+    }
+
+    #[test]
+    fn the_thrown_hat_curses_and_the_curse_needs_a_hit_from_each_side_and_then_squeezes_shut_for_the_damage() {
         let c = cowboy();
         let mut s = GameState::new();
         s.fighters[0].meter = Fighter::METER_MAX;
@@ -1328,7 +1386,8 @@ mod tests {
             s.step([Input(0), Input(0)], [&c, &evilayz()]);
         }
         s.fighters[0].x = s.fighters[1].x - 20 * PX;
-        s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
+        // (the low slap: a finger shot would start past someone this close)
+        s.step([Input(Input::LIGHT | Input::DOWN), Input(0)], [&c, &evilayz()]);
         for _ in 0..30 {
             s.step([Input(0), Input(0)], [&c, &evilayz()]);
         }
@@ -1339,8 +1398,8 @@ mod tests {
         // A punch from the right takes the other half; the ring squeezes and then the damage lands.
         s.fighters[0].x = s.fighters[1].x + 20 * PX;
         s.step([Input(0), Input(0)], [&c, &evilayz()]); // he turns to face the other way
-        s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
-        for _ in 0..8 {
+        s.step([Input(Input::LIGHT | Input::DOWN), Input(0)], [&c, &evilayz()]);
+        for _ in 0..16 {
             s.step([Input(0), Input(0)], [&c, &evilayz()]);
         }
         let curse = s.fighters[1].curse.expect("squeezing");
@@ -2824,15 +2883,16 @@ mod tests {
         astep(&mut s, Input::HEAVY, 0);
         let mut first_hit = None;
         let mut slams = 1;
+        let slam = a.moves.iter().position(|m| m.name == "Staff Slam").unwrap();
         for frame in 1..400 {
-            let before = s.fighters[0].cooldown_left;
+            let before = s.fighters[0].cooldown_left(slam);
             // mashing Heavy the whole time
             astep(&mut s, if frame % 2 == 0 { Input::HEAVY } else { 0 }, 0);
             if first_hit.is_none() && s.fighters[1].health < Fighter::MAX_HEALTH {
                 first_hit = Some(frame);
             }
             // a new cast restarts the cooldown
-            if s.fighters[0].cooldown_left > before && frame > 1 {
+            if s.fighters[0].cooldown_left(slam) > before && frame > 1 {
                 slams += 1;
                 assert!(frame >= 150, "cast again after only {frame} frames");
             }

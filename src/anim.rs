@@ -275,11 +275,11 @@ pub fn lash_hand(layer: &str) -> Option<(f32, f32)> {
 
 /// The whip layer to draw over the body now, if any. Named after the body drawing (`punch_1` -> `punch_1_whip`): cocked back in the wind-up, out on the strike (`x` after a finisher), slack in recovery.
 pub fn whip_layer(f: &Fighter, data: &CharacterData) -> Option<String> {
-    if !data.whip || f.state != FighterState::Attack {
+    if f.state != FighterState::Attack {
         return None;
     }
     let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-    if mv.anim == AnimKind::Kicks {
+    if !(data.whip || mv.rope) || mv.anim == AnimKind::Kicks {
         return None;
     }
     let stem = attack_frame(f, data).file_stem();

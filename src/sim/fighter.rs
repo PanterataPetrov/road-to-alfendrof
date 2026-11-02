@@ -4,6 +4,9 @@ use super::input::Input;
 /// Positions and velocities are integers in subpixels (1 pixel = `PX`). No floats, so rollback stays deterministic.
 pub const PX: i32 = 100;
 
+/// The most moves a character can have (one cooldown timer each).
+pub const MAX_MOVES: usize = 16;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FighterState {
     Idle,
@@ -114,9 +117,8 @@ pub struct Fighter {
     pub raven_away: bool,
     /// Frames left in which this fighter can't attack (the staff's shockwave).
     pub silenced: u32,
-    /// The move on cooldown (an index into the character's moves) and the frames left on it.
-    pub cooldown_move: usize,
-    pub cooldown_left: u32,
+    /// Frames left on each move's cooldown, by index into the character's moves.
+    pub cooldowns: [u32; MAX_MOVES],
     /// Dash double-tap: direction of the last tap and frames since.
     pub tap_dir: i32,
     pub tap_timer: u32,
@@ -242,8 +244,7 @@ impl Fighter {
             slam_landed: false,
             raven_away: false,
             silenced: 0,
-            cooldown_move: 0,
-            cooldown_left: 0,
+            cooldowns: [0; MAX_MOVES],
         }
     }
 
@@ -310,13 +311,19 @@ impl Fighter {
 
     /// Whether move `index` is still cooling down from its last use.
     pub fn on_cooldown(&self, index: usize, data: &CharacterData) -> bool {
-        self.cooldown_left > 0 && self.cooldown_move == index && data.moves[index].cooldown > 0
+        self.cooldown_left(index) > 0 && data.moves[index].cooldown > 0
+    }
+
+    /// Frames left before move `index` can be started again.
+    pub fn cooldown_left(&self, index: usize) -> u32 {
+        self.cooldowns.get(index).copied().unwrap_or(0)
     }
 
     fn begin_attack(&mut self, index: usize, mv: &MoveData) {
         if mv.cooldown > 0 {
-            self.cooldown_move = index;
-            self.cooldown_left = mv.cooldown;
+            if let Some(left) = self.cooldowns.get_mut(index) {
+                *left = mv.cooldown;
+            }
         }
         // the third light of a combo is the finisher
         if mv.button == Button::Light {
@@ -393,7 +400,9 @@ impl Fighter {
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
-        self.cooldown_left = self.cooldown_left.saturating_sub(1);
+        for left in &mut self.cooldowns {
+            *left = left.saturating_sub(1);
+        }
         if self.quick_timer > 0 {
             self.quick_timer -= 1;
             if self.quick_timer == 0 {

@@ -89,7 +89,7 @@ fn text(commands: &mut Commands, marker: impl Component, value: &str, size: f32,
         DespawnOnExit(AppState::Online),
         marker,
         Text2d::new(value),
-        TextFont { font_size: FontSize::Px(size), ..default() },
+        crate::pixel_font(size),
         TextColor(color),
         Transform::from_xyz(0.0, y, 5.0),
     ));

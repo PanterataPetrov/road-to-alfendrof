@@ -209,7 +209,7 @@ pub fn spawn_fighter(
                     b.spawn((
                         BubbleText(fighter),
                         Text2d::new(""),
-                        TextFont { font_size: FontSize::Px(8.0), ..default() },
+                        crate::pixel_font(8.0),
                         TextColor(Color::BLACK),
                         Transform::from_xyz(0.0, 0.0, 0.3),
                     ));
@@ -267,13 +267,44 @@ fn tint(state: FighterState) -> Color {
     }
 }
 
+/// How far back (radians) a fighter who shoots in the air leans, at most.
+const AIR_SHOT_TILT: f32 = 0.5;
+/// Height of the body's middle, which the tilt turns about (pixels above the feet).
+const TILT_PIVOT: f32 = 26.0;
+
+/// How far back a fighter is leaning right now (0 = upright, `AIR_SHOT_TILT` at most): he leans into each air shot,
+/// holds it while the shots go out and straightens up afterwards.
+fn air_shot_tilt(f: &Fighter, data: &t2f::sim::CharacterData) -> f32 {
+    if !data.air_shot_tilt || f.state != FighterState::Attack || f.y <= 0 {
+        return 0.0;
+    }
+    let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+    if mv.projectile.is_none() || mv.curse.is_some() {
+        return 0.0;
+    }
+    let first = (mv.startup + mv.volley_delay) as i32;
+    let last = first + (mv.volley.max(1) as i32 - 1) * mv.volley_gap as i32;
+    let frame = f.state_frame as i32;
+    let lean_in = ((frame + 8 - first) as f32 / 8.0).clamp(0.0, 1.0);
+    let lean_out = ((last + 18 - frame) as f32 / 10.0).clamp(0.0, 1.0);
+    // he only tilts once he is off the ground
+    let height = (f.y as f32 / (6 * PX) as f32).min(1.0);
+    AIR_SHOT_TILT * lean_in.min(lean_out) * height
+}
+
 /// Place each fighter, face the opponent, and knock them over when KO'd.
-pub fn pose_bodies(sim: Res<Sim>, mut bodies: Query<(&Body, &mut Transform)>) {
+pub fn pose_bodies(sim: Res<Sim>, roster: Res<Roster>, sel: Res<Selection>, mut bodies: Query<(&Body, &mut Transform)>) {
     for (Body(i), mut tf) in &mut bodies {
         let f = &sim.0.fighters[*i];
         tf.translation.x = (f.x / PX) as f32;
         tf.translation.y = GROUND_Y + (f.y / PX) as f32;
         tf.scale.x = f.facing as f32;
+        // leaning back is a turn away from the way he faces, about the middle of his body
+        let tilt = air_shot_tilt(f, &roster.0[sel.chars[*i]]);
+        let angle = tilt * f.facing as f32;
+        tf.rotation = Quat::from_rotation_z(angle);
+        tf.translation.x += TILT_PIVOT * angle.sin();
+        tf.translation.y += TILT_PIVOT * (1.0 - angle.cos());
     }
 }
 
@@ -408,6 +439,18 @@ pub fn animate_marks(
                 }
             }
             Some(MarkKind::Hat) => Color::srgba(1.0, 1.0, 1.0, if ready { 1.0 } else { 0.0 }),
+            Some(MarkKind::GlowingHat) => {
+                // gone while the throw recharges, glowing gold once it can be thrown again
+                let throw = data.moves.iter().position(|m| m.button == t2f::sim::Button::Special);
+                if throw.is_some_and(|i| f.on_cooldown(i, data)) {
+                    Color::srgba(1.0, 1.0, 1.0, 0.0)
+                } else if ready {
+                    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 7.0).sin();
+                    Color::srgb(1.3 + 0.4 * pulse, 1.15 + 0.35 * pulse, 0.55 + 0.25 * pulse)
+                } else {
+                    Color::WHITE
+                }
+            }
             None => Color::srgba(1.0, 1.0, 1.0, 0.0),
         };
     }
@@ -710,7 +753,7 @@ pub fn spawn_skill_bar(mut commands: Commands, hud: Single<Entity, With<crate::H
             h.spawn((
                 SkillTimer(k),
                 Text2d::new(""),
-                TextFont { font_size: FontSize::Px(9.0), ..default() },
+                crate::pixel_font(9.0),
                 TextColor(Color::WHITE),
                 Transform::from_xyz(x, y - 1.0, 10.3),
             ));
@@ -718,7 +761,7 @@ pub fn spawn_skill_bar(mut commands: Commands, hud: Single<Entity, With<crate::H
             h.spawn((Sprite::from_color(Color::srgba(0.04, 0.03, 0.08, 0.9), Vec2::new(8.0, 9.0)), Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.4)));
             h.spawn((
                 Text2d::new(key),
-                TextFont { font_size: FontSize::Px(7.0), ..default() },
+                crate::pixel_font(7.0),
                 TextColor(Color::srgb(1.0, 0.9, 0.5)),
                 Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.5),
             ));
@@ -753,7 +796,7 @@ pub fn animate_skill_bar(
         let raven_away = index.is_some_and(|i| data.moves[i].raven_move.is_some() && f.raven_away);
         let waiting_for_meter = buttons[k] == Button::Special && f.meter < Fighter::METER_MAX;
         let silenced = f.silenced > 0;
-        let frames = if cooling { f.cooldown_left } else if silenced { f.silenced } else { 0 };
+        let frames = if cooling { index.map_or(0, |i| f.cooldown_left(i)) } else if silenced { f.silenced } else { 0 };
         let shade = if waiting_for_meter && !cooling && !silenced { 1.0 - f.meter as f32 / Fighter::METER_MAX as f32 } else { 1.0 };
         (!(cooling || silenced || raven_away || waiting_for_meter), frames, shade)
     };
@@ -969,5 +1012,59 @@ pub fn animate_minions(
         let left = 480u32.saturating_sub(m.age);
         let alpha = if left < 30 { left as f32 / 30.0 } else { 1.0 };
         sprite.color = if m.hurt > 0 { Color::srgba(1.0, 0.35, 0.35, alpha) } else { Color::srgba(1.0, 1.0, 1.0, alpha) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use t2f::sim::CharacterData;
+
+    fn cowboy() -> CharacterData {
+        CharacterData::from_ron(include_str!("../assets/characters/cowboy.ron")).unwrap()
+    }
+
+    #[test]
+    fn he_leans_back_into_an_air_shot_and_straightens_up_after_it() {
+        let c = cowboy();
+        let shot = c.moves.iter().position(|m| m.name == "Air Shot").unwrap();
+        let mut f = Fighter::new(0, 1);
+        f.state = FighterState::Attack;
+        f.attack = shot;
+        f.y = 40 * PX;
+        let tilt_at = |f: &mut Fighter, frame: u32| {
+            f.state_frame = frame;
+            air_shot_tilt(f, &c)
+        };
+        let startup = c.moves[shot].startup;
+        assert_eq!(tilt_at(&mut f, 1), 0.0, "upright as the move starts");
+        let mid = tilt_at(&mut f, startup / 2 + 3);
+        let at_shot = tilt_at(&mut f, startup + 1);
+        assert!(mid > 0.0 && mid < at_shot, "he leans in over the wind-up: {mid} then {at_shot}");
+        assert!((at_shot - AIR_SHOT_TILT).abs() < 1e-4, "fully back when the shot goes out, got {at_shot}");
+        assert_eq!(tilt_at(&mut f, startup + 40), 0.0, "upright again afterwards");
+        // on the ground he doesn't tilt, and only characters with the flag do
+        f.y = 0;
+        assert_eq!(tilt_at(&mut f, startup + 1), 0.0);
+        f.y = 40 * PX;
+        let mut other = c.clone();
+        other.air_shot_tilt = false;
+        f.state_frame = startup + 1;
+        assert_eq!(air_shot_tilt(&f, &other), 0.0);
+    }
+
+    #[test]
+    fn the_gun_boost_volley_also_tilts_him_but_the_hat_throw_does_not() {
+        let c = cowboy();
+        let boost = c.moves.iter().position(|m| m.name == "Gun Boost").unwrap();
+        let hat = c.moves.iter().position(|m| m.name == "Hell's Hat").unwrap();
+        let mut f = Fighter::new(0, 1);
+        f.state = FighterState::Attack;
+        f.y = 40 * PX;
+        f.attack = boost;
+        f.state_frame = c.moves[boost].startup + c.moves[boost].volley_delay + 1;
+        assert!(air_shot_tilt(&f, &c) > 0.4, "he leans back while the volley goes out");
+        f.attack = hat;
+        assert_eq!(air_shot_tilt(&f, &c), 0.0);
     }
 }

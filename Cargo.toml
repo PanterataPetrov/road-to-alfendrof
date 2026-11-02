@@ -18,6 +18,10 @@ name = "gen_logo"
 path = "tools/gen_logo.rs"
 
 [[bin]]
+name = "gen_cowboy_hat"
+path = "tools/gen_cowboy_hat.rs"
+
+[[bin]]
 name = "trace_photo"
 path = "tools/trace_photo.rs"
 

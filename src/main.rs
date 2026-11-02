@@ -16,6 +16,8 @@ use t2f::stage::StageData;
 /// Pixel-art resolution; the window scales it up.
 const VIEW_W: f32 = 384.0;
 const VIEW_H: f32 = 216.0;
+/// Window pixels per pixel of the view at the default window size (1152 / 384).
+const SCREEN_SCALE: f32 = 3.0;
 /// Camera zoom: the narrowest view (fighters close together), how much wider than the gap between the
 /// fighters it is otherwise, how fast it follows, and how far up from the bottom of the view the floor sits.
 const MIN_VIEW_W: f32 = 346.0;
@@ -90,6 +92,19 @@ struct TimerText;
 struct BannerText;
 #[derive(Component)]
 struct SubBannerText;
+
+/// The pixel font that replaces Bevy's default one (Silkscreen, SIL Open Font License; see assets/fonts).
+const PIXEL_FONT: &[u8] = include_bytes!("../assets/fonts/silkscreen.ttf");
+
+/// Text in the pixel font. Its grid is 8 px, so sizes snap to a multiple of 8 to keep every letter on the
+/// same pixel grid as the art; the glyphs are antialiased and drawn at `SCREEN_SCALE` times their size.
+pub fn pixel_font(size: f32) -> TextFont {
+    TextFont {
+        font_size: FontSize::Px(((size + 2.0) / 8.0).floor().max(1.0) * 8.0),
+        font_smoothing: FontSmoothing::AntiAliased,
+        ..default()
+    }
+}
 
 /// The assets folder: next to the working directory if there is one, otherwise the project's own.
 fn assets_dir() -> PathBuf {
@@ -222,7 +237,9 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Road to Alfendrof".into(),
-                        resolution: WindowResolution::new(1152, 648),
+                        // the window is 3x the pixel-art view whatever the Windows display scaling is, so text
+                        // (drawn at the window's scale factor) is made at screen resolution instead of being resampled
+                        resolution: WindowResolution::new(1152, 648).with_scale_factor_override(SCREEN_SCALE),
                         position: WindowPosition::Centered(MonitorSelection::Primary),
                         ..default()
                     }),
@@ -230,7 +247,13 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(MENU_BACKGROUND))
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(Time::<Fixed>::from_hz(60.0));
+    // all text uses the default font handle, so swapping what is behind it restyles every label
+    app.world_mut()
+        .resource_mut::<Assets<Font>>()
+        .insert(bevy::asset::AssetId::default(), Font::from_bytes(PIXEL_FONT.to_vec()))
+        .expect("pixel font");
+    app
         .insert_resource(Roster({
             // characters marked `menu_last` go to the end
             let mut roster = load_dir("characters", CharacterData::from_ron);
@@ -374,7 +397,7 @@ fn spawn_fight(
                 }
                 hud.spawn((
                     Text2d::new(roster.0[selection.chars[side]].name.clone()),
-                    TextFont { font_size: FontSize::Px(10.0), ..default() },
+                    crate::pixel_font(10.0),
                     TextColor(rgb(roster.0[selection.chars[side]].color)),
                     // long names sit further in so they stay on screen
                     Transform::from_xyz(dir * (BAR_EDGE - 6.0 - roster.0[selection.chars[side]].name.len() as f32 * 2.8), BAR_Y - 18.0, 10.2),
@@ -383,20 +406,20 @@ fn spawn_fight(
             hud.spawn((
                 TimerText,
                 Text2d::new("99"),
-                TextFont { font_size: FontSize::Px(18.0), ..default() },
+                crate::pixel_font(18.0),
                 Transform::from_xyz(0.0, BAR_Y, 10.2),
             ));
             hud.spawn((
                 BannerText,
                 Text2d::new(""),
-                TextFont { font_size: FontSize::Px(28.0), ..default() },
+                crate::pixel_font(28.0),
                 TextColor(Color::srgb(1.0, 0.9, 0.4)),
                 Transform::from_xyz(0.0, 20.0, 10.2),
             ));
             hud.spawn((
                 SubBannerText,
                 Text2d::new(""),
-                TextFont { font_size: FontSize::Px(10.0), ..default() },
+                crate::pixel_font(10.0),
                 TextColor(Color::srgb(0.95, 0.95, 1.0)),
                 Transform::from_xyz(0.0, -2.0, 10.2),
             ));
@@ -461,7 +484,7 @@ fn spawn_fight(
             effects.push("goblin".to_string());
         }
         let frames = t2f::anim::frames_for(c);
-        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip, c.raven.is_some());
+        render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip || c.moves.iter().any(|m| m.rope), c.raven.is_some());
     }
     render::spawn_curses(&mut commands, &asset_server);
     render::spawn_combo_ui(&mut commands, &asset_server);
@@ -536,20 +559,26 @@ fn follow_camera(
     time: Res<Time>,
     shake: Res<particles::Shake>,
     mut width: Local<f32>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut hud: Single<&mut Transform, (With<HudRoot>, Without<Camera2d>)>,
     mut layers: Query<(&ParallaxLayer, &mut Transform), (Without<Camera2d>, Without<HudRoot>)>,
 ) {
     let (a, b) = (sim.0.fighters[0].x as f32 / PX as f32, sim.0.fighters[1].x as f32 / PX as f32);
     let map_w = (GameState::STAGE_HALF_WIDTH * 2 / PX) as f32;
-    let target = ((a - b).abs() + ZOOM_MARGIN).clamp(MIN_VIEW_W, map_w);
+    // the camera shows at least VIEW_W x VIEW_H, so a window wider than 16:9 shows more than `width`
+    // across; `stretch` is how much, and the zoom is held back so the view never outgrows the map
+    let aspect = if window.height() > 0.0 { window.width() / window.height() } else { VIEW_W / VIEW_H };
+    let stretch = (aspect * VIEW_H / VIEW_W).max(1.0);
+    let target = ((a - b).abs() + ZOOM_MARGIN).max(MIN_VIEW_W).min(map_w / stretch);
     if *width == 0.0 {
         *width = target;
     }
     *width += (target - *width) * (1.0 - (-ZOOM_SPEED * time.delta_secs()).exp());
     let zoom = *width / VIEW_W;
-    let view_h = *width * VIEW_H / VIEW_W;
-    let limit = (map_w - *width) / 2.0;
+    // a window narrower than 16:9 shows more above the floor instead
+    let view_h = zoom * VIEW_H.max(VIEW_W / aspect);
+    let limit = ((map_w - *width * stretch) / 2.0).max(0.0);
     let base = ((a + b) / 2.0).clamp(-limit, limit);
     // screen shake after a heavy hit; the HUD moves and scales with the camera
     let t = time.elapsed_secs();

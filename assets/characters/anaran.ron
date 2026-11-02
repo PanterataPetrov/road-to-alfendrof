@@ -31,7 +31,7 @@
         (name: "Air Whip", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
          startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 8, y: 0, w: 34, h: 24)),
-        (name: "Plunging Verdict", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
+        (name: "Plunging Verdict", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100, cooldown: 90,
          startup: 9, active: 7, recovery: 10, damage: 64, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
          hitbox: (x: 6, y: -4, w: 30, h: 34)),
         (name: "Call the Goblins", button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),

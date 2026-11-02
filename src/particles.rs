@@ -78,7 +78,7 @@ fn pop(commands: &mut Commands, text: &str, at: Vec2, vel: Vec2, rgb: [f32; 3], 
         Pop { life: 0.7, max: 0.7, vel, rgb },
         DespawnOnExit(AppState::Fight),
         Text2d::new(text),
-        TextFont { font_size: FontSize::Px(size), ..default() },
+        crate::pixel_font(size),
         TextColor(Color::srgba(rgb[0], rgb[1], rgb[2], 1.0)),
         Transform::from_xyz(at.x.round(), at.y.round(), 6.0),
     ));
@@ -469,7 +469,7 @@ pub fn emit(
                         Pop { life: 0.45, max: 0.45, vel: Vec2::new(0.0, 28.0), rgb: [1.0, 0.9, 0.2] },
                         DespawnOnExit(AppState::Fight),
                         Text2d::new("BAM!"),
-                        TextFont { font_size: FontSize::Px(14.0), ..default() },
+                        crate::pixel_font(14.0),
                         TextColor(Color::srgb(1.0, 0.9, 0.2)),
                         Transform::from_xyz(at.x + towards * 14.0, at.y + 12.0 + jitter, 6.0),
                     ));
