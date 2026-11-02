@@ -1,8 +1,9 @@
-//! Title, character select and stage select, all driven by one cursor.
+//! Title, options, controls, character select and stage select, all driven by one cursor.
 //! Both players' keys work: WASD + F/G or arrows + J/K, Enter and Esc.
 
 use bevy::prelude::*;
 
+use crate::settings::{self, Display, Settings, ACTIONS};
 use crate::{AppState, Mode, Roster, Selection, Stages};
 
 pub struct MenuPlugin;
@@ -11,7 +12,10 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Menu>()
             .init_resource::<Picking>()
+            .init_resource::<Rebinding>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
+            .add_systems(OnEnter(AppState::Options), spawn_options)
+            .add_systems(OnEnter(AppState::Controls), spawn_controls)
             .add_systems(OnEnter(AppState::CharSelect), spawn_char_select)
             .add_systems(OnEnter(AppState::StageSelect), spawn_stage_select)
             .add_systems(
@@ -19,7 +23,9 @@ impl Plugin for MenuPlugin {
                 (
                     (title_confirm.run_if(in_state(AppState::Title)),
                      char_confirm.run_if(in_state(AppState::CharSelect)),
-                     stage_confirm.run_if(in_state(AppState::StageSelect)))
+                     stage_confirm.run_if(in_state(AppState::StageSelect)),
+                     options_confirm.run_if(in_state(AppState::Options)),
+                     controls_confirm.run_if(in_state(AppState::Controls)))
                         .before(menu_labels),
                     menu_nav,
                     menu_labels,
@@ -41,6 +47,10 @@ struct Menu {
 /// Who is picking: 0 = P1, 1 = P2.
 #[derive(Resource, Default)]
 struct Picking(usize);
+
+/// The control waiting for its new key in the Controls menu.
+#[derive(Resource, Default)]
+struct Rebinding(Option<usize>);
 
 #[derive(Component)]
 struct MenuItem {
@@ -106,13 +116,15 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     commands.entity(header).insert(Header);
     spawn_text(commands, state.clone(), hint.into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
 
-    // rows with pictures need more room
+    // rows with pictures need more room; long lists of text get smaller
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
-    let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else { 22.0 };
-    let top = top_override.unwrap_or(if with_pictures { 56.0 } else { 40.0 });
+    let compact = !with_pictures && items.len() > 6;
+    let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else if compact { 12.0 } else { 22.0 };
+    let top = top_override.unwrap_or(if with_pictures { 56.0 } else if compact { 62.0 } else { 40.0 });
+    let size = if compact { 8.0 } else { 16.0 };
     for (index, item) in items.into_iter().enumerate() {
         let y = top - index as f32 * spacing;
-        let e = spawn_text(commands, state.clone(), item.label.clone(), 16.0, item.color, y);
+        let e = spawn_text(commands, state.clone(), item.label.clone(), size, item.color, y);
         commands.entity(e).insert(MenuItem { index, label: item.label, color: item.color, enabled: item.enabled });
         if let Some(sub) = item.subtitle {
             let e = spawn_text(commands, state.clone(), sub.clone(), 8.0, item.color.with_alpha(0.7), y - 11.0);
@@ -179,8 +191,8 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
         state,
         "",
         "W/S or Up/Down: move    F / J / Enter: select    Esc: quit",
-        vec![Item::new("vs CPU", white), online],
-        Some(-34.0),
+        vec![Item::new("vs CPU", white), online, Item::new("Options", white)],
+        Some(-30.0),
     );
 }
 
@@ -251,8 +263,9 @@ fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Re
     );
 }
 
-fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>) {
-    if menu.len == 0 {
+fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: Res<Rebinding>) {
+    // W and S could be the key being bound
+    if menu.len == 0 || rebinding.0.is_some() {
         return;
     }
     let up = keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp);
@@ -321,10 +334,11 @@ fn title_confirm(
                 *mode = Mode::VsCpu;
                 next.set(AppState::CharSelect);
             }
-            _ => {
+            1 => {
                 *mode = Mode::Online;
                 next.set(AppState::Online);
             }
+            _ => next.set(AppState::Options),
         }
     }
 }
@@ -387,6 +401,128 @@ fn stage_confirm(keys: Res<ButtonInput<KeyCode>>, menu: Res<Menu>, mut sel: ResM
     } else if confirm_pressed(&keys) {
         sel.stage = menu.cursor;
         next.set(AppState::Fight);
+    }
+}
+
+fn left_right(keys: &ButtonInput<KeyCode>) -> i32 {
+    let left = keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::ArrowLeft);
+    let right = keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::ArrowRight);
+    right as i32 - left as i32
+}
+
+fn options_labels(settings: &Settings) -> Vec<String> {
+    vec![
+        format!("Music volume  < {} >", settings.music_volume),
+        format!("Display  < {} >", settings.display.label()),
+        "Controls".into(),
+        "Back".into(),
+    ]
+}
+
+fn spawn_options(mut commands: Commands, mut menu: ResMut<Menu>, settings: Res<Settings>) {
+    let items = options_labels(&settings).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
+    spawn_menu(
+        &mut commands,
+        &mut menu,
+        AppState::Options,
+        "Options",
+        "W/S: move    A/D or Left/Right: change    F / J / Enter: select    Esc: back",
+        items,
+        None,
+    );
+}
+
+/// Left/right change the volume and display mode (Enter also cycles the display mode).
+fn options_confirm(
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<Menu>,
+    mut settings: ResMut<Settings>,
+    mut items: Query<&mut MenuItem>,
+    mut next: ResMut<NextState<AppState>>,
+) {
+    let step = left_right(&keys);
+    let confirm = confirm_pressed(&keys);
+    if back_pressed(&keys) {
+        next.set(AppState::Title);
+        return;
+    }
+    match menu.cursor {
+        0 if step != 0 => settings.music_volume = (settings.music_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8,
+        1 if step != 0 || confirm => {
+            let n = Display::ALL.len() as i32;
+            let i = Display::ALL.iter().position(|&d| d == settings.display).unwrap_or(0) as i32;
+            settings.display = Display::ALL[(i + if step == 0 { 1 } else { step }).rem_euclid(n) as usize];
+        }
+        2 if confirm => next.set(AppState::Controls),
+        3 if confirm => next.set(AppState::Title),
+        _ => {}
+    }
+    // F11 changes the display mode too
+    if settings.is_changed() {
+        let labels = options_labels(&settings);
+        for mut item in &mut items {
+            item.label = labels[item.index].clone();
+        }
+    }
+}
+
+fn controls_labels(settings: &Settings, rebinding: Option<usize>) -> Vec<String> {
+    let mut labels: Vec<String> = ACTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _, _))| {
+            if rebinding == Some(i) { format!("{name}: press a key") } else { format!("{name}: {}", settings::key_name(settings.keys[i])) }
+        })
+        .collect();
+    labels.push("Reset to defaults".into());
+    labels.push("Back".into());
+    labels
+}
+
+fn spawn_controls(mut commands: Commands, mut menu: ResMut<Menu>, settings: Res<Settings>, mut rebinding: ResMut<Rebinding>) {
+    rebinding.0 = None;
+    let items = controls_labels(&settings, None).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
+    spawn_menu(
+        &mut commands,
+        &mut menu,
+        AppState::Controls,
+        "Controls",
+        "F / J / Enter: change, then press the new key    Esc: back",
+        items,
+        None,
+    );
+}
+
+/// Pick a control, then the next key pressed is its new one (a key another control had is swapped).
+fn controls_confirm(
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<Menu>,
+    mut settings: ResMut<Settings>,
+    mut rebinding: ResMut<Rebinding>,
+    mut items: Query<&mut MenuItem>,
+    mut next: ResMut<NextState<AppState>>,
+) {
+    if let Some(i) = rebinding.0 {
+        if keys.just_pressed(KeyCode::Escape) {
+            rebinding.0 = None;
+        } else if let Some(&key) = keys.get_just_pressed().find(|&&k| settings::bindable(k)) {
+            settings.bind(i, key);
+            rebinding.0 = None;
+        }
+    } else if back_pressed(&keys) {
+        next.set(AppState::Options);
+    } else if confirm_pressed(&keys) {
+        match menu.cursor {
+            i if i < ACTIONS.len() => rebinding.0 = Some(i),
+            i if i == ACTIONS.len() => settings.keys = Settings::default().keys,
+            _ => next.set(AppState::Options),
+        }
+    }
+    if settings.is_changed() || rebinding.is_changed() {
+        let labels = controls_labels(&settings, rebinding.0);
+        for mut item in &mut items {
+            item.label = labels[item.index].clone();
+        }
     }
 }
 

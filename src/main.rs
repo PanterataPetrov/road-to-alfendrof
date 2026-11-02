@@ -6,6 +6,7 @@ mod music;
 mod online;
 mod particles;
 mod render;
+mod settings;
 mod update;
 
 use std::path::PathBuf;
@@ -23,6 +24,9 @@ const VIEW_W: f32 = 384.0;
 const VIEW_H: f32 = 216.0;
 /// Window pixels per pixel of the view at the default window size (1152 / 384).
 const SCREEN_SCALE: f32 = 3.0;
+/// Logical size of the window when not fullscreen (the view at `SCREEN_SCALE`).
+const WINDOW_W: f32 = VIEW_W * SCREEN_SCALE;
+const WINDOW_H: f32 = VIEW_H * SCREEN_SCALE;
 /// Camera zoom: the narrowest view (fighters close together), how much wider than the gap between the
 /// fighters it is otherwise, how fast it follows, and how far up from the bottom of the view the floor sits.
 const MIN_VIEW_W: f32 = 346.0;
@@ -46,6 +50,8 @@ pub enum AppState {
     CharSelect,
     StageSelect,
     Online,
+    Options,
+    Controls,
     Fight,
 }
 
@@ -255,7 +261,7 @@ fn main() {
                         title: "Road to Alfendrof".into(),
                         // the window is 3x the pixel-art view whatever the Windows display scaling is, so text
                         // (drawn at the window's scale factor) is made at screen resolution instead of being resampled
-                        resolution: WindowResolution::new(1152, 648).with_scale_factor_override(SCREEN_SCALE),
+                        resolution: WindowResolution::new(WINDOW_W as u32, WINDOW_H as u32).with_scale_factor_override(SCREEN_SCALE),
                         position: WindowPosition::Centered(MonitorSelection::Primary),
                         ..default()
                     }),
@@ -283,6 +289,7 @@ fn main() {
         .init_resource::<Sim>()
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
+        .add_plugins(settings::SettingsPlugin)
         .add_plugins(menus::MenuPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(update::UpdatePlugin)
@@ -515,31 +522,10 @@ fn spawn_fight(
     commands.insert_resource(handles);
 }
 
-/// WASD to move, F / G / H for light / heavy / special, Space to block, Q / E to roll. Player 2 is the CPU.
-fn read_input(keys: &ButtonInput<KeyCode>) -> Input {
-    let mut bits = 0;
-    for (key, flag) in [
-        (KeyCode::KeyA, Input::LEFT),
-        (KeyCode::KeyD, Input::RIGHT),
-        (KeyCode::KeyW, Input::UP),
-        (KeyCode::KeyS, Input::DOWN),
-        (KeyCode::KeyF, Input::LIGHT),
-        (KeyCode::KeyG, Input::HEAVY),
-        (KeyCode::KeyH, Input::SPECIAL),
-        (KeyCode::Space, Input::BLOCK),
-        (KeyCode::KeyQ, Input::ROLL_LEFT),
-        (KeyCode::KeyE, Input::ROLL_RIGHT),
-    ] {
-        if keys.pressed(key) {
-            bits |= flag;
-        }
-    }
-    Input(bits)
-}
-
 fn step_sim(
     mut sim: ResMut<Sim>,
     keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<settings::Settings>,
     roster: Res<Roster>,
     sel: Res<Selection>,
     dev: Res<DevOptions>,
@@ -550,7 +536,8 @@ fn step_sim(
     mut info: ResMut<online::OnlineInfo>,
     mut commands: Commands,
 ) {
-    let mut player = read_input(&keys);
+    // the keys set in Options > Controls; player 2 is the CPU
+    let mut player = settings.read_input(&keys);
     player.0 |= dev.hold;
     // online: the other player's buttons come from the network
     if *mode == Mode::Online {

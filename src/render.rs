@@ -775,8 +775,8 @@ pub fn animate_bubbles(
     }
 }
 
-/// The skill bar in the bottom right: Light (F), Heavy (G) and Special (H) as icons with their key in
-/// the corner. An attack that can't be used right now (cooling down, the opponent's shockwave has
+/// The skill bar in the bottom right: Light, Heavy and Special as icons with their key (Options > Controls)
+/// in the corner. An attack that can't be used right now (cooling down, the opponent's shockwave has
 /// silenced you, the raven is away, or the special meter isn't full) is greyed out with the time left;
 /// the special fills up from the bottom as its meter charges, and glows when it's ready.
 #[derive(Component)]
@@ -793,9 +793,19 @@ const SKILL_SIZE: f32 = 24.0;
 const SKILL_X: [f32; 3] = [118.0, 146.0, 174.0];
 const SKILL_Y: f32 = -91.0;
 
-pub fn spawn_skill_bar(mut commands: Commands, hud: Single<Entity, With<crate::HudRoot>>, asset_server: Res<AssetServer>) {
+pub fn spawn_skill_bar(
+    mut commands: Commands,
+    hud: Single<Entity, With<crate::HudRoot>>,
+    asset_server: Res<AssetServer>,
+    settings: Res<crate::settings::Settings>,
+) {
+    use t2f::sim::Input;
+    let keys = [Input::LIGHT, Input::HEAVY, Input::SPECIAL].map(|flag| crate::settings::key_name(settings.key(flag)));
     commands.entity(*hud).with_children(|h| {
-        for (k, key) in ["F", "G", "H"].into_iter().enumerate() {
+        for (k, key) in keys.into_iter().enumerate() {
+            // the badge grows with the key's name ("Space"), from the icon's left edge
+            let badge_w = key.chars().count() as f32 * 4.0 + 4.0;
+            let badge_x = SKILL_X[k] - SKILL_SIZE / 2.0 + 1.0 + badge_w / 2.0;
             let (x, y) = (SKILL_X[k], SKILL_Y);
             h.spawn((SkillGlow(k), Sprite::from_color(Color::srgba(1.0, 0.85, 0.3, 0.0), Vec2::splat(SKILL_SIZE + 4.0)), Transform::from_xyz(x, y, 9.8)));
             h.spawn((SkillIcon(k), Sprite::from_image(asset_server.load("icons/ayz/light.png")), Transform::from_xyz(x, y, 10.0)));
@@ -808,12 +818,12 @@ pub fn spawn_skill_bar(mut commands: Commands, hud: Single<Entity, With<crate::H
                 Transform::from_xyz(x, y - 1.0, 10.3),
             ));
             // the key in the top-left corner, on a little dark badge
-            h.spawn((Sprite::from_color(Color::srgba(0.04, 0.03, 0.08, 0.9), Vec2::new(8.0, 9.0)), Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.4)));
+            h.spawn((Sprite::from_color(Color::srgba(0.04, 0.03, 0.08, 0.9), Vec2::new(badge_w, 9.0)), Transform::from_xyz(badge_x, y + SKILL_SIZE / 2.0 - 5.5, 10.4)));
             h.spawn((
                 Text2d::new(key),
                 crate::pixel_font(7.0),
                 TextColor(Color::srgb(1.0, 0.9, 0.5)),
-                Transform::from_xyz(x - SKILL_SIZE / 2.0 + 5.0, y + SKILL_SIZE / 2.0 - 5.5, 10.5),
+                Transform::from_xyz(badge_x, y + SKILL_SIZE / 2.0 - 5.5, 10.5),
             ));
         }
     });

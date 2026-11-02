@@ -1,17 +1,21 @@
-//! Menu music: `assets/music/menu.wav` plays from the start once (the buildup), then loops from `LOOP_START`
-//! seamlessly. It stops when a fight starts and comes back, without the buildup, in the menus after it.
+//! Menu music: `assets/music/menu.wav` plays from the start once (the buildup), then loops `LOOP_START` to
+//! `LOOP_END` seamlessly; the echo after `LOOP_END` is mixed over the start of each repeat instead of played as
+//! a gap. It stops when a fight starts and comes back, without the buildup, in the menus after it.
 
 use std::num::NonZero;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bevy::audio::{AddAudioSource, ChannelCount, Decodable, Sample, SampleRate, Source};
+use bevy::audio::{AddAudioSource, AudioSinkPlayback, ChannelCount, Decodable, Sample, SampleRate, Source, Volume};
 use bevy::prelude::*;
 
+use crate::settings::Settings;
 use crate::AppState;
 
 /// Where the loop starts: everything before it is the buildup, heard only once.
 const LOOP_START: Duration = Duration::from_secs(2);
+/// Where the music ends and jumps back to `LOOP_START`; after it the file only has the fading echo.
+const LOOP_END: Duration = Duration::from_secs(42);
 
 pub struct MusicPlugin;
 
@@ -20,17 +24,19 @@ impl Plugin for MusicPlugin {
         app.add_audio_source::<Music>()
             .add_systems(Startup, load_menu_music)
             .add_systems(OnEnter(AppState::Fight), stop_menu_music)
-            .add_systems(OnExit(AppState::Fight), resume_menu_music);
+            .add_systems(OnExit(AppState::Fight), resume_menu_music)
+            .add_systems(Update, set_music_volume);
     }
 }
 
-/// Decoded PCM that loops from `loop_start` (a sample index) and can begin past the buildup.
+/// Decoded PCM that loops from `loop_start` to `loop_end` (sample indices) and can begin past the buildup.
 #[derive(Asset, TypePath, Clone)]
 pub struct Music {
     samples: Arc<[Sample]>,
     channels: ChannelCount,
     rate: SampleRate,
     loop_start: usize,
+    loop_end: usize,
     start: usize,
 }
 
@@ -38,25 +44,33 @@ impl Decodable for Music {
     type Decoder = MusicDecoder;
 
     fn decoder(&self) -> MusicDecoder {
-        MusicDecoder { music: self.clone(), pos: self.start }
+        MusicDecoder { music: self.clone(), pos: self.start, tail: None }
     }
 }
 
 pub struct MusicDecoder {
     music: Music,
     pos: usize,
+    /// Where in the echo after `loop_end` we are, while it plays over a repeat.
+    tail: Option<usize>,
 }
 
 impl Iterator for MusicDecoder {
     type Item = Sample;
 
     fn next(&mut self) -> Option<Sample> {
-        if self.pos >= self.music.samples.len() {
+        let samples = &self.music.samples;
+        if self.pos >= self.music.loop_end {
             self.pos = self.music.loop_start;
+            self.tail = Some(self.music.loop_end);
         }
-        let sample = self.music.samples.get(self.pos).copied();
+        let mut sample = *samples.get(self.pos)?;
         self.pos += 1;
-        sample
+        if let Some(t) = self.tail {
+            sample = (sample + samples[t]).clamp(-1.0, 1.0);
+            self.tail = (t + 1 < samples.len()).then_some(t + 1);
+        }
+        Some(sample)
     }
 }
 
@@ -85,7 +99,7 @@ struct MenuMusic(Music);
 #[derive(Component)]
 struct MenuMusicPlayer;
 
-fn load_menu_music(mut commands: Commands, mut songs: ResMut<Assets<Music>>) {
+fn load_menu_music(mut commands: Commands, mut songs: ResMut<Assets<Music>>, settings: Res<Settings>) {
     let path = crate::assets_dir().join("music/menu.wav");
     let music = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| parse_wav(&bytes)) {
         Ok(music) => music,
@@ -95,14 +109,27 @@ fn load_menu_music(mut commands: Commands, mut songs: ResMut<Assets<Music>>) {
         }
     };
     commands.insert_resource(MenuMusic(music.clone()));
-    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(music)), PlaybackSettings::LOOP));
+    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(music)), playback(&settings)));
 }
 
 /// Back in the menus after a fight: straight into the loop, no buildup.
-fn resume_menu_music(mut commands: Commands, music: Option<Res<MenuMusic>>, mut songs: ResMut<Assets<Music>>) {
+fn resume_menu_music(mut commands: Commands, music: Option<Res<MenuMusic>>, mut songs: ResMut<Assets<Music>>, settings: Res<Settings>) {
     let Some(music) = music else { return };
     let song = Music { start: music.0.loop_start, ..music.0.clone() };
-    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(song)), PlaybackSettings::LOOP));
+    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(song)), playback(&settings)));
+}
+
+fn playback(settings: &Settings) -> PlaybackSettings {
+    PlaybackSettings::LOOP.with_volume(Volume::Linear(settings.music_gain()))
+}
+
+/// Options > Music volume, heard while it is changed.
+fn set_music_volume(settings: Res<Settings>, mut sinks: Query<&mut AudioSink, With<MenuMusicPlayer>>) {
+    if settings.is_changed() {
+        for mut sink in &mut sinks {
+            sink.set_volume(Volume::Linear(settings.music_gain()));
+        }
+    }
 }
 
 fn stop_menu_music(mut commands: Commands, players: Query<Entity, With<MenuMusicPlayer>>) {
@@ -141,8 +168,9 @@ fn parse_wav(bytes: &[u8]) -> Result<Music, String> {
     let channels = NonZero::new(channels).ok_or("no channels")?;
     let rate = NonZero::new(rate).ok_or("no sample rate")?;
     let samples: Arc<[Sample]> = data.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as Sample / 32768.0).collect();
-    // a whole frame (one sample per channel) into the song
-    let loop_frame = (LOOP_START.as_secs_f64() * rate.get() as f64).round() as usize;
-    let loop_start = (loop_frame * channels.get() as usize).min(samples.len().saturating_sub(channels.get() as usize));
-    Ok(Music { samples, channels, rate, loop_start, start: 0 })
+    // on a whole frame (one sample per channel)
+    let frame_index = |at: Duration| (at.as_secs_f64() * rate.get() as f64).round() as usize * channels.get() as usize;
+    let loop_end = frame_index(LOOP_END).min(samples.len());
+    let loop_start = frame_index(LOOP_START).min(loop_end.saturating_sub(channels.get() as usize));
+    Ok(Music { samples, channels, rate, loop_start, loop_end, start: 0 })
 }
