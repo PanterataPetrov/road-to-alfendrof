@@ -44,9 +44,11 @@ fn check_for_update(latest: Res<Latest>) {
 }
 
 fn fetch_latest() -> Option<Release> {
-    let api = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let out = run_hidden(Command::new("curl.exe").args(["-s", "-f", "-m", "6", "-H", "User-Agent: road-to-alfendrof", &api]))?;
-    Some(Release { version: json_field(&out, "tag_name")?, url: json_field(&out, "html_url")? })
+    // /releases/latest redirects to the newest tag's page, which costs no API quota
+    let page = format!("https://github.com/{REPO}/releases/latest");
+    let url = run_hidden(Command::new("curl.exe").args(["-s", "-L", "-m", "6", "-o", "NUL", "-w", "%{url_effective}", &page]))?;
+    let version = url.rsplit("/tag/").next().filter(|_| url.contains("/tag/"))?.trim().to_string();
+    Some(Release { version, url })
 }
 
 #[cfg(windows)]
@@ -60,13 +62,6 @@ fn run_hidden(cmd: &mut Command) -> Option<String> {
 fn run_hidden(cmd: &mut Command) -> Option<String> {
     let out = cmd.output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// The first `"key": "value"` in a JSON text.
-fn json_field(json: &str, key: &str) -> Option<String> {
-    let after = &json[json.find(&format!("\"{key}\""))? + key.len() + 2..];
-    let after = &after[after.find('"')? + 1..];
-    Some(after[..after.find('"')?].to_string())
 }
 
 fn parse_version(v: &str) -> Vec<u32> {
@@ -122,12 +117,5 @@ mod tests {
         assert!(is_newer("0.1.10", "0.1.9"));
         assert!(!is_newer("v0.1.0", "0.1.0"));
         assert!(!is_newer("0.0.9", "0.1.0"));
-    }
-
-    #[test]
-    fn reads_fields() {
-        let json = r#"{"url":"x","tag_name": "v1.2.3","html_url":"https://github.com/a/b/releases/tag/v1.2.3"}"#;
-        assert_eq!(json_field(json, "tag_name").as_deref(), Some("v1.2.3"));
-        assert_eq!(json_field(json, "html_url").as_deref(), Some("https://github.com/a/b/releases/tag/v1.2.3"));
     }
 }
