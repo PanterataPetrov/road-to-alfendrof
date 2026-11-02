@@ -32,6 +32,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "..\target\release\t2f.exe"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
 Source: "..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "emblem.ico"; DestDir: "{app}"; Flags: ignoreversion
+; Microsoft's shader compiler; the game picks it up from its own folder on DirectX 12 (run get_dxc.ps1 once to fetch it)
+Source: "dxc\dxcompiler.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dxc\dxil.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\emblem.ico"
