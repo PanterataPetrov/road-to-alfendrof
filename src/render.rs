@@ -115,7 +115,7 @@ fn all_stems(frames: &[Frame], effects: &[(String, usize)], mark: bool, whip: bo
         stems.extend(frames.iter().map(|f| format!("{}_mark", f.file_stem())));
     }
     for (base, drawings) in effects {
-        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 5 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
+        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 8 } else if base == "agent" { 9 } else if base == "glitch" { 4 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
         stems.extend((0..count).map(|i| format!("{base}_{i}")));
     }
     stems
@@ -310,6 +310,7 @@ pub fn spawn_fighter(
 /// Whether a fighter is speaking: both at the start of a round, the winner at the end.
 fn speaking(s: &GameState, fighter: usize) -> bool {
     match s.phase {
+        Phase::Briefing(_) => false,
         Phase::Fighting => s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60),
         Phase::RoundEnd(_) => false,
         Phase::MatchOver => s.match_winner() == Some(fighter),
@@ -955,6 +956,81 @@ pub fn animate_skill_bar(
     }
 }
 
+/// One of the zones on the map (glitched areas and spills), shown by the first four.
+#[derive(Component)]
+pub struct ZoneSprite(pub usize);
+
+pub fn spawn_zone_sprites(mut commands: Commands) {
+    for i in 0..4 {
+        commands.spawn((ZoneSprite(i), DespawnOnExit(AppState::Fight), Sprite::default(), Transform::from_xyz(0.0, 0.0, 0.3), Visibility::Hidden));
+    }
+}
+
+/// Draw each zone: its drawings cycle, and it fades in as it appears and out as it ends.
+pub fn animate_zones(sim: Res<Sim>, handles: Res<FrameHandles>, mut sprites: Query<(&ZoneSprite, &mut Sprite, &mut Transform, &mut Visibility)>) {
+    use t2f::sim::ZoneKind;
+    for (ZoneSprite(i), mut sprite, mut tf, mut visibility) in &mut sprites {
+        let Some(z) = sim.0.zones.get(*i) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        set_ne!(*visibility, Visibility::Inherited);
+        let (name, count, y, depth) = match z.kind {
+            ZoneKind::Glitch => ("glitch", 4, 39.0, 0.3),
+            ZoneKind::Spill => ("spill", 2, 3.0, 0.2),
+        };
+        let frame = (sim.0.frame / if z.kind == ZoneKind::Glitch { 3 } else { 14 }) as usize % count;
+        if let Some(image) = handles.0.get(z.owner).and_then(|m| m.get(&format!("{name}_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+        set_ne!(tf.translation.x, (z.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + y);
+        set_ne!(tf.translation.z, depth);
+        let alpha = (z.age as f32 / 12.0).min(1.0) * (z.life.saturating_sub(z.age) as f32 / 20.0).min(1.0);
+        sprite.color = Color::srgba(1.0, 1.0, 1.0, alpha);
+    }
+}
+
+/// One cigarette in a fighter's row under the special bar (the first is the lit one in his mouth).
+#[derive(Component)]
+pub struct CigaretteIcon(pub usize, pub usize);
+
+/// The row of cigarettes under each health bar, for a character who carries them.
+pub fn spawn_cigarette_hud(mut commands: Commands, hud: Single<Entity, With<crate::HudRoot>>) {
+    commands.entity(*hud).with_children(|h| {
+        for side in 0..2usize {
+            let dir = if side == 0 { -1.0 } else { 1.0 };
+            let left = dir * (crate::BAR_EDGE - crate::BAR_W / 2.0) - crate::BAR_W / 2.0;
+            let y = crate::BAR_Y - crate::BAR_H / 2.0 - 12.0;
+            for k in 0..7usize {
+                let x = left + 5.0 + k as f32 * 9.0;
+                h.spawn((CigaretteIcon(side, k), Sprite::from_color(Color::srgb(0.96, 0.95, 0.9), Vec2::new(7.0, 2.0)), Transform::from_xyz(x, y, 10.1), Visibility::Hidden));
+                // the filter end, and an ember on the lit one
+                h.spawn((CigaretteIcon(side, k + 10), Sprite::from_color(if k == 0 { Color::srgb(1.0, 0.45, 0.1) } else { Color::srgb(0.85, 0.55, 0.25) }, Vec2::new(2.0, 2.0)), Transform::from_xyz(x + 4.5, y, 10.2), Visibility::Hidden));
+            }
+        }
+    });
+}
+
+/// Show as many of the row as the fighter has cigarettes left; hidden for a character who has none.
+pub fn animate_cigarettes(sim: Res<Sim>, roster: Res<Roster>, sel: Res<Selection>, mut icons: Query<(&CigaretteIcon, &mut Sprite, &mut Visibility)>) {
+    for (CigaretteIcon(side, k), mut sprite, mut visibility) in &mut icons {
+        let data = &roster.0[sel.chars[*side]];
+        let Some(c) = data.cigarettes else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        let index = *k % 10;
+        set_ne!(*visibility, if index < c.max as usize { Visibility::Inherited } else { Visibility::Hidden });
+        let left = sim.0.fighters[*side].cigs(data) as usize;
+        let alpha = if index < left { 1.0 } else { 0.18 };
+        let c = sprite.color.to_srgba();
+        sprite.color = Color::srgba(c.red, c.green, c.blue, alpha);
+    }
+}
+
 /// One of a fighter's two portals (0: the one behind her that she leaps into, 1: the one behind the enemy).
 #[derive(Component)]
 pub struct GateOf(pub usize, pub usize);
@@ -1212,19 +1288,34 @@ pub fn animate_minions(
         };
         set_ne!(*visibility, Visibility::Inherited);
         let frame = match m.mode {
+            _ if m.agent => {
+                // 0, 1 walking; 2 winding up a punch; 3 punching; 4 dashing; 5 rolling
+                use t2f::sim::MinionMode;
+                match m.mode {
+                    MinionMode::Dash => 4,
+                    MinionMode::Roll => 5 + ((m.timer / 3) % 4) as usize,
+                    MinionMode::Punch if (4..9).contains(&m.timer) || (14..19).contains(&m.timer) => 3,
+                    MinionMode::Punch => 2,
+                    _ => ((sim.0.frame / 7) % 2) as usize,
+                }
+            }
             _ => {
+                // 0, 1 waiting; 2 to 5 running; 6 jaws wide; 7 snapping shut as it lunges
                 let foe_x = sim.0.fighters[1 - *owner].x;
                 if m.bit && m.timer < 8 {
-                    4
+                    7
                 } else if (foe_x - m.x).abs() < 30 * PX {
-                    // on top of the enemy and snapping at them
-                    ((sim.0.frame / 8) % 2) as usize * 4
+                    // on top of the enemy and working its jaws
+                    6 + ((sim.0.frame / 6) % 2) as usize
+                } else if m.mode == t2f::sim::MinionMode::Wait {
+                    ((sim.0.frame / 12) % 2) as usize
                 } else {
-                    2 + ((sim.0.frame / 5) % 2) as usize
+                    2 + ((sim.0.frame / 4) % 4) as usize
                 }
             }
         };
-        if let Some(image) = handles.0.get(*owner).and_then(|h| h.get(&format!("goblin_{frame}"))) {
+        let name = if m.agent { "agent" } else { "goblin" };
+        if let Some(image) = handles.0.get(*owner).and_then(|h| h.get(&format!("{name}_{frame}"))) {
             if sprite.image != *image {
                 if sprite.image != *image {
                     sprite.image = image.clone();
@@ -1232,8 +1323,12 @@ pub fn animate_minions(
             }
         }
         sprite.flip_x = m.facing < 0;
-        set_ne!(tf.translation.x, (m.x / PX) as f32);
-        set_ne!(tf.translation.y, GROUND_Y + 12.0);
+        // a goblin is drawn at 1x (32 x 24, feet on the bottom row); an agent like a fighter (84 x 63, body centre left of
+        // the middle, feet on the bottom row)
+        let shift = if m.agent { (FRAME_W as f32 / 2.0 - t2f::anim::CENTRE_X as f32) * m.facing as f32 } else { 0.0 };
+        set_ne!(tf.translation.x, (m.x / PX) as f32 + shift);
+        set_ne!(tf.translation.y, GROUND_Y + if m.agent { FULL_H as f32 / 2.0 } else { 12.0 });
+        set_ne!(tf.scale, Vec3::splat(1.0));
         // fades out in its last half second
         let left = 480u32.saturating_sub(m.age);
         let alpha = if left < 30 { left as f32 / 30.0 } else { 1.0 };

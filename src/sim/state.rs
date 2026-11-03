@@ -4,6 +4,9 @@ use super::input::Input;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Phase {
+    /// Before the match: the fighters' skills are shown until both players are ready. The number has a bit
+    /// set for each player who is (bit 0 = player 0).
+    Briefing(u8),
     Fighting,
     /// Frames since the round ended (KO or time up).
     RoundEnd(u32),
@@ -37,6 +40,25 @@ pub enum MinionMode {
     Charge,
     /// Running home.
     Return,
+    /// (agents) A quick dash at the opponent.
+    Dash,
+    /// (agents) Throwing a pair of punches.
+    Punch,
+    /// (agents) A roll that can't be touched.
+    Roll,
+}
+
+/// A patch of the map a move left behind (see `ZoneKind`): where it is, whose it is, how old it is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Zone {
+    pub owner: usize,
+    /// The move that made it (its cooldown is held while the zone lasts).
+    pub move_index: usize,
+    pub kind: super::data::ZoneKind,
+    pub x: i32,
+    pub half_width: i32,
+    pub age: u32,
+    pub life: u32,
 }
 
 /// A summoned minion (a goblin).
@@ -56,6 +78,10 @@ pub struct Minion {
     pub facing: i32,
     /// Hit points left; the minion dies at 0.
     pub health: i32,
+    /// Fights like a little fighter (see `MinionData::agent`).
+    pub agent: bool,
+    /// Which way a roll goes.
+    pub roll_dir: i32,
     /// Frames until the same swing can hit it again (also drives the hit flash).
     pub hurt: u32,
 }
@@ -104,6 +130,8 @@ pub struct GameState {
     pub projectiles: Vec<Projectile>,
     /// Every minion on the field.
     pub minions: Vec<Minion>,
+    /// Glitched areas and spills on the map.
+    pub zones: Vec<Zone>,
     /// Each fighter's raven.
     pub ravens: [Raven; 2],
     /// Where projectiles were just destroyed (subpixels) and on which frame, kept a few frames so the
@@ -136,6 +164,7 @@ impl GameState {
             fighters: Self::starting_fighters(),
             projectiles: Vec::new(),
             minions: Vec::new(),
+            zones: Vec::new(),
             ravens: [Raven::idle(); 2],
             cleared: Vec::new(),
             impacts: Vec::new(),
@@ -161,16 +190,33 @@ impl GameState {
     /// Advance one frame (60 a second). Fighters are processed in index order, so the result depends
     /// only on the state and the inputs.
     pub fn step(&mut self, inputs: [Input; 2], chars: [&CharacterData; 2]) {
+        if let Phase::Briefing(mut ready) = self.phase {
+            for (i, input) in inputs.iter().enumerate() {
+                if input.has(Input::READY) {
+                    ready |= 1 << i;
+                }
+            }
+            self.phase = if ready == 0b11 { Phase::Fighting } else { Phase::Briefing(ready) };
+            return;
+        }
         self.frame += 1;
         let now = self.frame;
         self.cleared.retain(|c| c.2 + 6 > now);
         self.impacts.retain(|c| c.2 + 6 > now);
         let fighting = self.phase == Phase::Fighting;
         let inputs = if fighting { inputs } else { [Input::default(); 2] };
+        let inputs = self.reversed(inputs);
 
+        let before = [self.fighters[0].x, self.fighters[1].x];
         for i in 0..2 {
             self.fighters[i].raven_away = self.ravens[i].active;
             self.fighters[i].step(inputs[i], chars[i]);
+        }
+        // in a glitched area they move at a third of their speed
+        for i in 0..2 {
+            if self.in_zone(i, super::data::ZoneKind::Glitch) {
+                self.fighters[i].x = before[i] + (self.fighters[i].x - before[i]) / 3;
+            }
         }
 
         self.clamp_to_stage();
@@ -180,6 +226,7 @@ impl GameState {
             Phase::Fighting => {
                 self.start_lashes(chars);
                 self.update_portals(chars);
+                self.spawn_zones(chars);
                 self.apply_poofs(chars);
                 self.apply_slams(inputs);
                 self.lock_beams(chars);
@@ -212,7 +259,7 @@ impl GameState {
                     self.phase = Phase::RoundEnd(n + 1);
                 }
             }
-            Phase::MatchOver => {}
+            Phase::MatchOver | Phase::Briefing(_) => {}
         }
     }
 
@@ -242,6 +289,7 @@ impl GameState {
         self.set_health(health);
         self.projectiles.clear();
         self.minions.clear();
+        self.zones.clear();
         self.ravens = [Raven::idle(); 2];
         self.cleared.clear();
         self.impacts.clear();
@@ -254,7 +302,68 @@ impl GameState {
     fn can_block(&self, defender: usize, input: Input) -> bool {
         let f = &self.fighters[defender];
         let blockable_state = f.is_neutral() || f.state == FighterState::Blockstun;
-        blockable_state && input.has(Input::BLOCK) && f.block_disabled == 0
+        blockable_state && input.has(Input::BLOCK) && f.block_disabled == 0 && !self.in_zone(defender, super::data::ZoneKind::Glitch)
+    }
+
+    /// Whether `who` is standing in a zone of `kind` that isn't theirs (a spill only reaches those on the ground).
+    pub fn in_zone(&self, who: usize, kind: super::data::ZoneKind) -> bool {
+        let f = &self.fighters[who];
+        if kind == super::data::ZoneKind::Spill && !f.grounded() {
+            return false;
+        }
+        self.zones.iter().any(|z| z.kind == kind && z.owner != who && (f.x - z.x).abs() <= z.half_width)
+    }
+
+    /// Standing on a spill reverses the controls: left and right (and the rolls) swap, and so do up and down.
+    fn reversed(&self, mut inputs: [Input; 2]) -> [Input; 2] {
+        for i in 0..2 {
+            if !self.in_zone(i, super::data::ZoneKind::Spill) {
+                continue;
+            }
+            let swap = |bits: u16, a: u16, b: u16| (bits & !(a | b)) | if bits & a != 0 { b } else { 0 } | if bits & b != 0 { a } else { 0 };
+            let mut bits = inputs[i].0;
+            bits = swap(bits, Input::LEFT, Input::RIGHT);
+            bits = swap(bits, Input::UP, Input::DOWN);
+            bits = swap(bits, Input::ROLL_LEFT, Input::ROLL_RIGHT);
+            inputs[i] = Input(bits);
+        }
+        inputs
+    }
+
+    /// Put a zone on the map (a character has one of each kind at a time).
+    fn add_zone(&mut self, owner: usize, move_index: usize, zone: super::data::ZoneData, x: i32) {
+        let limit = Self::STAGE_HALF_WIDTH - 10 * PX;
+        self.zones.retain(|z| !(z.owner == owner && z.kind == zone.kind));
+        self.zones.push(Zone { owner, move_index, kind: zone.kind, x: x.clamp(-limit, limit), half_width: zone.half_width * PX, age: 0, life: zone.life });
+    }
+
+    /// Glitched areas appear on the opponent when their move reaches its frame; every zone ages and goes.
+    fn spawn_zones(&mut self, chars: [&CharacterData; 2]) {
+        for z in &mut self.zones {
+            z.age += 1;
+        }
+        self.zones.retain(|z| z.age < z.life);
+        // while a zone lasts its move's cooldown is held at full; it only starts counting once the zone is gone
+        for z in &self.zones {
+            if let Some(mv) = chars[z.owner].moves.get(z.move_index).filter(|m| m.cooldown > 0) {
+                if let Some(left) = self.fighters[z.owner].cooldowns.get_mut(z.move_index) {
+                    *left = mv.cooldown;
+                }
+            }
+        }
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            if f.state != FighterState::Attack {
+                continue;
+            }
+            let mv = &chars[owner].moves[f.attack];
+            let Some(zone) = mv.zone.filter(|z| z.at_frame > 0) else { continue };
+            if f.state_frame == zone.at_frame {
+                let x = self.fighters[1 - owner].x;
+                let index = f.attack;
+                self.add_zone(owner, index, zone, x);
+            }
+        }
     }
 
     /// World-space box `[x0, y0, x1, y1]` (subpixels) of `attacker`'s hitbox, if it's active.
@@ -331,7 +440,7 @@ impl GameState {
             if let Some(h) = self.hitbox(a, chars[a]) {
                 let mv = &chars[a].moves[self.fighters[a].attack];
                 let power = if self.fighters[a].finisher { 150 } else { 100 };
-                if self.hit_minion(1 - a, h, mv.damage * power / 100) && !landed[a] {
+                if self.hit_minion(1 - a, h, mv.damage * power / 100, mv.button == super::data::Button::Light) && !landed[a] {
                     self.fighters[a].hit_done = true;
                     self.fighters[a].hitstop = mv.hitstop;
                 }
@@ -415,18 +524,19 @@ impl GameState {
                     }
                 }
             }
-            self.hit_minion(d, [ax - radius, 0, ax + radius, 40 * PX], slam_damage);
+            self.hit_minion(d, [ax - radius, 0, ax + radius, 40 * PX], slam_damage, false);
         }
     }
 
-    /// Hurt every goblin of `owner` overlapping `area` (a world box in subpixels).
-    fn hit_minion(&mut self, owner: usize, area: [i32; 4], damage: i32) -> bool {
+    /// Hurt every goblin of `owner` overlapping `area` (a world box in subpixels). A light attack (`lethal`) takes
+    /// an agent out in one hit whatever its health; heavier damage (a ground pound) has to add up.
+    fn hit_minion(&mut self, owner: usize, area: [i32; 4], damage: i32, lethal: bool) -> bool {
         let mut any = false;
         // goblins can be hit anywhere along a fighter's height, and one swing hits every goblin it reaches
-        for m in self.minions.iter_mut().filter(|m| m.owner == owner && m.health > 0) {
+        for m in self.minions.iter_mut().filter(|m| m.owner == owner && m.health > 0 && m.mode != MinionMode::Roll) {
             let (x0, x1) = (m.x - 8 * PX, m.x + 8 * PX);
             if area[0] < x1 && x0 < area[2] && area[1] < 56 * PX && 0 < area[3] {
-                m.health -= damage;
+                m.health -= if lethal && m.agent { m.health } else { damage };
                 m.hurt = 8;
                 any = true;
             }
@@ -718,10 +828,12 @@ impl GameState {
 
     /// Damage and stun `defender` with `mv`, pushing them in direction `dir`.
     fn apply_hit(&mut self, defender: usize, mv: &MoveData, dir: i32, blocked: bool, power: i32) -> bool {
+        // an attacker in a glitched area does half damage
+        let weakened = self.in_zone(1 - defender, super::data::ZoneKind::Glitch);
         let d = &mut self.fighters[defender];
         d.hitstop = mv.hitstop;
         let push = dir * mv.knockback * PX;
-        let damage = mv.damage * power / 100;
+        let damage = mv.damage * power / 100 / if weakened { 2 } else { 1 };
         // a guard holds against lights for good; heavier moves break it after so many hits
         let mut blocked = blocked;
         if blocked && mv.guard_need() > 0 {
@@ -963,6 +1075,8 @@ impl GameState {
                     continue;
                 }
                 self.minions.push(Minion {
+                    agent: md.agent,
+                    roll_dir: 0,
                     health: md.health,
                     hurt: 0,
                     owner,
@@ -998,9 +1112,14 @@ impl GameState {
             let foe = &self.fighters[1 - m.owner];
             let _ = owner;
             let step = |from: i32, to: i32, speed: i32| from + (to - from).clamp(-speed * PX, speed * PX);
+            if md.agent {
+                self.step_agent(&mut m, md, mv, inputs);
+                self.minions.push(m);
+                continue;
+            }
             // the swarm rushes the opponent and stays on them, each goblin taking its own spot and biting every `interval` frames
             match m.mode {
-                MinionMode::Wait | MinionMode::Return | MinionMode::Charge => {
+                MinionMode::Wait | MinionMode::Return | MinionMode::Charge | MinionMode::Dash | MinionMode::Punch | MinionMode::Roll => {
                     m.mode = MinionMode::Charge;
                     let spot = foe.x + (m.slot as i32 * 2 - md.count as i32 + 1) * 5 * PX;
                     m.x = step(m.x, spot, md.speed);
@@ -1017,6 +1136,65 @@ impl GameState {
             }
             self.minions.push(m);
         }
+    }
+
+    /// One step of an agent: it walks up to the opponent, dashes when it is far off, throws a pair of punches,
+    /// and then either rolls away from an attack it sees coming or rolls through to the other side before it goes
+    /// again. It has one hit point, so any hit takes it out (and it can't be touched mid-roll).
+    fn step_agent(&mut self, m: &mut Minion, md: crate::sim::MinionData, mv: &MoveData, inputs: [Input; 2]) {
+        let foe = &self.fighters[1 - m.owner];
+        let toward = if foe.x >= m.x { 1 } else { -1 };
+        let dist = (foe.x - m.x).abs();
+        let reach = md.reach * PX;
+        match m.mode {
+            MinionMode::Wait | MinionMode::Return | MinionMode::Charge => {
+                m.mode = MinionMode::Charge;
+                m.facing = toward;
+                if dist > 70 * PX && m.timer >= 6 {
+                    m.mode = MinionMode::Dash;
+                    m.timer = 0;
+                } else if dist <= reach && m.timer >= md.interval {
+                    m.mode = MinionMode::Punch;
+                    m.timer = 0;
+                    m.bit = false;
+                } else if dist > reach - 2 * PX {
+                    m.x += toward * md.speed.min(((dist - reach + 2 * PX) / PX).max(1)) * PX;
+                }
+            }
+            MinionMode::Dash => {
+                m.facing = toward;
+                m.x += toward * md.speed * 3 * PX;
+                if dist <= reach || m.timer >= 14 {
+                    m.mode = MinionMode::Charge;
+                    m.timer = md.interval / 2;
+                }
+            }
+            MinionMode::Punch => {
+                m.facing = toward;
+                // two punches, 6 and 16 frames in
+                if (m.timer == 6 || m.timer == 16) && dist <= reach + 4 * PX && foe.y < 40 * PX && foe.state != FighterState::Ko && !foe.invulnerable() {
+                    m.bit = true;
+                    let blocked = self.can_block(1 - m.owner, inputs[1 - m.owner]);
+                    self.apply_hit(1 - m.owner, mv, m.facing, blocked, 100);
+                }
+                if m.timer >= 28 {
+                    let foe = &self.fighters[1 - m.owner];
+                    // after the pair: slip away from an attack that's coming, or roll through to their other side
+                    m.mode = MinionMode::Roll;
+                    m.timer = 0;
+                    m.roll_dir = if foe.state == FighterState::Attack { -toward } else { toward };
+                }
+            }
+            MinionMode::Roll => {
+                m.x += m.roll_dir * md.speed * 2 * PX;
+                if m.timer >= 16 {
+                    m.mode = MinionMode::Charge;
+                    m.timer = 0;
+                }
+            }
+        }
+        let limit = Self::STAGE_HALF_WIDTH - 8 * PX;
+        m.x = m.x.clamp(-limit, limit);
     }
 
     /// A hit on a cursed fighter removes the half of the curse on the attacker's side.
@@ -1159,6 +1337,12 @@ impl GameState {
             let floor = data.aim_ground && p.y <= 0;
             let gone = floor || p.age >= data.lifetime || p.x.abs() > Self::STAGE_HALF_WIDTH + 80 * PX || p.y < -10 * PX;
 
+            // a thrown drink spills where it lands, or where it gave out
+            if hit || gone {
+                if let Some(zone) = mv.zone.filter(|z| z.at_frame == 0) {
+                    self.add_zone(owner, p.move_index, zone, p.x);
+                }
+            }
             if hit {
                 let blocked = self.can_block(defender, inputs[defender]) && !data.unblockable;
                 let dir = if p.vx >= 0 { 1 } else { -1 };
@@ -1195,7 +1379,7 @@ impl GameState {
                     // a shot counts as a hit from its owner's side for the opponent's curse
                     self.mark_curse(owner);
                 }
-            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.shot_damage.unwrap_or(mv.damage) * p.power / 100) {
+            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.shot_damage.unwrap_or(mv.damage) * p.power / 100, mv.button == super::data::Button::Light) {
                 // the shot is spent on the goblin
             } else if !gone {
                 self.projectiles.push(p);
@@ -1237,7 +1421,7 @@ impl Default for GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sim::data::Button;
+    use crate::sim::data::{Button, ZoneKind};
     use std::hash::{DefaultHasher, Hash, Hasher};
 
     fn ayz() -> CharacterData {
@@ -1329,6 +1513,24 @@ mod tests {
         }
         assert_eq!(s.fighters[0].y, 0);
         assert_eq!(s.fighters[0].state, FighterState::Idle);
+    }
+
+    #[test]
+    fn the_match_waits_in_the_briefing_until_both_players_are_ready() {
+        let c = ayz();
+        let mut s = GameState::new();
+        s.phase = Phase::Briefing(0);
+        let go = Input(Input::READY | Input::RIGHT);
+        s.step([go, Input::default()], [&c, &c]);
+        assert_eq!(s.phase, Phase::Briefing(0b01), "one player ready is not enough");
+        for _ in 0..30 {
+            s.step([Input(Input::RIGHT), Input::default()], [&c, &c]);
+        }
+        assert_eq!(s.phase, Phase::Briefing(0b01));
+        assert_eq!((s.frame, s.timer), (0, GameState::ROUND_FRAMES), "the round does not run");
+        assert_eq!(s.fighters[0].x, -80 * PX, "nobody moves");
+        s.step([Input::default(), Input(Input::READY)], [&c, &c]);
+        assert_eq!(s.phase, Phase::Fighting);
     }
 
     #[test]
@@ -1979,7 +2181,7 @@ mod tests {
         // A standing jab's height is within a goblin's reach; two jabs kill one.
         let x = s.minions[0].x;
         let jab = [x - 10 * PX, 29 * PX, x + 10 * PX, 40 * PX];
-        assert!(s.hit_minion(0, jab, 35) && s.hit_minion(0, jab, 35));
+        assert!(s.hit_minion(0, jab, 35, false) && s.hit_minion(0, jab, 35, false));
         s.step([Input(0), Input(0)], [&a, &evilayz()]);
         assert!(s.minions.len() < 4, "a goblin that took two jabs should be dead");
     }
@@ -3500,6 +3702,203 @@ mod tests {
             f.start_stun(FighterState::Hitstun, 20, 0);
             assert_eq!(f.state, FighterState::Attack, "a hit no longer stops {}", mv.name);
         }
+    }
+
+    fn katmata() -> CharacterData {
+        CharacterData::from_ron(include_str!("../../assets/characters/katmata.ron")).unwrap()
+    }
+
+    #[test]
+    fn katmatas_light_throws_a_cigarette_and_uses_one_up() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 80 * PX;
+        assert_eq!(s.fighters[0].cigs(&k), 7);
+        s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
+        assert_eq!(k.moves[s.fighters[0].attack].name, "Cigarette Toss");
+        assert_eq!(s.fighters[0].cigs(&k), 6);
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the cigarette hit");
+    }
+
+    #[test]
+    fn with_no_cigarettes_he_flicks_his_lighter_and_rolls_new_ones_while_idle() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 200 * PX;
+        s.fighters[0].cigs_used = 7;
+        s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
+        assert_eq!(k.moves[s.fighters[0].attack].name, "Lighter Flick");
+        assert_eq!(s.fighters[0].cigs(&k), 0);
+        // he rolls one a second while he stands there
+        for _ in 0..60 + 60 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert!(s.fighters[0].cigs(&k) >= 1, "rolled one");
+        for _ in 0..60 * 8 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert_eq!(s.fighters[0].cigs(&k), 7, "never more than seven");
+    }
+
+    #[test]
+    fn katmatas_third_light_is_an_iced_latte_that_spills_and_reverses_the_controls_for_two_seconds() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 70 * PX;
+        s.fighters[0].combo = 2;
+        s.fighters[0].combo_timer = 20;
+        s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
+        assert_eq!(k.moves[s.fighters[0].attack].name, "Iced Latte");
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert_eq!(s.zones.len(), 1, "it spilled where it landed");
+        assert_eq!(s.zones[0].kind, ZoneKind::Spill);
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "and did a bit of damage");
+        // standing on the spill, left walks right
+        s.fighters[1].x = s.zones[0].x;
+        s.fighters[1].state = FighterState::Idle;
+        let x = s.fighters[1].x;
+        s.step([Input(0), Input(Input::LEFT)], [&k, &evilayz()]);
+        s.step([Input(0), Input(Input::LEFT)], [&k, &evilayz()]);
+        assert!(s.fighters[1].x > x, "the controls are reversed");
+        // the owner is not affected
+        s.fighters[0].x = s.zones[0].x;
+        s.fighters[0].state = FighterState::Idle;
+        let kx = s.fighters[0].x;
+        s.step([Input(Input::LEFT), Input(0)], [&k, &evilayz()]);
+        s.step([Input(Input::LEFT), Input(0)], [&k, &evilayz()]);
+        assert!(s.fighters[0].x < kx, "his own spill doesn't reverse him");
+        // and it is gone after two seconds
+        for _ in 0..120 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert!(s.zones.is_empty());
+    }
+
+    #[test]
+    fn the_heavys_cooldown_is_four_seconds_unless_it_lands_and_then_it_starts_after_the_zone() {
+        let k = katmata();
+        let e = evilayz();
+        let heavy = k.moves.iter().position(|m| m.name == "Push to Prod").unwrap();
+        let cooldown = k.moves[heavy].cooldown;
+        assert_eq!(cooldown, 240, "four seconds");
+        // interrupted before the zone appears: just the four seconds, counted from the cast
+        let mut s = GameState::new();
+        s.fighters[0].x = -200 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&k, &e]);
+        for _ in 0..20 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        s.fighters[0].start_stun(FighterState::Hitstun, 10, 0);
+        for _ in 0..20 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert!(s.zones.is_empty());
+        assert!(s.fighters[0].cooldown_left(heavy) <= cooldown - 20, "four seconds from the cast");
+        // it lands: the cooldown waits for the zone to end
+        let mut t = GameState::new();
+        t.fighters[0].x = -200 * PX;
+        t.fighters[1].x = 100 * PX;
+        t.step([Input(Input::HEAVY), Input(0)], [&k, &e]);
+        for _ in 0..70 {
+            t.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert_eq!(t.zones.len(), 1);
+        let zone_left = t.zones[0].life - t.zones[0].age;
+        assert_eq!(t.fighters[0].cooldown_left(heavy), cooldown, "held at four seconds while the zone lasts");
+        for _ in 0..zone_left + 30 {
+            t.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert!(t.zones.is_empty());
+        let left = t.fighters[0].cooldown_left(heavy);
+        assert!(left < cooldown && left >= cooldown - 40, "it counts down only once the zone is gone ({left})");
+    }
+
+    #[test]
+    fn katmatas_laptop_glitches_a_wide_area_round_the_enemy() {
+        let k = katmata();
+        let e = evilayz();
+        let mut s = GameState::new();
+        s.fighters[0].x = -200 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&k, &e]);
+        for _ in 0..60 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert_eq!(s.zones.len(), 1);
+        let z = s.zones[0];
+        assert_eq!(z.kind, ZoneKind::Glitch);
+        assert!((z.x - 100 * PX).abs() < 4 * PX, "on the enemy");
+        assert_eq!(z.half_width, 80 * PX, "a large area");
+        // in it: slowed to a third, can't block, does half damage; out of it nothing changes
+        assert!(s.in_zone(1, ZoneKind::Glitch) && !s.in_zone(0, ZoneKind::Glitch));
+        let x = s.fighters[1].x;
+        for _ in 0..30 {
+            s.step([Input(0), Input(Input::RIGHT)], [&k, &e]);
+        }
+        let slow = s.fighters[1].x - x;
+        let mut free = GameState::new();
+        free.fighters[0].x = -200 * PX;
+        free.fighters[1].x = 100 * PX;
+        let x = free.fighters[1].x;
+        for _ in 0..30 {
+            free.step([Input(0), Input(Input::RIGHT)], [&k, &e]);
+        }
+        let quick = free.fighters[1].x - x;
+        assert!(slow * 5 / 2 < quick, "slowed to about a third ({slow} against {quick})");
+        let guarding = s.can_block(1, Input(Input::BLOCK));
+        assert!(!guarding, "can't block in it");
+        let jab = e.moves[0].clone();
+        let (mut hit_in, mut hit_out) = (s.clone(), s.clone());
+        hit_in.fighters[1].x = 100 * PX;
+        hit_out.zones.clear();
+        let (before_in, before_out) = (hit_in.fighters[0].health, hit_out.fighters[0].health);
+        hit_in.apply_hit(0, &jab, 1, false, 100);
+        hit_out.apply_hit(0, &jab, 1, false, 100);
+        assert_eq!(before_in - hit_in.fighters[0].health, (before_out - hit_out.fighters[0].health) / 2, "half damage");
+        // it ends after five seconds
+        for _ in 0..300 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert!(s.zones.is_empty());
+    }
+
+    #[test]
+    fn two_agents_walk_in_punch_and_die_to_one_hit() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 120 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&k, &evilayz()]);
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert_eq!(s.minions.len(), 2);
+        assert!(s.minions.iter().all(|m| m.agent && m.health == 40));
+        let start = s.fighters[1].x;
+        for _ in 0..240 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the agents punched the enemy");
+        let _ = start;
+        // a ground pound (28) doesn't kill one, but any light attack does
+        let jab = [s.minions[0].x - 4 * PX, 0, s.minions[0].x + 4 * PX, 40 * PX];
+        s.minions[0].mode = MinionMode::Charge;
+        let before = s.minions[0].health;
+        assert!(s.hit_minion(0, jab, 28, false));
+        assert!(s.minions[0].health > 0 && s.minions[0].health < before, "a slam hurts but doesn't kill");
+        s.minions[0].hurt = 0;
+        assert!(s.hit_minion(0, jab, 1, true));
+        assert!(s.minions[0].health <= 0, "one light attack kills");
     }
 
     #[test]

@@ -124,6 +124,9 @@ pub struct Fighter {
     /// Frames left to recast the heavy into a bat, frames left as a bat, and whether she turned back this frame
     /// (the puff of smoke that stuns).
     pub bat_ready: u32,
+    /// Cigarettes used up (the character starts with all of them), and frames since the last one was rolled.
+    pub cigs_used: u8,
+    pub cig_timer: u32,
     /// Which way the drawing faces: the opponent, except a bat (or a bat roll) faces where it is flying.
     pub heading: i32,
     /// This fighter's roll is a bat too.
@@ -284,6 +287,8 @@ impl Fighter {
             silenced: 0,
             light_lock: 0,
             bat_ready: 0,
+            cigs_used: 0,
+            cig_timer: 0,
             heading: facing,
             bat_roll: false,
             held: false,
@@ -361,6 +366,11 @@ impl Fighter {
         self.vx = push;
     }
 
+    /// Cigarettes left (0 for a character who has none to count).
+    pub fn cigs(&self, data: &CharacterData) -> u32 {
+        data.cigarettes.map_or(0, |c| (c.max - self.cigs_used.min(c.max)) as u32)
+    }
+
     /// Lights can't be used after a landed bite, or as a bat.
     pub fn lights_blocked(&self) -> bool {
         self.light_lock > 0 || self.bat_form > 0
@@ -409,6 +419,10 @@ impl Fighter {
     }
 
     fn begin_attack(&mut self, index: usize, mv: &MoveData) {
+        self.cigs_used = self.cigs_used.saturating_add(mv.cig_cost as u8);
+        if mv.cig_cost > 0 {
+            self.cig_timer = 0;
+        }
         if self.futile > 0 {
             self.health = (self.health - Self::FUTILITY_DAMAGE).max(1);
         }
@@ -497,6 +511,17 @@ impl Fighter {
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
         self.light_lock = self.light_lock.saturating_sub(1);
+        // while he isn't fighting he rolls a new cigarette every so often
+        if let Some(c) = data.cigarettes {
+            self.cigs_used = self.cigs_used.min(c.max);
+            if self.cigs_used > 0 && self.is_neutral() {
+                self.cig_timer += 1;
+                if self.cig_timer >= c.roll_frames {
+                    self.cig_timer = 0;
+                    self.cigs_used -= 1;
+                }
+            }
+        }
         // a grab only holds someone while they are stunned by it
         if self.state != FighterState::Hitstun {
             self.held = false;
@@ -814,6 +839,15 @@ impl Fighter {
                     if (data.moves[index].raven_move.is_some() && self.raven_away) || self.on_cooldown(index, data) {
                         continue;
                     }
+                    // out of cigarettes: the other move for that button, if there is one
+                    let index = if data.moves[index].cig_cost > self.cigs(data) {
+                        match data.out_of_cigs_move(button) {
+                            Some(i) => i,
+                            None => continue,
+                        }
+                    } else {
+                        index
+                    };
                     self.begin_attack(index, &data.moves[index]);
                     return true;
                 }

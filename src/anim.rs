@@ -65,6 +65,12 @@ pub enum Frame {
     Portal(usize),
     /// Turned into a bat: the wings beating.
     Bat(usize),
+    /// Throwing a cigarette: the arm cocked back, the throw, taking a new one from the pack, lighting it.
+    Throw(usize),
+    /// Throwing an iced latte: the cup held back, the throw, the follow-through.
+    Latte(usize),
+    /// Idle while he rolls a cigarette: the paper, the tobacco, the roll, a lick of the edge.
+    Craft(usize),
     /// Between the alternating punches' drawings: right swinging out, right coming back, then the left.
     PunchMid(usize),
 }
@@ -105,6 +111,9 @@ impl Frame {
             Frame::Portal(i) => format!("portal_{i}"),
             Frame::Bat(i) => format!("batform_{i}"),
             Frame::PunchMid(i) => format!("punch_mid_{i}"),
+            Frame::Throw(i) => format!("throw_{i}"),
+            Frame::Latte(i) => format!("latte_{i}"),
+            Frame::Craft(i) => format!("craft_{i}"),
         }
     }
 
@@ -156,6 +165,12 @@ pub const GUN_FRAMES: usize = 5;
 /// Portal special drawings.
 pub const PORTAL_FRAMES: usize = 8;
 
+/// Throwing a cigarette, and rolling one while idle.
+pub const THROW_FRAMES: usize = 8;
+pub const CRAFT_FRAMES: usize = 4;
+/// Throwing an iced latte.
+pub const LATTE_FRAMES: usize = 3;
+
 /// Bat form drawings (one wingbeat).
 pub const BAT_FRAMES: usize = 4;
 
@@ -201,6 +216,15 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.bat_form().is_some() {
         v.extend((0..BAT_FRAMES).map(Frame::Bat));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Throw) {
+        v.extend((0..THROW_FRAMES).map(Frame::Throw));
+    }
+    if data.cigarettes.is_some() {
+        v.extend((0..CRAFT_FRAMES).map(Frame::Craft));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Latte) {
+        v.extend((0..LATTE_FRAMES).map(Frame::Latte));
     }
     if data.air_shot_tilt {
         v.extend((0..LEAN_FRAMES).map(Frame::Lean));
@@ -261,6 +285,9 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     }
     if speaking {
         Frame::Speak(((tick / 10) % 2) as usize)
+    } else if data.cigarettes.is_some() && f.cigs_used > 0 && f.state == FighterState::Idle {
+        // not fighting and a cigarette short: rolling one
+        Frame::Craft(((tick / 15) % CRAFT_FRAMES as u32) as usize)
     } else {
         Frame::Idle(((tick / 40) % 2) as usize)
     }
@@ -391,6 +418,33 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
         };
     }
     match mv.anim {
+        AnimKind::Latte => Frame::Latte(if frame <= mv.startup {
+            0
+        } else if frame <= mv.startup + mv.active + 4 {
+            1
+        } else {
+            2
+        }),
+        // typing on the laptop (not held): it opens, the two typing drawings alternate, it shuts at the end
+        AnimKind::Read if mv.channel.is_none() => Frame::Read(if frame * 100 <= mv.startup * 20 {
+            0
+        } else if frame <= mv.startup + mv.active {
+            1 + ((frame / 6) % 2) as usize
+        } else {
+            3
+        }),
+        AnimKind::Throw => {
+            // the arm back, the throw, then six drawings while he reloads: reaching for the pack, pulling one out, raising
+            // it, putting it in his mouth, lighting it, the first drag
+            let after = frame.saturating_sub(mv.startup + mv.active);
+            Frame::Throw(if frame <= mv.startup {
+                0
+            } else if after <= 3 {
+                1
+            } else {
+                (2 + ((after - 3) * 6 / mv.recovery.saturating_sub(2).max(1)) as usize).min(7)
+            })
+        }
         AnimKind::Punch if data.punch_tweens => {
             // wind-up, swinging out, the strike, the arm coming back
             let side = f.punch_side as usize * 2;
@@ -855,5 +909,23 @@ mod tests {
         assert_eq!(at(&mut f, m.startup + m.volley_delay + 1), Frame::Boost(3), "the volley");
         let needed = frames_for(&c);
         assert!((0..BOOST_FRAMES).all(|i| needed.contains(&Frame::Boost(i))));
+    }
+
+    /// Katmata has every drawing the game asks of him (and the effects his moves name).
+    #[test]
+    fn katmata_has_all_his_drawings() {
+        let data = CharacterData::from_ron(include_str!("../assets/characters/katmata.ron")).unwrap();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sprites/katmata");
+        for f in frames_for(&data) {
+            let stem = f.file_stem();
+            assert!(dir.join(format!("{stem}.png")).exists(), "missing {stem}");
+            assert!(dir.join(format!("{stem}_mark.png")).exists(), "missing {stem}_mark");
+        }
+        for effect in ["cigarette_0", "cigarette_1", "glitch_0", "glitch_1", "glitch_2", "glitch_3", "spill_0", "spill_1", "icedcup_0", "icedcup_1", "agent_0", "agent_1", "agent_2", "agent_3", "agent_4", "agent_5", "agent_6", "agent_7", "agent_8"] {
+            assert!(dir.join(format!("{effect}.png")).exists(), "missing {effect}");
+        }
+        for icon in ["light", "heavy", "special"] {
+            assert!(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/icons/katmata/{icon}.png")).exists());
+        }
     }
 }

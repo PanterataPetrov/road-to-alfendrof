@@ -108,6 +108,7 @@ fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, r
         }
     }
     info.locked = false;
+    crate::menus::spawn_panel(&mut commands, AppState::Online);
     let gold = Color::srgb(1.0, 0.9, 0.4);
     let grey = Color::srgb(0.6, 0.6, 0.7);
     text(&mut commands, Label, "Online", 24.0, gold, 82.0);

@@ -63,15 +63,34 @@ fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &Charac
         return Input::default();
     }
     let (m, o) = (&state.fighters[me], &state.fighters[1 - me]);
-    // goblins nearer than the opponent are fought first; fighters always face the opponent, so only goblins on that side can be hit
-    let target_x = state
+    // sub-agents are fought before anything else while any are alive; goblins nearer than the opponent are fought
+    // first. Fighters always face the opponent, so only minions on that side can be hit
+    let on_my_side = |g: &&crate::sim::Minion| (g.x - m.x) * (o.x - m.x) > 0;
+    let agent_x = state
         .minions
         .iter()
-        .filter(|g| g.owner != me && g.health > 0 && (g.x - m.x) * (o.x - m.x) > 0)
+        .filter(|g| g.owner != me && g.health > 0 && g.agent)
+        .filter(on_my_side)
         .map(|g| g.x)
-        .min_by_key(|x| (x - m.x).abs())
-        .filter(|x| (x - m.x).abs() < (o.x - m.x).abs())
-        .unwrap_or(o.x);
+        .min_by_key(|x| (x - m.x).abs());
+    // an agent that got behind me can't be hit (I face the opponent): roll through it to put it in front again
+    let agent_behind = state
+        .minions
+        .iter()
+        .filter(|g| g.owner != me && g.health > 0 && g.agent && !on_my_side(g) && (g.x - m.x).abs() < 70 * PX)
+        .map(|g| g.x)
+        .min_by_key(|x| (x - m.x).abs());
+    let target_x = agent_x.unwrap_or_else(|| {
+        state
+            .minions
+            .iter()
+            .filter(|g| g.owner != me && g.health > 0)
+            .filter(on_my_side)
+            .map(|g| g.x)
+            .min_by_key(|x| (x - m.x).abs())
+            .filter(|x| (x - m.x).abs() < (o.x - m.x).abs())
+            .unwrap_or(o.x)
+    });
     let dx = target_x - m.x;
     let dist = dx.abs() / PX;
     let opponent_dist = (o.x - m.x).abs() / PX;
@@ -93,7 +112,7 @@ fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &Charac
     let cornered = (away == Input::RIGHT && m.x / PX > wall - 25) || (away == Input::LEFT && m.x / PX < -(wall - 25));
 
     // guard (sometimes crouching, to get under shots) while the opponent attacks up close
-    if o.state == FighterState::Attack && opponent_dist < DANGER_RANGE && roll < 65 {
+    if o.state == FighterState::Attack && opponent_dist < DANGER_RANGE && roll < 65 && !(agent_x.is_some() && dist < 45) {
         // a zoner would rather hop away than block
         if data.keeps_distance && roll < 35 && m.is_neutral() {
             return Input(if cornered { toward } else { away } | Input::UP);
@@ -160,6 +179,15 @@ fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &Charac
                 return Input(Input::RIGHT);
             }
         }
+    }
+
+    // agents come first: a light kills one outright, so it is all the CPU uses on them, and it doesn't back off from them
+    if agent_x.is_none() {
+        if let Some(bx) = agent_behind {
+            return button(if bx > m.x { Input::ROLL_RIGHT } else { Input::ROLL_LEFT });
+        }
+    } else if dist <= data.cpu_range.unwrap_or(ATTACK_RANGE) + 10 {
+        return if roll < 88 { button(Input::LIGHT) } else { Input::default() };
     }
 
     // a zoner backs away when the opponent gets close (hopping over them against a wall), pokes when they're right on top of it, and shoots from a distance with the volley and the special
@@ -350,6 +378,8 @@ mod tests {
             facing: 1,
             health: 100,
             hurt: 0,
+            agent: false,
+            roll_dir: 0,
         });
         let i = cpu_input(&s, 1, &c[1]);
         assert!(!i.has(Input::LEFT) && !i.has(Input::RIGHT), "should stand and attack the goblin, got {i:?}");
@@ -539,7 +569,7 @@ mod tests {
     #[test]
     fn a_close_range_cpu_closes_the_gap_on_a_shooter_and_a_ranged_cpu_still_fights_without_breaking() {
         // every pairing of champions plays on without panicking or standing still for good
-        let names = ["ayz", "anaran", "cowboy", "scribe", "junkhead", "evilayz", "gray_persona"];
+        let names = ["ayz", "anaran", "cowboy", "scribe", "junkhead", "evilayz", "gray_persona", "katmata"];
         for a in names {
             for b in names {
                 let (ca, cb) = (load(a), load(b));
@@ -554,5 +584,59 @@ mod tests {
                 assert!(s.fighters[0].health < Fighter::MAX_HEALTH || s.fighters[1].health < Fighter::MAX_HEALTH || s.wins.iter().sum::<u8>() > 0, "{a} vs {b}: nobody ever got hurt");
             }
         }
+    }
+
+    /// A sub-agent of the opponent's, `at` pixels along the stage.
+    fn agent_at(x: i32) -> crate::sim::Minion {
+        crate::sim::Minion {
+            owner: 0,
+            slot: 0,
+            x: x * PX,
+            mode: crate::sim::MinionMode::Charge,
+            timer: 0,
+            age: 0,
+            move_index: 0,
+            bit: false,
+            facing: 1,
+            health: 40,
+            hurt: 0,
+            agent: true,
+            roll_dir: 0,
+        }
+    }
+
+    #[test]
+    fn the_cpu_uses_lights_on_a_sub_agent_in_front_of_it_and_never_backs_off_from_it() {
+        let c = chars();
+        let mut seen_light = false;
+        for window in 0..40u32 {
+            let mut s = GameState::new();
+            s.fighters[0].x = -200 * PX;
+            s.fighters[1].x = 100 * PX;
+            s.minions.push(agent_at(80));
+            s.frame = window * DECISION_FRAMES;
+            let i = cpu_input(&s, 1, &c[1]);
+            assert!(!i.has(Input::HEAVY) && !i.has(Input::SPECIAL) && !i.has(Input::RIGHT), "only lights on an agent, got {i:?}");
+            seen_light |= i.has(Input::LIGHT);
+        }
+        assert!(seen_light, "it attacks the agent");
+    }
+
+    #[test]
+    fn the_cpu_rolls_through_a_sub_agent_that_got_behind_it() {
+        let c = chars();
+        let mut rolled = false;
+        for window in 0..40u32 {
+            let mut s = GameState::new();
+            s.fighters[0].x = -200 * PX;
+            s.fighters[1].x = 100 * PX;
+            // the agent is on the far side of the CPU from its opponent
+            s.minions.push(agent_at(130));
+            s.frame = window * DECISION_FRAMES;
+            let i = cpu_input(&s, 1, &c[1]);
+            rolled |= i.has(Input::ROLL_RIGHT);
+            assert!(!i.has(Input::ROLL_LEFT));
+        }
+        assert!(rolled, "it rolls towards the agent to put it in front");
     }
 }

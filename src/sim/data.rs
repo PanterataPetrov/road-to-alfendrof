@@ -39,6 +39,9 @@ pub struct CharacterData {
     /// A raven on the shoulder that `raven_move` moves can send out.
     #[serde(default)]
     pub raven: Option<RavenData>,
+    /// A supply of cigarettes that moves with `cig_cost` use up and that is rolled again while not fighting.
+    #[serde(default)]
+    pub cigarettes: Option<CigData>,
     /// The CPU plays this one as a zoner: it backs away to keep its distance and shoots.
     #[serde(default)]
     pub keeps_distance: bool,
@@ -124,9 +127,43 @@ pub enum AnimKind {
     Boost,
     /// Writing in a book: it opens, he writes (two drawings alternate), then a flourish (4 drawings).
     Write,
+    /// Throwing a cigarette: the arm back, the throw, taking a new one from the pack, lighting it (8 drawings).
+    Throw,
+    /// Throwing an iced latte: the cup held back, the throw, the follow-through (3 drawings).
+    Latte,
     /// Crouching, arms up, leaping back into a portal, gone, lunging out behind the enemy, fangs bared, the bite,
     /// recovering (8 drawings).
     Portal,
+}
+
+/// A patch of the map a move leaves behind (see `MoveData::zone`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize)]
+pub enum ZoneKind {
+    /// A glitched area: whoever stands in it (except its owner) moves at a third of their speed, can't block, and
+    /// does half damage.
+    Glitch,
+    /// A spill on the ground: whoever stands on it (except its owner) has their controls reversed.
+    Spill,
+}
+
+/// Where and for how long a move leaves a zone: `half_width` pixels either side of its middle, for `life` frames.
+/// With `at_frame` it appears on the opponent when the move reaches that frame; without, where the move's
+/// projectile lands.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct ZoneData {
+    pub kind: ZoneKind,
+    pub half_width: i32,
+    pub life: u32,
+    #[serde(default)]
+    pub at_frame: u32,
+}
+
+/// The cigarettes a character carries: `max` of them (one lit in the mouth, the rest in a pack), and how many
+/// frames he needs to roll a new one while he is not fighting.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct CigData {
+    pub max: u8,
+    pub roll_frames: u32,
 }
 
 /// Turning into a bat (see `MoveData::bat_form`).
@@ -261,6 +298,9 @@ impl ProjectileData {
 /// every `interval` frames.
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct MinionData {
+    /// Fights like a little fighter (walks, dashes, punches in a pair, rolls away) instead of swarming and biting.
+    #[serde(default)]
+    pub agent: bool,
     pub count: u32,
     pub lifetime: u32,
     pub interval: u32,
@@ -467,6 +507,15 @@ pub struct MoveData {
     /// specials. Casting it once more, or waiting it out, turns her back in a puff of smoke that stuns.
     #[serde(default)]
     pub bat_form: Option<BatFormData>,
+    /// A zone this move leaves on the map (see `ZoneData`).
+    #[serde(default)]
+    pub zone: Option<ZoneData>,
+    /// Cigarettes this move uses up (see `CharacterData::cigarettes`); it can't be used with fewer left.
+    #[serde(default)]
+    pub cig_cost: u32,
+    /// Used in place of this button's other move when there aren't enough cigarettes for it.
+    #[serde(default)]
+    pub out_of_cigs: bool,
     /// After this move starts it can't be started again for this many frames (the staff slam).
     #[serde(default)]
     pub cooldown: u32,
@@ -596,6 +645,11 @@ impl CharacterData {
     /// The bat form one of the moves grants, if any.
     pub fn bat_form(&self) -> Option<BatFormData> {
         self.moves.iter().find_map(|m| m.bat_form)
+    }
+
+    /// The Light that takes the place of the usual one when the cigarettes have run out.
+    pub fn out_of_cigs_move(&self, button: Button) -> Option<usize> {
+        self.moves.iter().position(|m| m.out_of_cigs && m.button == button)
     }
 
     /// The move that grants the bat form.

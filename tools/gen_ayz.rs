@@ -810,7 +810,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) | Frame::Throw(_) | Frame::Craft(_) | Frame::Latte(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -4610,9 +4610,7 @@ fn an_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
         frames.push((format!("runes_{v}"), runes(v).to_png()));
         frames.push((format!("missile_{v}"), missile(v).to_png()));
     }
-    for (i, g) in goblin_frames().into_iter().enumerate() {
-        frames.push((format!("goblin_{i}"), g.to_png()));
-    }
+    // (the goblins are drawn by tools/gen_goblins.py)
     frames
 }
 
@@ -4637,7 +4635,6 @@ fn an_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     let mut x = 8;
     let y = rows * (ch + 8) + 8;
     let mut effects = vec![runes(0).to_png(), runes(1).to_png()];
-    effects.extend(goblin_frames().into_iter().map(|g| g.to_png()));
     for img in effects {
         for yy in 0..img.height() * scale {
             for xx in 0..img.width() * scale {
@@ -4683,76 +4680,6 @@ fn runes(variant: usize) -> Grid {
     }
     g
 }
-
-/// One goblin drawing (15 x 16) from a template, facing right.
-fn goblin_base() -> Vec<Vec<char>> {
-    [
-        "...............",
-        "..ì.........ì..",
-        "..àà..àààà..àà.",
-        "...àààààààààà..",
-        "...àYVàààYVàà..",
-        "....àààààààà...",
-        "....àà.WW.àà...",
-        ".....èèèèèè....",
-        "....òòòòòòòò...",
-        "...àòòòòòòòòà..",
-        "...àòòòòòòòòà..",
-        "....òòòòòòòò...",
-        "....èè....èè...",
-        "....àà....àà...",
-        "...VVV....VVV..",
-        "...............",
-    ]
-    .iter()
-    .map(|r| r.chars().collect())
-    .collect()
-}
-
-/// The goblin's drawings: 0-1 waiting (a little bob), 2-3 running, 4 biting.
-fn goblin_frames() -> Vec<Grid> {
-    let base = goblin_base();
-    let to_grid = |rows: Vec<Vec<char>>| Grid::from_rows(rows);
-    let mut frames = Vec::new();
-    // Waiting: the second drawing is a step down (the body bobs) with the eyes shut.
-    frames.push(to_grid(base.clone()));
-    let mut bob = base.clone();
-    bob.remove(0);
-    bob.insert(14, vec!['.'; 15]);
-    for row in bob.iter_mut().skip(3).take(2) {
-        for c in row.iter_mut() {
-            if *c == 'Y' {
-                *c = 'è';
-            }
-        }
-    }
-    frames.push(to_grid(bob));
-    // Running: one leg forward and one back, then the other way, body leaning forward.
-    for (a, b) in [(2usize, 8usize), (8, 2)] {
-        let mut r = base.clone();
-        for y in 12..=14 {
-            r[y] = vec!['.'; 15];
-        }
-        for (x0, rows) in [(a, [("èè", 'è'), ("àà", 'à'), ("VVV", 'V')]), (b, [("èè", 'è'), ("àà", 'à'), ("VVV", 'V')])] {
-            for (k, (s, _)) in rows.iter().enumerate() {
-                for (i, c) in s.chars().enumerate() {
-                    if x0 + i < 15 {
-                        r[12 + k][x0 + i] = c;
-                    }
-                }
-            }
-        }
-        frames.push(to_grid(r));
-    }
-    // Biting: the mouth wide open with teeth, arms up.
-    let mut bite = base.clone();
-    for (x, y, c) in [(6, 6, 'V'), (7, 6, 'W'), (8, 6, 'W'), (9, 6, 'V'), (7, 7, 'V'), (8, 7, 'V'), (2, 8, 'à'), (2, 7, 'à'), (12, 8, 'à'), (12, 7, 'à')] {
-        bite[y][x] = c;
-    }
-    frames.push(to_grid(bite));
-    frames
-}
-
 
 // Junkhead's whip. Each pose that uses it has a layer drawn over the body: the same left edge as
 // the body drawing, but WHIP_W wide so the whip can reach far in front of him. The game puts the

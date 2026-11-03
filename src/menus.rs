@@ -30,6 +30,7 @@ impl Plugin for MenuPlugin {
                     // (menus only: during a fight there is nothing for them to do)
                     menu_nav.run_if(not(in_state(AppState::Fight))),
                     menu_labels.run_if(not(in_state(AppState::Fight))),
+                    menu_pages.run_if(not(in_state(AppState::Fight))),
                     glitch_subtitles.run_if(not(in_state(AppState::Fight))),
                     animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
@@ -43,6 +44,18 @@ impl Plugin for MenuPlugin {
 struct Menu {
     cursor: usize,
     len: usize,
+    /// Items shown at a time; the rest are on other pages (A/D or Left/Right turn the page).
+    per_page: usize,
+}
+
+impl Menu {
+    fn page(&self) -> usize {
+        self.cursor / self.per_page.max(1)
+    }
+
+    fn pages(&self) -> usize {
+        self.len.div_ceil(self.per_page.max(1)).max(1)
+    }
 }
 
 /// Who is picking: 0 = P1, 1 = P2.
@@ -90,12 +103,46 @@ impl Item {
     }
 }
 
-fn confirm_pressed(keys: &ButtonInput<KeyCode>) -> bool {
+pub fn confirm_pressed(keys: &ButtonInput<KeyCode>) -> bool {
     [KeyCode::Enter, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::Space].iter().any(|&k| keys.just_pressed(k))
 }
 
 fn back_pressed(keys: &ButtonInput<KeyCode>) -> bool {
     [KeyCode::Escape, KeyCode::KeyG, KeyCode::KeyK, KeyCode::Backspace].iter().any(|&k| keys.just_pressed(k))
+}
+
+/// The box every menu's text sits in, so all screens use the same part of the window: size, and the sprites
+/// (a dark fill, a violet frame) as `(sprite, position)` for the caller to spawn.
+pub const PANEL: Vec2 = Vec2::new(372.0, 204.0);
+
+pub fn panel_parts() -> Vec<(Sprite, Vec3)> {
+    let frame = Color::srgb(0.55, 0.42, 0.85);
+    let inner = Color::srgb(0.22, 0.16, 0.4);
+    let (w, h) = (PANEL.x, PANEL.y);
+    let mut parts = vec![(Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.84), PANEL), Vec3::new(0.0, 0.0, 1.0))];
+    for (color, grow, z) in [(frame, 0.0, 1.1), (inner, -4.0, 1.1)] {
+        let (w, h) = (w + grow, h + grow);
+        parts.push((Sprite::from_color(color, Vec2::new(w, 2.0)), Vec3::new(0.0, h / 2.0 - 1.0, z)));
+        parts.push((Sprite::from_color(color, Vec2::new(w, 2.0)), Vec3::new(0.0, -h / 2.0 + 1.0, z)));
+        parts.push((Sprite::from_color(color, Vec2::new(2.0, h)), Vec3::new(-w / 2.0 + 1.0, 0.0, z)));
+        parts.push((Sprite::from_color(color, Vec2::new(2.0, h)), Vec3::new(w / 2.0 - 1.0, 0.0, z)));
+    }
+    parts
+}
+
+pub fn spawn_panel(commands: &mut Commands, state: AppState) {
+    for (sprite, at) in panel_parts() {
+        commands.spawn((DespawnOnExit(state.clone()), sprite, Transform::from_translation(at)));
+    }
+}
+
+/// The pixel-art backdrop of the character and stage select.
+fn spawn_backdrop(commands: &mut Commands, state: AppState, asset_server: &AssetServer) {
+    commands.spawn((
+        DespawnOnExit(state),
+        Sprite { image: asset_server.load("backgrounds/select.png"), custom_size: Some(Vec2::new(384.0, 216.0)), ..default() },
+        Transform::from_xyz(0.0, 0.0, -8.0),
+    ));
 }
 
 fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32, color: Color, y: f32) -> Entity {
@@ -110,26 +157,39 @@ fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32,
         .id()
 }
 
+/// Which page of a long menu a piece of it is on.
+#[derive(Component)]
+struct Page(usize);
+
+/// "Page 1/2" under a paged menu.
+#[derive(Component)]
+struct PageText;
+
 fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: &str, hint: &str, items: Vec<Item>, top_override: Option<f32>) {
     menu.cursor = 0;
     menu.len = items.len();
+    if state != AppState::Title {
+        spawn_panel(commands, state.clone());
+    }
     let header = spawn_text(commands, state.clone(), title.into(), 24.0, Color::srgb(1.0, 0.9, 0.4), 82.0);
     commands.entity(header).insert(Header);
     spawn_text(commands, state.clone(), hint.into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
 
-    // rows with pictures need more room; long lists of text get smaller
+    // rows with pictures need more room: four to a page, the rest on the next; long lists of text get smaller
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
     let compact = !with_pictures && items.len() > 6;
-    let spacing = if with_pictures { (140.0 / items.len().max(1) as f32).min(40.0) } else if compact { 12.0 } else { 22.0 };
+    menu.per_page = if with_pictures { 4 } else { items.len().max(1) };
+    let spacing = if with_pictures { 35.0 } else if compact { 12.0 } else { 22.0 };
     let top = top_override.unwrap_or(if with_pictures { 56.0 } else if compact { 62.0 } else { 40.0 });
     let size = if compact { 8.0 } else { 16.0 };
     for (index, item) in items.into_iter().enumerate() {
-        let y = top - index as f32 * spacing;
+        let page = Page(index / menu.per_page);
+        let y = top - (index % menu.per_page) as f32 * spacing;
         let e = spawn_text(commands, state.clone(), item.label.clone(), size, item.color, y);
-        commands.entity(e).insert(MenuItem { index, label: item.label, color: item.color, enabled: item.enabled });
+        commands.entity(e).insert((MenuItem { index, label: item.label, color: item.color, enabled: item.enabled }, Page(page.0)));
         if let Some(sub) = item.subtitle {
             let e = spawn_text(commands, state.clone(), sub.clone(), 8.0, item.color.with_alpha(0.7), y - 11.0);
-            commands.entity(e).insert(Transform::from_xyz(0.0, y - 11.0, 5.0));
+            commands.entity(e).insert((Transform::from_xyz(0.0, y - 11.0, 5.0), Page(page.0)));
             if item.corrupted {
                 commands.entity(e).insert(Glitch(sub));
             }
@@ -139,16 +199,22 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
             // dark frame, then the picture, left of the name
             commands.spawn((
                 DespawnOnExit(state.clone()),
+                Page(page.0),
                 Sprite::from_color(Color::srgb(0.02, 0.02, 0.05), Vec2::splat(size + 4.0)),
                 Transform::from_xyz(-142.0, y, 4.0),
             ));
             commands.spawn((
                 DespawnOnExit(state.clone()),
                 Portrait(index),
+                Page(page.0),
                 Sprite { image, custom_size: Some(Vec2::splat(size)), ..default() },
                 Transform::from_xyz(-142.0, y, 5.0),
             ));
         }
+    }
+    if menu.pages() > 1 {
+        let e = spawn_text(commands, state, String::new(), 8.0, Color::srgb(0.75, 0.7, 0.95), -78.0);
+        commands.entity(e).insert(PageText);
     }
 }
 
@@ -216,6 +282,7 @@ fn spawn_char_select(
     asset_server: Res<AssetServer>,
 ) {
     picking.0 = 0;
+    spawn_backdrop(&mut commands, AppState::CharSelect, &asset_server);
     let items = roster
         .0
         .iter()
@@ -236,7 +303,7 @@ fn spawn_char_select(
         &mut menu,
         AppState::CharSelect,
         &pick_title(0, *mode),
-        "W/S or Up/Down: move    F / J / Enter: pick    G / K / Esc: back",
+        "W/S: move    A/D: page    F / J / Enter: pick    G / K / Esc: back",
         items,
         None,
     );
@@ -250,7 +317,8 @@ fn pick_title(player: usize, mode: Mode) -> String {
     }
 }
 
-fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Res<Stages>) {
+fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Res<Stages>, asset_server: Res<AssetServer>) {
+    spawn_backdrop(&mut commands, AppState::StageSelect, &asset_server);
     let items = stages
         .0
         .iter()
@@ -279,6 +347,30 @@ fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: 
     }
     if down {
         menu.cursor = (menu.cursor + 1) % menu.len;
+    }
+    // a paged menu turns the page sideways, on the same row where there is one
+    let turn = left_right(&keys);
+    if turn != 0 && menu.pages() > 1 {
+        let (per_page, pages) = (menu.per_page, menu.pages() as i32);
+        let page = (menu.page() as i32 + turn).rem_euclid(pages) as usize;
+        menu.cursor = (page * per_page + menu.cursor % per_page).min(menu.len - 1);
+    }
+}
+
+/// Shows the page the cursor is on and says which it is.
+fn menu_pages(menu: Res<Menu>, mut parts: Query<(&Page, &mut Visibility)>, mut label: Query<&mut Text2d, With<PageText>>) {
+    let page = menu.page();
+    for (Page(p), mut visibility) in &mut parts {
+        let want = if *p == page { Visibility::Inherited } else { Visibility::Hidden };
+        if *visibility != want {
+            *visibility = want;
+        }
+    }
+    for mut text in &mut label {
+        let new = format!("< Page {}/{} >", page + 1, menu.pages());
+        if text.0 != new {
+            text.0 = new;
+        }
     }
 }
 
