@@ -2,7 +2,7 @@
 ; `ISCC.exe installer\road-to-alfendrof.iss`. The installer is written to installer\Output.
 
 #define AppName "Road to Alfendrof"
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.4"
 #define AppExe "RoadToAlfendrof.exe"
 
 [Setup]
