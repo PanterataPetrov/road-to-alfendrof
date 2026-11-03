@@ -47,7 +47,9 @@ struct SpinnerDot(usize);
 
 /// Only an installed game updates itself: the assets sit beside its exe, unlike a build run from the project.
 fn is_installed() -> bool {
-    !cfg!(debug_assertions)
+    // (the updater downloads the Windows installer, so other systems never update themselves)
+    cfg!(windows)
+        && !cfg!(debug_assertions)
         && std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("assets").is_dir())).unwrap_or(false)
 }
 

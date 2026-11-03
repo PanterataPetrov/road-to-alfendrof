@@ -1,5 +1,5 @@
 //! Player settings from the Options menu: music volume, display mode and the fight keys. Saved to
-//! `%APPDATA%\Road to Alfendrof\settings.ron` whenever they change. F11 toggles fullscreen anywhere.
+//! `%APPDATA%\Road to Alfendrof\settings.ron` (`~/Library/Application Support/...` on a Mac) whenever they change. F11 toggles fullscreen anywhere.
 
 use std::path::PathBuf;
 
@@ -126,8 +126,13 @@ struct Saved {
 }
 
 fn settings_path() -> PathBuf {
-    match std::env::var_os("APPDATA") {
-        Some(dir) => PathBuf::from(dir).join("Road to Alfendrof").join("settings.ron"),
+    // Windows: %APPDATA%; macOS: ~/Library/Application Support; elsewhere: ~/.config
+    let dir = std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| {
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        Some(if cfg!(target_os = "macos") { home.join("Library").join("Application Support") } else { home.join(".config") })
+    });
+    match dir {
+        Some(dir) => dir.join("Road to Alfendrof").join("settings.ron"),
         None => PathBuf::from("settings.ron"),
     }
 }

@@ -198,6 +198,8 @@ fn online_screen(
     mut status_text: Single<&mut Text2d, (With<StatusText>, Without<AddrText>, Without<LanText>, Without<InputText>, Without<PopupText>)>,
     mut popup_text: Single<&mut Text2d, (With<PopupText>, Without<AddrText>, Without<LanText>, Without<InputText>, Without<StatusText>)>,
     time: Res<Time>,
+    // the machine's address on the local network and when it was last looked up (it opens a socket, so not every frame)
+    mut lan_cache: Local<Option<(f32, Option<std::net::Ipv4Addr>)>>,
 ) {
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let invited = matches!(lobby.0.as_ref().map(|l| l.stage), Some(Stage::Invited(_)));
@@ -269,28 +271,46 @@ fn online_screen(
         }
     }
 
-    addr_text.0 = match mine {
+    let new_addr = match mine {
         Some(a) => a.to_string(),
         None => "looking it up...".into(),
     };
-    let lan = lan_ip().map(|ip| format!("{ip}:{}", l.port()));
+    if addr_text.0 != new_addr {
+        addr_text.0 = new_addr;
+    }
+    let now = time.elapsed_secs();
+    if lan_cache.is_none_or(|(at, _)| now - at > 3.0) {
+        *lan_cache = Some((now, lan_ip()));
+    }
+    let lan = lan_cache.and_then(|(_, ip)| ip).map(|ip| format!("{ip}:{}", l.port()));
     let router = match &l.mapping {
         Mapping::Working => "asking router...".to_string(),
         Mapping::Opened(_) => "router port opened".to_string(),
         Mapping::Unavailable(why) if why == "off" => String::new(),
         Mapping::Unavailable(_) => "router: port not opened".to_string(),
     };
-    lan_text.0 = match lan {
+    let new_lan = match lan {
         Some(a) => format!("same network: {a}   {router}"),
         None => router,
     };
+    if lan_text.0 != new_lan {
+        lan_text.0 = new_lan;
+    }
     let blink = if (time.elapsed_secs() * 2.0) as u32 % 2 == 0 { "_" } else { " " };
-    input_text.0 = format!("{}{}", info.typed, blink);
-    status_text.0 = info.message.clone();
-    popup_text.0 = match (l.stage, info.invite_from) {
+    let new_input = format!("{}{}", info.typed, blink);
+    if input_text.0 != new_input {
+        input_text.0 = new_input;
+    }
+    if status_text.0 != info.message {
+        status_text.0 = info.message.clone();
+    }
+    let new_popup = match (l.stage, info.invite_from) {
         (Stage::Invited(from), _) | (_, Some(from)) if invited => format!("{from} invites you!   F: accept    G: decline"),
         _ => String::new(),
     };
+    if popup_text.0 != new_popup {
+        popup_text.0 = new_popup;
+    }
 }
 
 /// Test helper (see `DevOptions`): invite, accept and pick with no one at the keyboard.

@@ -63,6 +63,10 @@ pub enum Frame {
     Roll(usize),
     /// The portal special: stepping back, leaping into the portal, the bite, recovery.
     Portal(usize),
+    /// Turned into a bat: the wings beating.
+    Bat(usize),
+    /// Between the alternating punches' drawings: right swinging out, right coming back, then the left.
+    PunchMid(usize),
 }
 
 impl Frame {
@@ -99,6 +103,8 @@ impl Frame {
             Frame::Write(i) => format!("write_{i}"),
             Frame::Lean(i) => format!("lean_{i}"),
             Frame::Portal(i) => format!("portal_{i}"),
+            Frame::Bat(i) => format!("batform_{i}"),
+            Frame::PunchMid(i) => format!("punch_mid_{i}"),
         }
     }
 
@@ -148,7 +154,10 @@ pub const LEAN_FRAMES: usize = 3;
 pub const GUN_FRAMES: usize = 5;
 
 /// Portal special drawings.
-pub const PORTAL_FRAMES: usize = 4;
+pub const PORTAL_FRAMES: usize = 8;
+
+/// Bat form drawings (one wingbeat).
+pub const BAT_FRAMES: usize = 4;
 
 /// Everything this character needs: the common set plus what its moves use.
 pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
@@ -159,6 +168,9 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Punch) {
         v.extend((0..PUNCH_FRAMES).map(Frame::Punch));
+        if data.punch_tweens {
+            v.extend((0..PUNCH_FRAMES).map(Frame::PunchMid));
+        }
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Kicks) {
         v.extend((0..KICK_FRAMES).map(Frame::Kick));
@@ -186,6 +198,9 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Write) {
         v.extend((0..WRITE_FRAMES).map(Frame::Write));
+    }
+    if data.bat_form().is_some() {
+        v.extend((0..BAT_FRAMES).map(Frame::Bat));
     }
     if data.air_shot_tilt {
         v.extend((0..LEAN_FRAMES).map(Frame::Lean));
@@ -219,6 +234,8 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
     match f.state {
         FighterState::Ko => return Frame::Ko,
         FighterState::Hitstun => return Frame::Hurt(if f.state_frame < 8 { 0 } else { 1 }),
+        // a bat only ever flaps
+        _ if f.bat_form > 0 => return Frame::Bat((tick / 5) as usize % BAT_FRAMES),
         FighterState::Blockstun | FighterState::Guard => return Frame::Block,
         FighterState::Attack => return attack_frame(f, data),
         // a dash is a quick run
@@ -374,6 +391,19 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
         };
     }
     match mv.anim {
+        AnimKind::Punch if data.punch_tweens => {
+            // wind-up, swinging out, the strike, the arm coming back
+            let side = f.punch_side as usize * 2;
+            if frame * 2 <= mv.startup {
+                Frame::Punch(side)
+            } else if frame <= mv.startup {
+                Frame::PunchMid(side)
+            } else if frame <= mv.startup + mv.active + 1 {
+                Frame::Punch(side + 1)
+            } else {
+                Frame::PunchMid(side + 1)
+            }
+        }
         AnimKind::Punch => Frame::Punch(f.punch_side as usize * 2 + (frame > mv.startup) as usize),
         AnimKind::Kicks => {
             if frame <= mv.startup {
@@ -479,16 +509,26 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
             })
         }
         AnimKind::Portal => {
-            // step back, leap into the portal (unseen until she comes out), then the bite if the grab held
+            // crouch, arms up, leap back, dive in (unseen until she comes out); if the grab held she lunges out,
+            // rears back with her fangs bared, bites, and wipes her mouth
             let vanish = mv.portal.map_or(mv.startup, |p| p.vanish);
-            Frame::Portal(if frame * 2 <= vanish {
+            let bite = mv.startup + mv.hit_gap;
+            Frame::Portal(if frame * 3 <= vanish {
                 0
-            } else if frame <= mv.startup + mv.active && !f.grabbed {
+            } else if frame * 3 <= vanish * 2 {
                 1
-            } else if f.grabbed && frame <= mv.startup + mv.hit_gap + mv.active + 6 {
+            } else if frame <= vanish {
                 2
-            } else {
+            } else if !f.grabbed && frame <= mv.startup + mv.active {
                 3
+            } else if f.grabbed && frame <= mv.startup + mv.hit_gap / 2 {
+                4
+            } else if f.grabbed && frame <= bite {
+                5
+            } else if f.grabbed && frame <= bite + mv.active + 8 {
+                6
+            } else {
+                7
             })
         }
         AnimKind::Soft => Frame::Soft(if frame <= mv.startup { 0 } else { 1 }),

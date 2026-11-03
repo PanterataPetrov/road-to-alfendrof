@@ -142,6 +142,14 @@ fn color(ch: char) -> Option<[u8; 3]> {
         // The fedora's purple magic.
         '9' => [176, 70, 226],
         '0' => [112, 34, 168],
+        // the Professor's belt and buckle
+        'ç' => [58, 38, 26],
+        'ñ' => [30, 20, 15],
+        'õ' => [96, 66, 44],
+        'ã' => [214, 112, 28],
+        'é' => [178, 138, 62],
+        'ø' => [116, 86, 38],
+        'å' => [236, 206, 128],
         _ => panic!("no colour for {ch:?}"),
     })
 }
@@ -267,7 +275,26 @@ fn widen(r: &Grid) -> Grid {
     Grid::from_rows(rows)
 }
 
+/// The Professor's default pose: the reworked drawing in `tools/ayz_reworked.png` (made from `ayz_original` with
+/// `tools/rework_ayz.py`: a shorter, rounder forehead, a thinner raised arm, a slimmer body with the belly covered
+/// by the trousers, a leather belt and legs two pixels longer). The Negaprofessor keeps the original drawing.
 fn ayz_default() -> Grid {
+    grid_from_png_with("tools/ayz_reworked.png", &AYZ_BELT)
+}
+
+/// The belt's colours in the reworked Professor, and the letters they are drawn with.
+const AYZ_BELT: [([u8; 3], char); 7] = [
+    ([58, 38, 26], 'ç'),
+    ([30, 20, 15], 'ñ'),
+    ([96, 66, 44], 'õ'),
+    ([214, 112, 28], 'ã'),
+    ([178, 138, 62], 'é'),
+    ([116, 86, 38], 'ø'),
+    ([236, 206, 128], 'å'),
+];
+
+/// The Professor as first drawn (the Negaprofessor's drawings come from this one).
+fn ayz_original() -> Grid {
     let mut g = widen(&Grid::parse(REF));
 
     // Give the face one more row of cheek under the glasses, so the moustache has skin above it
@@ -490,7 +517,8 @@ fn belly(g: &mut Grid) {
 /// Where the default pose sits on a drawing's canvas. The canvases leave room on the left for a
 /// swinging back arm, on the right for outstretched arms, and above for raised hands.
 const OX: i32 = 12;
-const OY: i32 = 8;
+/// (8 before the rework; his legs are two pixels longer now, so the rest of him sits two higher)
+const OY: i32 = 6;
 /// Rows 0..=41 of the default pose are the upper body; the lower body starts at row 36 and so
 /// overlaps the upper body, whose belly hangs over the trousers.
 const UPPER_LAST_ROW: i32 = 41;
@@ -640,7 +668,7 @@ fn split(default: &Grid) -> Parts {
             if !"abde".contains(ch) {
                 continue;
             }
-            if x <= 11 {
+            if x <= 12 {
                 left_arm.push((x, y, ch));
                 body.set(x, y, if x >= 9 { 'w' } else { '.' });
             } else if x >= 32 {
@@ -653,8 +681,8 @@ fn split(default: &Grid) -> Parts {
         body,
         left_arm,
         right_arm,
-        left_shoe: grab_shoe(default, 4, 49, 16, 54),
-        right_shoe: grab_shoe(default, 27, 49, 40, 54),
+        left_shoe: grab_shoe(default, 4, 51, 16, 56),
+        right_shoe: grab_shoe(default, 27, 51, 40, 56),
         hat: Vec::new(),
     }
 }
@@ -669,8 +697,8 @@ fn pose(elbow: (f32, f32), hand: (f32, f32)) -> ArmSpec {
 }
 
 /// The shoulders, in the default pose's coordinates: where an arm leaves the sleeve.
-const LEFT_SHOULDER: (f32, f32) = (7.5, 20.5);
-const RIGHT_SHOULDER: (f32, f32) = (35.5, 20.5);
+const LEFT_SHOULDER: (f32, f32) = (8.5, 20.5);
+const RIGHT_SHOULDER: (f32, f32) = (34.5, 20.5);
 
 type Joint = (f32, f32);
 
@@ -782,7 +810,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -851,19 +879,23 @@ fn leg_layer(parts: &Parts, legs: &Legs) -> Grid {
     };
     copy_rows(&mut c, LOWER_FIRST_ROW, 41);
     let (left_hip, right_hip) = ((10.0, 41.0), (31.0, 41.0));
+    // The poses were made for legs that reached the floor at row 48; they are two pixels longer now, so every knee
+    // and ankle below the hips stretches by the same proportion.
+    let longer = |j: Joint| (j.0, if j.1 > 41.0 { 41.0 + (j.1 - 41.0) * 9.0 / 7.0 } else { j.1 });
     match legs {
-        Legs::Stand => copy_rows(&mut c, 42, 54),
+        Legs::Stand => copy_rows(&mut c, 42, parts.body.h as i32 - 1),
         Legs::Pose { left, right } => {
+            let (left, right) = ((longer(left.0), longer(left.1)), (longer(right.0), longer(right.1)));
             draw_leg(&mut c, OY, left_hip, left.0, left.1);
             stamp_shoe(&mut c, OY, &parts.left_shoe, left.1 .0 as i32 - 6, left.1 .1 as i32 + 1);
             draw_leg(&mut c, OY, right_hip, right.0, right.1);
             stamp_shoe(&mut c, OY, &parts.right_shoe, right.1 .0 as i32 - 4, right.1 .1 as i32 + 1);
         }
         Legs::Squat => {
-            draw_leg(&mut c, OY, (10.0, 49.0), (1.0, 46.0), (6.0, 48.0));
-            stamp_shoe(&mut c, OY, &parts.left_shoe, 0, 49);
-            draw_leg(&mut c, OY, (31.0, 49.0), (41.0, 46.0), (35.0, 48.0));
-            stamp_shoe(&mut c, OY, &parts.right_shoe, 31, 49);
+            draw_leg(&mut c, OY, (10.0, 51.0), (1.0, 48.0), (6.0, 50.0));
+            stamp_shoe(&mut c, OY, &parts.left_shoe, 0, 51);
+            draw_leg(&mut c, OY, (31.0, 51.0), (41.0, 48.0), (35.0, 50.0));
+            stamp_shoe(&mut c, OY, &parts.right_shoe, 31, 51);
         }
     }
     c
@@ -878,13 +910,15 @@ fn drawing_upright(parts: &Parts, frame: Frame, raven: bool) -> Grid {
         // The raven perches on his front shoulder and leans with the torso.
         stamp_raven(&mut upper, &raven_perched(), RAVEN_PERCH.0, RAVEN_PERCH.1);
     }
+    // In the squat the legs are as long as before, so the torso drops the two pixels his longer legs lifted it.
+    let dy = spec.dy + if matches!(spec.legs, Legs::Squat) { 2 } else { 0 };
     for cy in 0..UPPER_H {
         // The lean pivots at the hips, so the head moves furthest.
         let r = (cy - OY).clamp(0, UPPER_LAST_ROW);
         let shift = (spec.lean * (UPPER_LAST_ROW - r) as f32 / UPPER_LAST_ROW as f32).round() as i32;
         for x in 0..FRAME_W {
             let ch = upper.get(x, cy);
-            let (nx, ny) = (x + shift, cy + spec.dy);
+            let (nx, ny) = (x + shift, cy + dy);
             if ch != '.' && nx >= 0 && nx < FRAME_W && ny >= 0 && ny < FULL_H {
                 canvas.set(nx, ny, ch);
             }
@@ -1182,7 +1216,7 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
 // that the perched, flying, pecking and clawing drawings all match.
 
 /// Where the perched raven's feet are in the torso drawing (x centre, y bottom row).
-const RAVEN_PERCH: (i32, i32) = (48, 22);
+const RAVEN_PERCH: (i32, i32) = (48, 20);
 
 fn rv_ellipse(g: &mut Grid, cx: f32, cy: f32, rx: f32, ry: f32, ch: char) {
     for y in 0..g.h as i32 {
@@ -2407,7 +2441,9 @@ fn gs_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
     let mut frames = Vec::new();
     for f in gs_frame_list() {
         let (body, _hat) = gs_drawing(&parts, f);
-        frames.push((f.file_stem(), body.to_png()));
+        let mut img = body.to_png();
+        scribe_flair(f, &mut img);
+        frames.push((f.file_stem(), img));
     }
     for (name, make) in scribe_effects() {
         for v in 0..2 {
@@ -2415,6 +2451,92 @@ fn gs_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
         }
     }
     frames
+}
+
+/// Drawn touches on the Scribe's finished frames: ink flicking off the quill as he stabs, the page lighting up
+/// and his words lifting off it as he writes, and the trail of the flourish at the end.
+fn scribe_flair(frame: Frame, img: &mut image::RgbaImage) {
+    fn put(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 3]) {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() {
+            img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+        }
+    }
+    let opaque = |img: &image::RgbaImage, x: u32, y: u32| img.get_pixel(x, y)[3] > 0;
+    const INK: [u8; 3] = [34, 30, 58];
+    const INK_LIGHT: [u8; 3] = [70, 62, 110];
+    const GLINT: [u8; 3] = [250, 250, 255];
+    const GLOW: [u8; 3] = [255, 248, 214];
+    match frame {
+        // a stab: streaks of ink behind the quill's tip, drops flicking off ahead of it, a glint on the nib
+        Frame::Punch(1) | Frame::Punch(3) | Frame::Soft(1) | Frame::CrouchSoft(1) | Frame::AirSoft(1) => {
+            let (w, h) = (img.width(), img.height());
+            let mut tip = None;
+            for x in (0..w).rev() {
+                if let Some(y) = (8..h.min(44)).find(|&y| opaque(img, x, y)) {
+                    tip = Some((x as i32, y as i32));
+                    break;
+                }
+            }
+            let Some((tx, ty)) = tip else { return };
+            for (dy, len) in [(-3, 7), (3, 6), (-5, 4)] {
+                for k in 0..len {
+                    if k % 3 != 2 {
+                        put(img, tx - 3 - k, ty + dy, if k < len / 2 { INK_LIGHT } else { INK });
+                    }
+                }
+            }
+            for (dx, dy) in [(2, -1), (4, 1), (5, -2), (7, 0), (3, 2)] {
+                put(img, tx + dx, ty + dy, INK);
+            }
+            put(img, tx, ty, GLINT);
+        }
+        Frame::Write(k) if k > 0 => {
+            // where the open book is: its pages are the only cream in the drawing
+            let page = |p: &image::Rgba<u8>| p[3] > 0 && (p[0], p[1], p[2]) == (242, 228, 196);
+            let (mut x0, mut x1, mut y0, mut y1) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+            for (x, y, p) in img.enumerate_pixels() {
+                if page(p) {
+                    x0 = x0.min(x as i32);
+                    x1 = x1.max(x as i32);
+                    y0 = y0.min(y as i32);
+                    y1 = y1.max(y as i32);
+                }
+            }
+            if x0 > x1 {
+                return;
+            }
+            // the page he is writing on glows
+            for y in y0..=y1 {
+                for x in (x0 + x1) / 2 + 1..=x1 {
+                    if page(img.get_pixel(x as u32, y as u32)) {
+                        put(img, x, y, GLOW);
+                    }
+                }
+            }
+            if k < 3 {
+                // his words lift off the page as little dashes of ink and light, drifting up and away from him
+                let k = k as i32;
+                for (n, (dx, rise)) in [(1, 3), (4, 6), (6, 2), (2, 9), (5, 11), (3, 14)].iter().enumerate() {
+                    let x = x1 + 1 + dx + rise / 2 + (n as i32 + k) % 2;
+                    let y = y0 + 3 - rise - k;
+                    let c = if n % 2 == 0 { INK_LIGHT } else { GLOW };
+                    put(img, x, y, c);
+                    if *rise < 10 {
+                        put(img, x + 1, y, c);
+                    }
+                }
+            } else {
+                // the flourish: a curl of ink sweeping up from the page's corner
+                for t in 0..14 {
+                    let a = t as f32 / 13.0 * 2.2;
+                    let x = x1 + 3 + (a.sin() * 6.0) as i32 + t / 2;
+                    let y = y0 + 4 - (t as f32 * 0.8) as i32 + ((a * 1.5).cos() * 2.0) as i32;
+                    put(img, x, y, if t < 5 { INK } else if t < 11 { INK_LIGHT } else { GLOW });
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn gs_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
@@ -3270,10 +3392,132 @@ fn cb_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
     let mut frames = Vec::new();
     for f in cb_frame_list() {
         let (body, mark) = cb_drawing(&parts, f);
-        frames.push((f.file_stem(), body.to_png()));
+        let mut img = body.to_png();
+        cowboy_flair(f, &mut img);
+        frames.push((f.file_stem(), img));
         frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
     }
     frames
+}
+
+/// Drawn touches on the Cowboy's frames that no other move shares: blasts and dust as the Gun Boost fires
+/// into the ground, flashes as he shoots down from the air, hellfire on
+/// his hands as he calls up Hell's Hat and a trail of it as he throws, and impact lines on the low slap.
+fn cowboy_flair(frame: Frame, img: &mut image::RgbaImage) {
+    fn put(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 3]) {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() && img.get_pixel(x as u32, y as u32)[3] == 0 {
+            img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+        }
+    }
+    const WHITE: [u8; 3] = [255, 255, 240];
+    const YELLOW: [u8; 3] = [255, 222, 90];
+    const ORANGE: [u8; 3] = [255, 140, 30];
+    const RED: [u8; 3] = [200, 40, 20];
+    const DUST: [u8; 3] = [170, 160, 150];
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let opaque = |img: &image::RgbaImage, x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && img.get_pixel(x as u32, y as u32)[3] > 0;
+    // the furthest-forward pixel between two rows (a pointing finger, a slapping hand)
+    let front = |img: &image::RgbaImage, top: i32, bottom: i32| -> Option<(i32, i32)> {
+        (0..w).rev().find_map(|x| (top..bottom.min(h)).find(|&y| opaque(img, x, y)).map(|y| (x, y)))
+    };
+    // a muzzle flash pointing along (dx, dy): a white core, a yellow and orange star, a puff of smoke behind
+    let flash = |img: &mut image::RgbaImage, (x, y): (i32, i32), (dx, dy): (i32, i32)| {
+        for k in 1..6 {
+            put(img, x + dx * k, y + dy * k, if k < 3 { WHITE } else if k < 5 { YELLOW } else { ORANGE });
+        }
+        for (sx, sy) in [(dy, dx), (-dy, -dx)] {
+            for k in 1..4 {
+                put(img, x + dx * (k + 1) + sx * k, y + dy * (k + 1) + sy * k, if k < 2 { YELLOW } else { ORANGE });
+            }
+        }
+        put(img, x + dx * 2 + dy, y + dy * 2 + dx, WHITE);
+    };
+    // a fire licking up from a point: a wide glowing base and tongues that narrow as they rise, yellow at the
+    // root through orange to red at the tips
+    let flames = |img: &mut image::RgbaImage, (x, y): (i32, i32), tall: i32| {
+        for dx in -3..=3 {
+            put(img, x + dx, y - 1, if dx.abs() < 2 { YELLOW } else { ORANGE });
+        }
+        for (dx, extra) in [(-2, -1), (-1, 1), (0, 2), (1, 0), (2, 1)] {
+            let top = tall + extra;
+            for k in 1..top {
+                let c = if k < top / 3 { YELLOW } else if k < top * 2 / 3 { ORANGE } else { RED };
+                // the outer tongues lean outwards as they rise
+                let lean = if k > top / 2 { dx / 2 } else { 0 };
+                put(img, x + dx + lean, y - 1 - k, c);
+            }
+        }
+    };
+    // the topmost pixel in a band of columns (a raised hand)
+    let top_in = |img: &image::RgbaImage, x0: i32, x1: i32| -> Option<(i32, i32)> {
+        (0..h).find_map(|y| (x0.max(0)..x1.min(w)).find(|&x| opaque(img, x, y)).map(|x| (x, y)))
+    };
+    match frame {
+        Frame::Boost(1) => {
+            // blasts into the ground at both hands, dust thrown out to the sides
+            for x0 in [0, t2f::anim::CENTRE_X] {
+                let hand = (x0..x0 + t2f::anim::CENTRE_X).find_map(|x| (40..h).rev().find(|&y| {
+                    let p = img.get_pixel(x as u32, y as u32);
+                    p[3] > 0 && p[0] > 230 && p[1] > 180 && p[2] < 120
+                }).map(|y| (x, y)));
+                if let Some((x, y)) = hand {
+                    for (dx, dy) in [(-1, 0), (1, 0), (-1, -1), (1, -1), (0, -1)] {
+                        for k in 2..5 {
+                            put(img, x + dx * k, y + dy * k, if k < 3 { WHITE } else if k < 4 { YELLOW } else { ORANGE });
+                        }
+                    }
+                    for (dx, dy) in [(-6, 0), (-8, -1), (-10, -1), (6, 0), (8, -1), (10, -1), (-7, -2), (7, -2)] {
+                        put(img, x + dx, y + dy, DUST);
+                    }
+                }
+            }
+        }
+        Frame::Boost(3) | Frame::AirHard(1) => {
+            // shooting down: a flash off the pointing finger
+            if let Some(tip) = front(img, 14, 56) {
+                flash(img, tip, (1, 1));
+            }
+        }
+        Frame::Summon(2) => {
+            // hellfire on both raised hands
+            let mid = t2f::anim::CENTRE_X;
+            for (x0, x1) in [(0, mid - 2), (mid + 2, w)] {
+                if let Some(hand) = top_in(img, x0, x1) {
+                    flames(img, hand, 6);
+                }
+            }
+        }
+        Frame::Summon(3) => {
+            // the hands meet at the top of the drawing, so the fire blazes up either side of them
+            if let Some((x, y)) = top_in(img, 0, w) {
+                flames(img, (x - 9, y + 8), 7);
+                flames(img, (x + 9, y + 8), 7);
+            }
+        }
+        Frame::Summon(4) => {
+            // the throw: the hand still burning, and a curve of fire trailing back from it
+            if let Some((x, y)) = front(img, 10, 40) {
+                flames(img, (x, y), 4);
+                for t in 0..14 {
+                    let a = t as f32 / 13.0;
+                    let fx = x - 3 - (a * 16.0) as i32;
+                    let fy = y - 2 - ((a * 3.1).sin() * 6.0) as i32;
+                    put(img, fx, fy, if t < 4 { YELLOW } else if t < 9 { ORANGE } else { RED });
+                }
+            }
+        }
+        Frame::CrouchSoft(1) => {
+            // the slap: impact lines off the hand
+            if let Some((x, y)) = front(img, 20, 50) {
+                for (dx, dy) in [(2, 0), (2, -2), (2, 2), (1, -3), (1, 3)] {
+                    for k in 1..3 {
+                        put(img, x + dx * k, y + dy * k / 2, if k == 1 { WHITE } else { YELLOW });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn cb_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
@@ -4574,11 +4818,61 @@ fn jh_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
     let mut frames = Vec::new();
     for f in cb_frame_list() {
         let (body, mark) = cb_drawing_with(&parts, f, jh_spec, jh_belt_whip(f));
-        frames.push((f.file_stem(), body.to_png()));
+        let mut img = body.to_png();
+        kick_flair(f, &mut img);
+        frames.push((f.file_stem(), img));
         frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
     }
     frames.extend(jh_whip_layers());
     frames
+}
+
+/// Drawn force on a kick: pale speed streaks along the top of the kicking leg and a flash of impact lines off
+/// the toe.
+fn kick_flair(frame: Frame, img: &mut image::RgbaImage) {
+    let Frame::Kick(2 | 3) = frame else { return };
+    fn put(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 3]) {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() && img.get_pixel(x as u32, y as u32)[3] == 0 {
+            img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+        }
+    }
+    // the toe: the furthest-forward pixel below the waist
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let mut toe = None;
+    'find: for x in (0..w).rev() {
+        for y in 34..h {
+            if img.get_pixel(x as u32, y as u32)[3] > 0 {
+                toe = Some((x, y));
+                break 'find;
+            }
+        }
+    }
+    let Some((tx, ty)) = toe else { return };
+    // speed streaks along the top of the leg, back from the toe towards the hip
+    let (hx, hy) = (t2f::anim::CENTRE_X as f32, 40.0);
+    let (dx, dy) = (tx as f32 - hx, ty as f32 - hy);
+    let len = (dx * dx + dy * dy).sqrt().max(1.0);
+    let (ux, uy) = (dx / len, dy / len);
+    // "above" the leg: the side away from the floor
+    let (nx, ny) = if ux > 0.0 { (uy, -ux) } else { (-uy, ux) };
+    for (off, from, to) in [(4.0f32, 3.0f32, 15.0f32), (7.0, 6.0, 13.0), (10.0, 9.0, 12.0)] {
+        let mut t = from;
+        while t < to {
+            let x = tx as f32 - ux * t + nx * off;
+            let y = ty as f32 - uy * t + ny * off;
+            let c = if t < from + 3.0 { [255, 255, 255] } else { [196, 204, 220] };
+            if ((t - from) as i32) % 4 != 3 {
+                put(img, x.round() as i32, y.round() as i32, c);
+            }
+            t += 1.0;
+        }
+    }
+    // impact lines off the toe
+    for (ex, ey) in [(3, 0), (2, -3), (2, 3), (4, -1), (4, 1)] {
+        for k in 1..3 {
+            put(img, tx + ex * k / 2 + 1, ty + ey * k / 2, if k == 1 { [255, 255, 255] } else { [255, 214, 120] });
+        }
+    }
 }
 
 /// The poses that use the whip, each with its layer on top, for a quick look.
@@ -5233,7 +5527,9 @@ fn main() {
     if first == "--frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
         let default = ayz_default();
-        for (name, negative) in [("ayz", false), ("evilayz", true)] {
+        // Only the Professor: the Negaprofessor keeps the drawings made from the original Professor (before his
+        // rework), so his folder is left alone.
+        for (name, negative) in [("ayz", false)] {
             let folder = assets.join("sprites").join(name);
             std::fs::create_dir_all(&folder).unwrap();
             // The Professor has a raven (perched on every pose, and the flying drawings, the rose
@@ -5274,14 +5570,22 @@ fn main() {
         return;
     }
 
-    // `--roll-frames <assets dir> [sheet.png]`: the roll drawings for every character, made from its
+    // `--roll-frames <assets dir> [sheet.png] [--only <folder>]`: the roll drawings for every character, made from its
     // crouch drawing (and the `_mark` and `_nr` versions): the crouch tucked tighter, a tight ball turned
     // in eighths of a turn, and a rise. `sheet.png` is a look at the first character's.
     if first == "--roll-frames" {
         let assets = std::path::PathBuf::from(args.next().unwrap_or_else(|| "assets".into()));
-        let sheet = args.next();
+        let sheet = args.next().filter(|a| a.ends_with(".png"));
+        // `--only <folder>` limits it to one character, so the others' rolls are left as they are.
+        let only = std::env::args().skip_while(|a| a != "--only").nth(1);
         let mut sheet_done = false;
-        let mut folders: Vec<_> = std::fs::read_dir(assets.join("sprites")).unwrap().flatten().map(|e| e.path()).filter(|p| p.join("crouch.png").exists()).collect();
+        let mut folders: Vec<_> = std::fs::read_dir(assets.join("sprites"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("crouch.png").exists())
+            .filter(|p| only.as_ref().is_none_or(|o| p.file_name().is_some_and(|n| n == o.as_str())))
+            .collect();
         folders.sort();
         for folder in folders {
             let body = image::open(folder.join("crouch.png")).unwrap().to_rgba8();
@@ -5427,6 +5731,14 @@ fn main() {
 
     // `--cowboy-bare <out.png>`: the Cowboy From Hell's default pose at the real pixel size (same
     // canvas as `--junkhead-bare`), for editing by hand.
+    // `--ayz-original <out.png>`: the Professor's original default pose at 1x, the input of `tools/rework_ayz.py`.
+    if first == "--ayz-original" {
+        let out = args.next().unwrap_or_else(|| "ayz_original.png".into());
+        ayz_original().to_png().save(&out).unwrap();
+        println!("wrote {out}");
+        return;
+    }
+
     if first == "--cowboy-bare" {
         let out = args.next().unwrap_or_else(|| "cowboy_default_1x.png".into());
         let one = cb_default().to_png();

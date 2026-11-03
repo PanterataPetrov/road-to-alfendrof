@@ -27,9 +27,10 @@ impl Plugin for MenuPlugin {
                      options_confirm.run_if(in_state(AppState::Options)),
                      controls_confirm.run_if(in_state(AppState::Controls)))
                         .before(menu_labels),
-                    menu_nav,
-                    menu_labels,
-                    glitch_subtitles,
+                    // (menus only: during a fight there is nothing for them to do)
+                    menu_nav.run_if(not(in_state(AppState::Fight))),
+                    menu_labels.run_if(not(in_state(AppState::Fight))),
+                    glitch_subtitles.run_if(not(in_state(AppState::Fight))),
                     animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
                 ),
@@ -280,12 +281,21 @@ fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: 
 
 fn menu_labels(menu: Res<Menu>, mut items: Query<(&MenuItem, &mut Text2d, &mut TextColor)>, mut portraits: Query<(&Portrait, &mut Sprite)>) {
     for (Portrait(index), mut sprite) in &mut portraits {
-        sprite.color = if *index == menu.cursor { Color::WHITE } else { Color::srgb(0.55, 0.55, 0.6) };
+        let tone = if *index == menu.cursor { Color::WHITE } else { Color::srgb(0.55, 0.55, 0.6) };
+        if sprite.color != tone {
+            sprite.color = tone;
+        }
     }
     for (item, mut text, mut color) in &mut items {
         let selected = item.index == menu.cursor;
-        text.0 = if selected { format!("> {} <", item.label) } else { item.label.clone() };
-        color.0 = if selected || !item.enabled { item.color } else { item.color.with_alpha(0.55) };
+        let label = if selected { format!("> {} <", item.label) } else { item.label.clone() };
+        if text.0 != label {
+            text.0 = label;
+        }
+        let tone = if selected || !item.enabled { item.color } else { item.color.with_alpha(0.55) };
+        if color.0 != tone {
+            color.0 = tone;
+        }
     }
 }
 
@@ -301,7 +311,7 @@ fn glitch_subtitles(time: Res<Time>, mut lines: Query<(&Glitch, &mut Text2d, &mu
     const JUNK: &[u8] = b"#%&@$?!/\\<>*^~|01";
     for (Glitch(original), mut text, mut color, mut tf) in &mut lines {
         let calm = noise(tick / 5) % 4 == 0;
-        text.0 = original
+        let new_text: String = original
             .chars()
             .enumerate()
             .map(|(i, c)| {
@@ -309,13 +319,22 @@ fn glitch_subtitles(time: Res<Time>, mut lines: Query<(&Glitch, &mut Text2d, &mu
                 if !calm && c != '.' && c != ' ' && n % 100 < 32 { JUNK[(n >> 8) as usize % JUNK.len()] as char } else { c }
             })
             .collect();
-        tf.translation.x = if calm { 0.0 } else { (noise(tick) % 7) as f32 - 3.0 };
-        color.0 = match noise(tick / 2) % 5 {
+        if text.0 != new_text {
+            text.0 = new_text;
+        }
+        let x = if calm { 0.0 } else { (noise(tick) % 7) as f32 - 3.0 };
+        if tf.translation.x != x {
+            tf.translation.x = x;
+        }
+        let tone = match noise(tick / 2) % 5 {
             0 => Color::srgb(1.0, 0.2, 0.25),
             1 => Color::srgb(0.7, 0.3, 1.0),
             2 => Color::srgb(0.95, 0.95, 0.95),
             _ => Color::srgb(0.75, 0.15, 0.3),
         };
+        if color.0 != tone {
+            color.0 = tone;
+        }
     }
 }
 
@@ -530,9 +549,16 @@ fn controls_confirm(
 /// fighters, and leaving a fight at any zoom would otherwise leave the menu drawn at that scale and in the
 /// wrong place, no longer filling the window.
 fn menu_camera(mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>>) {
-    cam.0.translation.x = 0.0;
-    cam.0.translation.y = 0.0;
-    if let Projection::Orthographic(ortho) = &mut *cam.1 {
-        ortho.scale = 1.0;
+    // only written when it is off (every write makes Bevy treat the camera as changed)
+    if cam.0.translation.x != 0.0 || cam.0.translation.y != 0.0 {
+        cam.0.translation.x = 0.0;
+        cam.0.translation.y = 0.0;
+    }
+    if let Projection::Orthographic(ortho) = &*cam.1 {
+        if ortho.scale != 1.0 {
+            if let Projection::Orthographic(ortho) = &mut *cam.1 {
+                ortho.scale = 1.0;
+            }
+        }
     }
 }

@@ -1,0 +1,61 @@
+# Builds the Mac version: one universal app (Apple Silicon and Intel) in a zip.
+# Run it by hand from the Actions tab ("Mac build" > Run workflow), or push a tag like v0.1.4 to also attach
+# the zip to that release.
+name: Mac build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --lib
+
+      - name: Build (Apple Silicon and Intel)
+        run: |
+          cargo build --release --bin t2f --target aarch64-apple-darwin
+          cargo build --release --bin t2f --target x86_64-apple-darwin
+
+      - name: Make the app
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          APP="dist/Road to Alfendrof.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          lipo -create -output "$APP/Contents/MacOS/t2f" \
+            target/aarch64-apple-darwin/release/t2f \
+            target/x86_64-apple-darwin/release/t2f
+          sed "s/__VERSION__/$VERSION/g" installer/mac/Info.plist > "$APP/Contents/Info.plist"
+          cp installer/mac/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+          cp -R assets "$APP/Contents/Resources/assets"
+          # a signature without an Apple account ("ad hoc"): Apple Silicon refuses to run unsigned programs
+          codesign --force --deep --sign - "$APP"
+          cp installer/mac/README.txt dist/README.txt
+          cd dist
+          mkdir pack && mv "Road to Alfendrof.app" README.txt pack/
+          (cd pack && ditto -c -k . ../RoadToAlfendrof-Mac.zip)
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RoadToAlfendrof-Mac
+          path: dist/RoadToAlfendrof-Mac.zip
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RoadToAlfendrof-Mac.zip

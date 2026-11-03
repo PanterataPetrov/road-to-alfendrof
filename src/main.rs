@@ -121,8 +121,10 @@ pub fn pixel_font(size: f32) -> TextFont {
 fn assets_dir() -> PathBuf {
     // next to the exe (an installed game), then in the working directory, then the project's own copy
     let beside_exe = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("assets")));
+    // inside a macOS app bundle the exe is in Contents/MacOS and the assets are in Contents/Resources
+    let in_bundle = std::env::current_exe().ok().and_then(|exe| exe.parent().and_then(|dir| dir.parent()).map(|contents| contents.join("Resources").join("assets")));
     let here = std::env::current_dir().unwrap_or_default().join("assets");
-    [beside_exe, Some(here)].into_iter().flatten().find(|dir| dir.is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"))
+    [beside_exe, in_bundle, Some(here)].into_iter().flatten().find(|dir| dir.is_dir()).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"))
 }
 
 /// Parse every `.ron` file in `assets/<sub>`, sorted by file name.
@@ -263,6 +265,8 @@ fn main() {
                         // (drawn at the window's scale factor) is made at screen resolution instead of being resampled
                         resolution: WindowResolution::new(WINDOW_W as u32, WINDOW_H as u32).with_scale_factor_override(SCREEN_SCALE),
                         position: WindowPosition::Centered(MonitorSelection::Primary),
+                        // one frame queued ahead instead of two: less latency and a little less memory
+                        desired_maximum_frame_latency: std::num::NonZero::new(1),
                         ..default()
                     }),
                     ..default()
@@ -296,9 +300,11 @@ fn main() {
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar).chain())
-        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>| {
+        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>, mut handles: ResMut<render::FrameHandles>| {
             clear.0 = MENU_BACKGROUND;
             fixed.set_timestep_hz(60.0);
+            // let go of the fighters' drawings: the menus don't use them, and the next fight loads its own
+            handles.0.clear();
         })
         .add_systems(FixedUpdate, (step_sim, particles::emit).chain().run_if(in_state(AppState::Fight)))
         .add_systems(
@@ -353,6 +359,8 @@ fn main() {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
+        // pixel art drawn with nearest filtering gains nothing from multisampling, which costs 4x the memory and bandwidth
+        Msaa::Off,
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::AutoMin { min_width: VIEW_W, min_height: VIEW_H },
             ..OrthographicProjection::default_2d()
@@ -514,6 +522,15 @@ fn spawn_fight(
         if c.moves.iter().any(|m| m.minions.is_some()) && !effects.iter().any(|e| e == "goblin") {
             effects.push("goblin".to_string());
         }
+        // and how many drawings each has, when a shot says (0 for the usual)
+        let shots: Vec<_> = c.moves.iter().filter_map(|m| m.projectile.as_ref()).collect();
+        let effects: Vec<(String, usize)> = effects
+            .into_iter()
+            .map(|e| {
+                let n = shots.iter().find(|p| p.image_name() == e && p.drawings > 0).map_or(0, |p| p.drawings);
+                (e, n)
+            })
+            .collect();
         let frames = t2f::anim::frames_for(c);
         render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip || c.moves.iter().any(|m| m.rope), c.raven.is_some());
     }
@@ -653,10 +670,14 @@ fn sync_hud(
         let won = s.wins[*side] > *n;
         sprite.color = if won { Color::srgb(1.0, 0.85, 0.2) } else { Color::srgb(0.25, 0.25, 0.3) };
     }
-    timer.0 = format!("{}", s.timer.div_ceil(60));
+    // texts are only written when they change: any write makes Bevy lay the text out again
+    let new_timer = s.timer.div_ceil(60).to_string();
+    if timer.0 != new_timer {
+        timer.0 = new_timer;
+    }
 
     let name = |i: usize| roster.0[sel.chars[i]].name.clone();
-    banner.0 = match s.phase {
+    let new_banner = match s.phase {
         Phase::Fighting if s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60) => {
             format!("Round {}", s.round)
         }
@@ -669,7 +690,13 @@ fn sync_hud(
             None => "Draw".into(),
         },
     };
-    sub_banner.0 = if s.phase == Phase::MatchOver { "Enter: rematch    Esc: menu".into() } else { String::new() };
+    if banner.0 != new_banner {
+        banner.0 = new_banner;
+    }
+    let new_sub = if s.phase == Phase::MatchOver { "Enter: rematch    Esc: menu" } else { "" };
+    if sub_banner.0 != new_sub {
+        sub_banner.0 = new_sub.into();
+    }
 }
 
 fn draw_debug(sim: Res<Sim>, roster: Res<Roster>, sel: Res<Selection>, debug: Res<DebugView>, mut gizmos: Gizmos) {

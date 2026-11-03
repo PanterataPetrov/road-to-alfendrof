@@ -16,6 +16,8 @@ pub struct Particle {
     gravity: f32,
     size: f32,
     shrink: bool,
+    /// How much bigger it is when it has faded out (a puff of smoke spreads), 1 for no change.
+    grow: f32,
 }
 
 /// What a fighter looked like on the previous tick.
@@ -26,6 +28,7 @@ struct Snap {
     y: i32,
     slamming: bool,
     futile: bool,
+    bat: bool,
 }
 
 /// A comic-book word ("BAM!") that pops up and fades.
@@ -68,11 +71,31 @@ impl Seen {
 
 fn spawn(commands: &mut Commands, at: Vec2, vel: Vec2, color: Color, size: f32, life: f32, gravity: f32, shrink: bool) {
     commands.spawn((
-        Particle { vel, life, max: life, gravity, size, shrink },
+        Particle { vel, life, max: life, gravity, size, shrink, grow: 1.0 },
         DespawnOnExit(AppState::Fight),
         Sprite::from_color(color, Vec2::splat(size)),
         Transform::from_xyz(at.x.round(), at.y.round(), 5.0),
     ));
+}
+
+/// A round puff of smoke (the `smoke_puff` drawing, tinted) that drifts, spreads and fades.
+fn puff(commands: &mut Commands, image: &Handle<Image>, at: Vec2, vel: Vec2, color: Color, size: f32, life: f32) {
+    commands.spawn((
+        Particle { vel, life, max: life, gravity: 0.0, size, shrink: false, grow: 1.8 },
+        DespawnOnExit(AppState::Fight),
+        Sprite { image: image.clone(), color, custom_size: Some(Vec2::splat(size)), ..default() },
+        Transform::from_xyz(at.x.round(), at.y.round(), 5.1),
+    ));
+}
+
+/// A cloud of smoke puffs round `at`, spreading outwards.
+fn smoke_cloud(commands: &mut Commands, seen: &mut Seen, image: &Handle<Image>, at: Vec2, n: usize, spread: f32, speed: f32, colours: &[Color]) {
+    for k in 0..n {
+        let angle = seen.range(0.0, std::f32::consts::TAU);
+        let from = at + Vec2::new(angle.cos(), angle.sin() * 0.8) * seen.range(0.0, spread);
+        let v = Vec2::new(angle.cos(), angle.sin() * 0.6 + 0.25) * seen.range(speed * 0.3, speed);
+        puff(commands, image, from, v, colours[k % colours.len()], seen.range(7.0, 12.0), seen.range(0.45, 0.8));
+    }
 }
 
 /// A floating word or symbol that drifts and fades.
@@ -105,8 +128,12 @@ pub fn emit(
     sel: Res<Selection>,
     mut seen: Local<Seen>,
     mut shake: ResMut<Shake>,
+    asset_server: Res<AssetServer>,
+    mut smoke_image: Local<Option<Handle<Image>>>,
 ) {
     let s = &sim.0;
+    let smoke = smoke_image.get_or_insert_with(|| asset_server.load("effects/smoke_puff.png")).clone();
+    let grey_smoke = [Color::srgb(0.62, 0.62, 0.66), Color::srgb(0.78, 0.78, 0.82), Color::srgb(0.5, 0.5, 0.55)];
     let spark = [Color::srgb(1.0, 0.95, 0.5), Color::WHITE, Color::srgb(1.0, 0.6, 0.15)];
     let guard = [Color::srgb(0.7, 0.85, 1.0), Color::WHITE];
     let dust = [Color::srgb(0.85, 0.8, 0.72), Color::srgb(0.7, 0.66, 0.6)];
@@ -150,6 +177,26 @@ pub fn emit(
                     let v = Vec2::new(-towards * seen.range(30.0, 140.0), seen.range(10.0, 120.0));
                     spawn(&mut commands, from + Vec2::new(seen.range(-4.0, 4.0), seen.range(-6.0, 6.0)), v, blood[k % 3], seen.range(1.5, 3.0), 0.6, -220.0, false);
                 }
+            }
+            // grey smoke as she turns into a bat; a bigger cloud as she turns back (the stun)
+            if (f.bat_form > 0) != prev.bat {
+                let (n, spread, speed) = if f.poof { (26, 14.0, 90.0) } else { (12, 8.0, 45.0) };
+                smoke_cloud(&mut commands, &mut seen, &smoke, feet + Vec2::new(0.0, 28.0), n, spread, speed, &grey_smoke);
+            }
+            // the wings push air down and back on each downstroke (the bat drawings beat every 20 ticks)
+            let as_bat = f.bat_form > 0 || (data.bat_form().is_some() && f.state == FighterState::Roll && (4..21).contains(&f.state_frame));
+            if as_bat && s.frame % 20 == 10 {
+                let air = [Color::srgba(0.9, 0.93, 1.0, 0.45), Color::srgba(0.75, 0.8, 0.95, 0.35)];
+                let behind = -(f.heading as f32);
+                for k in 0..3 {
+                    let from = feet + Vec2::new(behind * seen.range(2.0, 12.0) + seen.range(-6.0, 6.0), 26.0 + seen.range(-4.0, 2.0));
+                    let v = Vec2::new(behind * seen.range(10.0, 30.0), -seen.range(25.0, 50.0));
+                    puff(&mut commands, &smoke, from, v, air[k % 2], seen.range(5.0, 8.0), seen.range(0.3, 0.45));
+                }
+            }
+            // a roll that turns her into a bat: a puff going in and another coming out
+            if data.bat_form().is_some() && (f.state == FighterState::Roll) != (prev.state == FighterState::Roll) {
+                smoke_cloud(&mut commands, &mut seen, &smoke, feet + Vec2::new(0.0, 26.0), 12, 9.0, 45.0, &grey_smoke);
             }
             if f.state == FighterState::Ko && prev.state != FighterState::Ko {
                 burst(&mut commands, &mut seen, feet + Vec2::new(0.0, 30.0), 36, 60.0, 240.0, &spark, 3.0, 0.7, -120.0);
@@ -243,8 +290,8 @@ pub fn emit(
             let grey = [Color::srgb(0.88, 0.88, 0.9), Color::srgb(0.7, 0.7, 0.75)];
             let off = Vec2::new(seen.range(-1.5, 1.5), 0.0);
             let drift = Vec2::new(seen.range(-4.0, 8.0) * f.facing as f32, seen.range(14.0, 24.0));
-            let size = if seen.rand() > 0.5 { 3.0 } else { 4.0 };
-            spawn(&mut commands, tip + off, drift, grey[(s.frame as usize / 3) % 2], size, 1.1, 0.0, false);
+            let size = if seen.rand() > 0.5 { 4.0 } else { 5.0 };
+            puff(&mut commands, &smoke, tip + off, drift, grey[(s.frame as usize / 3) % 2], size, 1.1);
         }
 
         // the curse: sparkles round the ring, shards when a half is hit, a collapse at the end
@@ -420,6 +467,21 @@ pub fn emit(
                 burst(&mut commands, &mut seen, centre + Vec2::new(dir * 30.0, 4.0), 14, 50.0, 150.0, &gold, 3.0, 0.5, 0.0);
             }
         }
+        for p in s.projectiles.iter().filter(|p| p.owner == i && data.moves[p.move_index].bat_form.is_some()) {
+            let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
+            let back = if p.vx >= 0 { -1.0 } else { 1.0 };
+            let dark = [Color::srgba(0.32, 0.06, 0.16, 0.7), Color::srgba(0.2, 0.1, 0.26, 0.7)];
+            if s.frame % 2 == 0 {
+                for colour in dark {
+                    let from = at + Vec2::new(back * seen.range(16.0, 30.0), seen.range(-16.0, 16.0));
+                    puff(&mut commands, &smoke, from, Vec2::new(back * seen.range(10.0, 30.0), seen.range(-4.0, 8.0)), colour, seen.range(6.0, 10.0), seen.range(0.35, 0.55));
+                }
+            }
+            if s.frame % 2 == 0 {
+                let from = at + Vec2::new(back * seen.range(4.0, 24.0), seen.range(-14.0, 14.0));
+                spawn(&mut commands, from, Vec2::new(back * 20.0, seen.range(-10.0, 10.0)), Color::srgb(0.95, 0.15, 0.2), 1.5, 0.35, 0.0, true);
+            }
+        }
         for p in s.projectiles.iter().filter(|p| p.owner == i && runic(&data.moves[p.move_index])) {
             let at = Vec2::new((p.x / PX) as f32, GROUND_Y + (p.y / PX) as f32);
             for _ in 0..2 {
@@ -445,6 +507,26 @@ pub fn emit(
                         let v = Vec2::new(towards * seen.range(5.0, 40.0), seen.range(14.0, 50.0));
                         spawn(&mut commands, at + Vec2::new(seen.range(-3.0, 3.0), seen.range(-2.0, 4.0)), v, if k == 0 { colour } else { pale }, 2.0, 0.55, -30.0, true);
                     }
+                }
+            }
+            // the bat wave: crimson wisps spiral in to her hands while she gathers the swarm, then burst as it flies
+            if mv.bat_form.is_some() {
+                let hands = feet + Vec2::new(towards * 22.0, 34.0);
+                let crimson = [Color::srgb(0.85, 0.08, 0.16), Color::srgb(0.55, 0.12, 0.6), Color::srgb(1.0, 0.45, 0.5)];
+                if f.state_frame <= mv.startup {
+                    for k in 0..2 {
+                        let angle = seen.range(0.0, std::f32::consts::TAU);
+                        let r = seen.range(22.0, 34.0);
+                        let from = hands + Vec2::new(angle.cos(), angle.sin()) * r;
+                        // inwards, with a twist so they swirl
+                        let v = (hands - from) * 2.2 + Vec2::new(-angle.sin(), angle.cos()) * 30.0;
+                        spawn(&mut commands, from, v, crimson[k % 3], 2.0, 0.4, 0.0, true);
+                    }
+                }
+                if f.state_frame == mv.startup + 1 {
+                    burst(&mut commands, &mut seen, hands, 30, 60.0, 190.0, &crimson, 3.0, 0.55, 0.0);
+                    spawn(&mut commands, hands, Vec2::ZERO, Color::srgb(1.0, 0.5, 0.55), 18.0, 0.12, 0.0, true);
+                    shake.0 = shake.0.max(3.0);
                 }
             }
             // the beam of light: sparks and a shake where it lands as it sweeps
@@ -599,9 +681,12 @@ pub fn emit(
             spawn(&mut commands, head + off, Vec2::new(0.0, 18.0), gold[(s.frame as usize / 6) % 3], 2.0, 0.5, 0.0, true);
         }
         seen.ready[i] = ready;
-        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y, slamming: f.slamming, futile: f.futile > 0 });
+        seen.fighters[i] = Some(Snap { state: f.state, health: f.health, y: f.y, slamming: f.slamming, futile: f.futile > 0, bat: f.bat_form > 0 });
     }
 }
+
+/// Most particles alive at once; past this the extra ones are dropped (a big fight can otherwise pile up hundreds).
+const MAX_PARTICLES: usize = 320;
 
 /// Move, fade and remove particles.
 pub fn update_particles(
@@ -612,10 +697,12 @@ pub fn update_particles(
     mut shake: ResMut<Shake>,
 ) {
     let dt = time.delta_secs();
+    let mut alive = particles.iter().len();
     for (entity, mut p, mut tf, mut sprite) in &mut particles {
         p.life -= dt;
-        if p.life <= 0.0 {
+        if p.life <= 0.0 || alive > MAX_PARTICLES {
             commands.entity(entity).despawn();
+            alive = alive.saturating_sub(1);
             continue;
         }
         let g = p.gravity;
@@ -623,8 +710,11 @@ pub fn update_particles(
         tf.translation.x += p.vel.x * dt;
         tf.translation.y += p.vel.y * dt;
         let t = p.life / p.max;
-        let size = if p.shrink { (p.size * t.sqrt()).max(1.0) } else { p.size };
-        sprite.custom_size = Some(Vec2::splat(size.round().max(1.0)));
+        let size = if p.shrink { (p.size * t.sqrt()).max(1.0) } else { p.size * (1.0 + (p.grow - 1.0) * (1.0 - t)) };
+        let side = Some(Vec2::splat(size.round().max(1.0)));
+        if sprite.custom_size != side {
+            sprite.custom_size = side;
+        }
         let c = sprite.color.to_srgba();
         sprite.color = Color::srgba(c.red, c.green, c.blue, (t * 2.0).min(1.0));
     }

@@ -180,6 +180,7 @@ impl GameState {
             Phase::Fighting => {
                 self.start_lashes(chars);
                 self.update_portals(chars);
+                self.apply_poofs(chars);
                 self.apply_slams(inputs);
                 self.lock_beams(chars);
                 self.launch_projectiles(chars);
@@ -353,6 +354,14 @@ impl GameState {
             // a hand out of a portal can't be blocked, only dodged
             let can_block = blocks[1 - a] && base.portal.is_none();
             let blocked = self.apply_hit(1 - a, mv, dir, can_block, power);
+            // the first window of a grab (it does no damage, a later hit does) holds them where they are,
+            // even in the middle of a jump
+            if !blocked && base.hits > 1 && mv.damage == 0 && base.window(self.fighters[a].state_frame) == Some(0) {
+                let d = &mut self.fighters[1 - a];
+                d.held = true;
+                d.vx = 0;
+                d.vy = 0;
+            }
             if base.portal.is_some() && !blocked && base.window(self.fighters[a].state_frame) == Some(0) {
                 // the grab held: she comes out of the portal for the bite
                 self.fighters[a].grabbed = true;
@@ -361,6 +370,9 @@ impl GameState {
             if mv.heal_pct > 0 && mv.damage > 0 && !blocked {
                 let f = &mut self.fighters[a];
                 f.health = (f.health + f.max_health * mv.heal_pct / 100).min(f.max_health);
+            }
+            if mv.light_lock > 0 && !blocked {
+                self.fighters[a].light_lock = mv.light_lock;
             }
             if mv.silence > 0 && !blocked {
                 self.fighters[1 - a].silenced = mv.silence;
@@ -641,11 +653,13 @@ impl GameState {
             let (frame, foe_x) = (f.state_frame, self.fighters[1 - owner].x);
             let f = &mut self.fighters[owner];
             if frame == pd.vanish {
+                f.hidden = true;
+                f.meter = 0;
+            }
+            if frame == pd.aim_frame(mv.startup) {
                 let dir = if foe_x >= f.x { 1 } else { -1 };
                 let limit = Self::STAGE_HALF_WIDTH - Fighter::HALF_WIDTH;
                 f.portal_x = Some((foe_x + dir * pd.gap * PX).clamp(-limit, limit));
-                f.hidden = true;
-                f.meter = 0;
             }
             if frame == mv.startup {
                 if let Some(x) = f.portal_x {
@@ -659,6 +673,22 @@ impl GameState {
             }
             if f.hidden && frame > mv.startup + mv.active {
                 f.hidden = false;
+            }
+        }
+    }
+
+    /// A bat turning back bursts into smoke that stuns the opponent if they are close.
+    fn apply_poofs(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let (Some(bat), true) = (chars[owner].bat_form(), self.fighters[owner].poof) else { continue };
+            let x = self.fighters[owner].x;
+            let foe = &mut self.fighters[1 - owner];
+            let hit = (foe.x - x).abs() <= bat.radius * PX && !foe.invulnerable() && foe.state != FighterState::Ko;
+            if hit {
+                foe.start_stun(FighterState::Hitstun, bat.stun, 0);
+            }
+            if let Some(left) = chars[owner].bat_move().and_then(|i| self.fighters[owner].cooldowns.get_mut(i)) {
+                *left = if hit { bat.hit_cooldown } else { bat.miss_cooldown };
             }
         }
     }
@@ -950,7 +980,10 @@ impl GameState {
 
     /// Minions swarm the opponent and bite on a timer; they leave when their time is up.
     fn update_minions(&mut self, chars: [&CharacterData; 2], inputs: [Input; 2]) {
-        for mut m in std::mem::take(&mut self.minions) {
+        let old = std::mem::take(&mut self.minions);
+        // (the survivors go back into a list that already has room, instead of growing it from nothing every step)
+        self.minions.reserve(old.len());
+        for mut m in old {
             let mv = &chars[m.owner].moves[m.move_index];
             let Some(md) = mv.minions else { continue };
             m.age += 1;
@@ -1076,7 +1109,9 @@ impl GameState {
 
     /// Fly projectiles forward: land on the opponent or fizzle out.
     fn move_projectiles(&mut self, inputs: [Input; 2], chars: [&CharacterData; 2]) {
-        for mut p in std::mem::take(&mut self.projectiles) {
+        let old = std::mem::take(&mut self.projectiles);
+        self.projectiles.reserve(old.len());
+        for mut p in old {
             let owner = p.owner;
             let mv = &chars[owner].moves[p.move_index];
             let Some(data) = &mv.projectile else { continue };
@@ -1145,6 +1180,11 @@ impl GameState {
                 } else {
                     let shot = mv.as_shot();
                     let blocked = self.apply_hit(defender, &shot, dir, blocked, p.power);
+                    if mv.bat_form.is_some() && !blocked {
+                        // she can turn into a bat until the heavy's cooldown runs out
+                        let f = &mut self.fighters[owner];
+                        f.bat_ready = f.cooldown_left(p.move_index).max(1);
+                    }
                     if !blocked && mv.futility > 0 {
                         self.fighters[defender].futile = mv.futility;
                     }
@@ -1153,7 +1193,7 @@ impl GameState {
                     // a shot counts as a hit from its owner's side for the opponent's curse
                     self.mark_curse(owner);
                 }
-            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.as_shot().damage * p.power / 100) {
+            } else if self.hit_minion(defender, [p.x - hw, p.y - hh, p.x + hw, p.y + hh], mv.shot_damage.unwrap_or(mv.damage) * p.power / 100) {
                 // the shot is spent on the goblin
             } else if !gone {
                 self.projectiles.push(p);
@@ -3201,6 +3241,34 @@ mod tests {
         assert_eq!(s.fighters[0].health, 500 + Fighter::MAX_HEALTH * 3 / 100, "and heal her 3%");
     }
 
+    #[test]
+    fn a_landed_bite_rests_her_lights_for_a_second() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 30 * PX;
+        s.fighters[0].combo = 2;
+        s.fighters[0].combo_timer = 20;
+        s.step([Input(Input::LIGHT), Input(0)], [&g, &evilayz()]);
+        let mut landed_at = None;
+        for frame in 0..60 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+            if landed_at.is_none() && s.fighters[1].health < Fighter::MAX_HEALTH {
+                landed_at = Some(frame);
+            }
+        }
+        assert!(landed_at.is_some(), "the bite should land");
+        assert!(s.fighters[0].light_lock > 0, "a second has not passed yet");
+        // pressing light now does nothing
+        s.fighters[0].state = FighterState::Idle;
+        s.step([Input(Input::LIGHT), Input(0)], [&g, &evilayz()]);
+        assert_ne!(s.fighters[0].state, FighterState::Attack);
+        for _ in 0..30 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+        }
+        assert_eq!(s.fighters[0].light_lock, 0);
+    }
+
     /// Gray Persona (P1) opens her portal with the opponent 60 px away; `dodge` makes them walk away from the far portal.
     fn portal_run(dodge: bool) -> GameState {
         let g = gray_persona();
@@ -3210,15 +3278,59 @@ mod tests {
         s.fighters[0].health = 700;
         s.fighters[0].meter = Fighter::METER_MAX;
         s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
-        for frame in 1..110 {
-            let foe = if dodge && (15..50).contains(&frame) { Input::LEFT } else { 0 };
+        for frame in 1..140 {
+            let foe = if dodge && (25..70).contains(&frame) { Input::LEFT } else { 0 };
             s.step([Input(0), Input(foe)], [&g, &evilayz()]);
-            if frame == 20 {
+            if frame == 30 {
                 assert!(s.fighters[0].hidden && s.fighters[0].invulnerable(), "inside the portal she is gone and can't be hit");
                 assert_eq!(s.fighters[0].meter, 0, "the portal spends the meter");
             }
         }
         s
+    }
+
+    #[test]
+    fn a_grab_holds_a_jumping_opponent_in_the_air_until_the_bite() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 60 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
+        let mut held_at = None;
+        for frame in 1..120 {
+            // the opponent jumps just as the hand comes out
+            let foe = if frame == 50 { Input::UP } else { 0 };
+            s.step([Input(0), Input(foe)], [&g, &evilayz()]);
+            let f = &s.fighters[1];
+            if f.held && held_at.is_none() {
+                held_at = Some((f.x, f.y));
+            }
+            if let (Some(at), true) = (held_at, f.held) {
+                assert_eq!((f.x, f.y), at, "held fast, in the air too");
+            }
+        }
+        let (_, y) = held_at.expect("the grab caught them mid-jump");
+        assert!(y > 0, "caught in the air");
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "and bitten");
+    }
+
+    #[test]
+    fn probe_grabbed_movement() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 60 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
+        for frame in 1..120 {
+            let foe = if frame > 58 { Input::LEFT } else { 0 };
+            s.step([Input(0), Input(foe)], [&g, &evilayz()]);
+            let f = &s.fighters[1];
+            if frame > 50 && frame < 100 {
+                eprintln!("{frame}: foe {:?} x={} sf={} stun={} | gp {:?} sf={} grabbed={}", f.state, f.x / PX, f.state_frame, f.stun, s.fighters[0].state, s.fighters[0].state_frame, s.fighters[0].grabbed);
+            }
+        }
     }
 
     #[test]
@@ -3236,6 +3348,81 @@ mod tests {
         assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "the hand misses and no bite follows");
         assert_eq!(s.fighters[0].health, 700, "no heal");
         assert!(!s.fighters[0].hidden, "she steps out of the portal anyway");
+    }
+
+    #[test]
+    fn landed_bats_let_her_turn_into_a_bat_that_poofs_and_stuns() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 60 * PX;
+        let quiet = |s: &mut GameState, n: usize| {
+            for _ in 0..n {
+                s.step([Input(0), Input(0)], [&g, &evilayz()]);
+            }
+        };
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        quiet(&mut s, 60);
+        assert!(s.fighters[0].bat_ready > 0, "the bats landed, so the heavy can be cast again");
+        // the stun from the bats is over by now; heavy again: a bat
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        assert!(s.fighters[0].bat_form > 0);
+        // no lights or specials as a bat
+        s.fighters[0].meter = Fighter::METER_MAX;
+        for flag in [Input::LIGHT, Input::SPECIAL] {
+            s.step([Input(flag), Input(0)], [&g, &evilayz()]);
+            assert_ne!(s.fighters[0].state, FighterState::Attack);
+        }
+        // faster than walking
+        let x = s.fighters[0].x;
+        s.step([Input(Input::RIGHT), Input(0)], [&g, &evilayz()]);
+        assert!(s.fighters[0].x - x > g.walk_speed, "a bat moves faster than she walks");
+        // the bat faces where it flies, even away from the opponent
+        s.step([Input(Input::LEFT), Input(0)], [&g, &evilayz()]);
+        assert_eq!(s.fighters[0].heading, -1);
+        assert_eq!(s.fighters[0].facing, 1, "she still faces the opponent for everything else");
+        // fly up close and turn back: the smoke stuns
+        s.fighters[0].x = s.fighters[1].x - 30 * PX;
+        quiet(&mut s, 1);
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        assert_eq!(s.fighters[0].bat_form, 0);
+        assert_eq!(s.fighters[1].state, FighterState::Hitstun, "the puff of smoke stuns");
+        let heavy = g.bat_move().unwrap();
+        assert_eq!(s.fighters[0].cooldown_left(heavy), 360, "6 seconds after a stunning puff");
+        // and by itself after three seconds
+        let mut s2 = s.clone();
+        s2.fighters[0].bat_form = 10;
+        s2.fighters[1] = Fighter::new(1, -1);
+        s2.fighters[1].x = s2.fighters[0].x + 30 * PX;
+        quiet(&mut s2, 12);
+        assert_eq!(s2.fighters[0].bat_form, 0);
+        assert_eq!(s2.fighters[1].state, FighterState::Hitstun);
+        // turning back far from anyone: the shorter cooldown
+        let mut s3 = s.clone();
+        s3.fighters[0].bat_form = 5;
+        s3.fighters[1] = Fighter::new(1, -1);
+        s3.fighters[1].x = s3.fighters[0].x + 200 * PX;
+        quiet(&mut s3, 6);
+        assert_eq!(s3.fighters[1].state, FighterState::Idle);
+        assert!((230..=240).contains(&s3.fighters[0].cooldown_left(heavy)), "4 seconds after a missed puff");
+    }
+
+    #[test]
+    fn the_bat_wave_hops_her_back() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 100 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        for _ in 0..8 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+        }
+        assert!(s.fighters[0].y > 0 && s.fighters[0].x < 0, "up and back, away from the enemy");
+        for _ in 0..30 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+        }
+        assert_eq!(s.fighters[0].y, 0);
+        assert_eq!(s.projectiles.len() + (s.fighters[1].health < Fighter::MAX_HEALTH) as usize, 1, "the bats still flew");
     }
 
     #[test]

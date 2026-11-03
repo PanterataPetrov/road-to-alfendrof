@@ -119,6 +119,19 @@ pub struct Fighter {
     pub raven_away: bool,
     /// Frames left in which this fighter can't attack (the staff's shockwave).
     pub silenced: u32,
+    /// Frames left before this fighter can use a light again (after a landed bite).
+    pub light_lock: u32,
+    /// Frames left to recast the heavy into a bat, frames left as a bat, and whether she turned back this frame
+    /// (the puff of smoke that stuns).
+    pub bat_ready: u32,
+    /// Which way the drawing faces: the opponent, except a bat (or a bat roll) faces where it is flying.
+    pub heading: i32,
+    /// This fighter's roll is a bat too.
+    pub bat_roll: bool,
+    /// Held by a grab: stuck where they are (even in the air) until the next hit or the stun ends.
+    pub held: bool,
+    pub bat_form: u32,
+    pub poof: bool,
     /// Frames left on each move's cooldown, by index into the character's moves.
     pub cooldowns: [u32; MAX_MOVES],
     /// The portal special: where the far portal opened, whether she is inside a portal (unseen and untouchable),
@@ -266,6 +279,13 @@ impl Fighter {
             beam_lock: None,
             raven_away: false,
             silenced: 0,
+            light_lock: 0,
+            bat_ready: 0,
+            heading: facing,
+            bat_roll: false,
+            held: false,
+            bat_form: 0,
+            poof: false,
             cooldowns: [0; MAX_MOVES],
             portal_x: None,
             hidden: false,
@@ -330,10 +350,49 @@ impl Fighter {
         self.slamming = false;
         self.hidden = false;
         self.portal_x = None;
+        self.bat_form = 0;
+        self.held = false;
         self.state = state;
         self.state_frame = 0;
         self.stun = frames;
         self.vx = push;
+    }
+
+    /// Lights can't be used after a landed bite, or as a bat.
+    pub fn lights_blocked(&self) -> bool {
+        self.light_lock > 0 || self.bat_form > 0
+    }
+
+    /// Heavy right after the bats landed turns her into a bat; heavy as a bat turns her back (the stunning smoke).
+    /// Returns whether it did either.
+    fn bat_press(&mut self, pressed: Input, data: &CharacterData) -> bool {
+        let Some(bat) = data.bat_form() else { return false };
+        if !pressed.has(Input::HEAVY) {
+            return false;
+        }
+        if self.bat_form > 0 {
+            self.bat_form = 0;
+            self.poof = true;
+        } else if self.bat_ready > 0 {
+            self.bat_ready = 0;
+            self.bat_form = bat.duration;
+            // the cooldown is set properly when she turns back; until then (or if she is knocked out of it)
+            // it is the miss cooldown after the full bat time
+            if let Some(left) = data.bat_move().and_then(|i| self.cooldowns.get_mut(i)) {
+                *left = bat.duration + bat.miss_cooldown;
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Walking speed, faster as a bat.
+    fn walk_speed(&self, data: &CharacterData) -> i32 {
+        match data.bat_form() {
+            Some(bat) if self.bat_form > 0 => data.walk_speed * bat.speed_pct / 100,
+            _ => data.walk_speed,
+        }
     }
 
     /// Whether move `index` is still cooling down from its last use.
@@ -399,6 +458,7 @@ impl Fighter {
     pub fn step(&mut self, input: Input, data: &CharacterData) {
         let pressed = Input((input.0 & !self.prev_input.0) | self.buffer.0);
         self.prev_input = input;
+        self.bat_roll = data.bat_form().is_some();
 
         if self.hitstop > 0 {
             self.hitstop -= 1;
@@ -433,6 +493,13 @@ impl Fighter {
         self.since_punch = self.since_punch.saturating_add(1);
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
+        self.light_lock = self.light_lock.saturating_sub(1);
+        self.bat_ready = self.bat_ready.saturating_sub(1);
+        self.poof = false;
+        if self.bat_form > 0 {
+            self.bat_form -= 1;
+            self.poof = self.bat_form == 0;
+        }
         self.futile = self.futile.saturating_sub(1);
         if self.state != FighterState::Attack {
             self.armored = false;
@@ -476,6 +543,11 @@ impl Fighter {
                 self.armored = mv.committed && self.state_frame > mv.startup;
                 self.hovering = mv.hover && !self.grounded() && self.state_frame <= mv.total_frames() - mv.recovery;
                 self.slow_fall = mv.slow_fall;
+                // a hop back as it starts (landing doesn't end the move)
+                if let (Some((up, back)), 1, true) = (mv.hop, self.state_frame, self.grounded()) {
+                    self.vy = up;
+                    self.vx = -self.facing * back;
+                }
                 // a leap jumps when its startup ends; landing ends it
                 if mv.leap > 0 && self.state_frame == mv.startup && self.grounded() {
                     self.vy = mv.leap;
@@ -493,9 +565,14 @@ impl Fighter {
                         self.moon = Some((self.x + self.facing * p.x * PX, p.moon_height * PX, 0));
                     }
                 }
-                if self.grounded() && !self.air_used {
-                    // some moves allow walking while attacking
-                    self.vx = input.horizontal() * data.walk_speed * mv.walk_pct / 100;
+                if self.grounded() && !self.air_used && self.vy <= 0 {
+                    if mv.lunge > 0 && self.state_frame <= mv.startup + mv.active {
+                        // a step in behind the strike
+                        self.vx = self.facing * mv.lunge;
+                    } else {
+                        // some moves allow walking while attacking
+                        self.vx = input.horizontal() * data.walk_speed * mv.walk_pct / 100;
+                    }
                 }
                 // once a move has connected (hit or blocked) it can be cancelled into a heavier one: light -> heavy -> special
                 if self.hit_done && self.grounded() {
@@ -514,11 +591,16 @@ impl Fighter {
                         }
                     }
                 }
+                // once the bats have landed, the heavy can be cast again at once to turn into one
+                if mv.bat_form.is_some() && self.bat_ready > 0 && self.bat_press(pressed, data) {
+                    self.set_state(if self.grounded() { FighterState::Idle } else { FighterState::Jump });
+                    return self.finish_step();
+                }
                 // a connected heavy or special can cancel into Light at once, and the next three lights are quick
                 if data.light_after_heavy && self.hit_done && mv.button != Button::Light {
                     self.quick = 3;
                     self.quick_timer = Self::QUICK_WINDOW;
-                    if pressed.has(Input::LIGHT) {
+                    if pressed.has(Input::LIGHT) && !self.lights_blocked() {
                         let air = !self.grounded();
                         if let Some(index) = data.find_move(Button::Light, input.has(Input::DOWN) && !air, air) {
                             let vx = self.vx;
@@ -535,7 +617,7 @@ impl Fighter {
                 let air_chain = data.air_chain.unwrap_or(1);
                 if self.hit_done && !self.grounded() && mv.air && mv.button == Button::Light && (self.air_count as u32) < air_chain {
                     for (flag, button) in [(Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
-                        if pressed.has(flag) {
+                        if pressed.has(flag) && !(button == Button::Light && self.lights_blocked()) {
                             if let Some(index) = data.find_move(button, false, true) {
                                 let vx = self.vx;
                                 self.begin_attack(index, &data.moves[index]);
@@ -597,7 +679,8 @@ impl Fighter {
                 // pushback fades quickly
                 if self.state_frame > self.stun {
                     self.vx = 0;
-                    self.set_state(FighterState::Idle);
+                    self.held = false;
+                    self.set_state(if self.grounded() { FighterState::Idle } else { FighterState::Jump });
                 } else {
                     self.vx = self.vx * 9 / 10;
                 }
@@ -623,14 +706,16 @@ impl Fighter {
                     self.double_jumped = true;
                     self.vy = data.jump_speed * Self::DOUBLE_JUMP_PCT / 100;
                     if input.horizontal() != 0 {
-                        self.vx = input.horizontal() * data.walk_speed;
+                        self.vx = input.horizontal() * self.walk_speed(data);
                     }
                 }
                 // One air attack per jump, or more after a connected air attack (see `air_chain`).
                 let more = self.hit_done && (self.air_count as u32) < data.air_chain.unwrap_or(1);
-                if (!self.air_used || more) && self.silenced == 0 {
+                if self.silenced == 0 && self.bat_press(pressed, data) {
+                    // turned into a bat or back
+                } else if (!self.air_used || more) && self.silenced == 0 && self.bat_form == 0 {
                     for (flag, button) in [(Input::SPECIAL, Button::Special), (Input::HEAVY, Button::Heavy), (Input::LIGHT, Button::Light)] {
-                        if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
+                        if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) && !(button == Button::Light && self.lights_blocked()) {
                             if let Some(index) = data.find_move(button, false, true) {
                                 let vx = self.vx;
                                 self.begin_attack(index, &data.moves[index]);
@@ -652,7 +737,7 @@ impl Fighter {
 
     /// Gravity, movement and landing at the end of a frame.
     fn finish_step(&mut self) {
-        if self.hovering {
+        if self.hovering || self.held {
             self.vy = 0;
         } else if !self.grounded() {
             // a move with a slow fall floats down once the rise is over
@@ -661,6 +746,8 @@ impl Fighter {
         }
         self.x += self.vx;
         self.y += self.vy;
+        let as_bat = self.bat_form > 0 || (self.bat_roll && self.state == FighterState::Roll);
+        self.heading = if !as_bat { self.facing } else if self.vx != 0 { self.vx.signum() } else { self.heading };
         if self.y <= 0 {
             self.y = 0;
             self.vy = 0;
@@ -684,13 +771,20 @@ impl Fighter {
         if self.silenced > 0 {
             return false;
         }
+        if self.bat_press(pressed, data) {
+            return true;
+        }
+        // a bat has no claws or fangs to use
+        if self.bat_form > 0 {
+            return false;
+        }
         let crouching = input.has(Input::DOWN);
         for (flag, button) in [
             (Input::SPECIAL, Button::Special),
             (Input::HEAVY, Button::Heavy),
             (Input::LIGHT, Button::Light),
         ] {
-            if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) {
+            if pressed.has(flag) && (button != Button::Special || self.meter >= Self::METER_MAX) && !(button == Button::Light && self.lights_blocked()) {
                 // the light combo can have its own move for each hit (the third is the finisher, which needs the raven at home if it's the raven's claw)
                 let stepped = if button == Button::Light && !crouching { data.find_combo_move(self.combo, !self.raven_away) } else { None };
                 if let Some(index) = stepped.or_else(|| data.find_move(button, crouching, false)) {
@@ -728,13 +822,13 @@ impl Fighter {
         }
         if input.has(Input::UP) {
             self.vy = data.jump_speed;
-            self.vx = input.horizontal() * data.walk_speed;
+            self.vx = input.horizontal() * self.walk_speed(data);
             self.set_state(FighterState::Jump);
         } else if crouching {
             self.vx = 0;
             self.set_state(FighterState::Crouch);
         } else {
-            self.vx = input.horizontal() * data.walk_speed;
+            self.vx = input.horizontal() * self.walk_speed(data);
             self.set_state(if self.vx == 0 { FighterState::Idle } else { FighterState::Walk });
         }
     }

@@ -51,6 +51,10 @@ pub struct CharacterData {
     /// How fast the special meter fills, in percent of normal (default 100).
     #[serde(default)]
     pub meter_gain_pct: Option<i32>,
+    /// The alternating punches have in-between drawings: the swing on the way out and the arm coming back
+    /// (`Frame::PunchMid`).
+    #[serde(default)]
+    pub punch_tweens: bool,
     /// Shooting in the air leans him back, drawn in three stages (`Frame::Lean`).
     #[serde(default)]
     pub air_shot_tilt: bool,
@@ -120,8 +124,25 @@ pub enum AnimKind {
     Boost,
     /// Writing in a book: it opens, he writes (two drawings alternate), then a flourish (4 drawings).
     Write,
-    /// Stepping back into a portal, gone, coming out behind the enemy with fangs bared, recovering (4 drawings).
+    /// Crouching, arms up, leaping back into a portal, gone, lunging out behind the enemy, fangs bared, the bite,
+    /// recovering (8 drawings).
     Portal,
+}
+
+/// Turning into a bat (see `MoveData::bat_form`).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct BatFormData {
+    /// How long the bat form lasts before she turns back by herself. (She can turn into one until the move's
+    /// own cooldown runs out.)
+    pub duration: u32,
+    /// Walking speed as a bat, in percent of the usual.
+    pub speed_pct: i32,
+    /// Turning back is a puff of smoke that stuns the opponent for `stun` frames if they are within `radius` pixels.
+    pub radius: i32,
+    pub stun: u32,
+    /// The move's cooldown once she has turned back: shorter if the smoke missed than if it stunned.
+    pub miss_cooldown: u32,
+    pub hit_cooldown: u32,
 }
 
 /// The portal special (see `MoveData::portal`): at frame `vanish` the fighter is gone into a portal behind
@@ -130,6 +151,16 @@ pub enum AnimKind {
 pub struct PortalData {
     pub vanish: u32,
     pub gap: i32,
+}
+
+impl PortalData {
+    /// Frames of warning between the far portal opening and the hand coming out.
+    pub const WARNING: u32 = 24;
+
+    /// When the far portal opens, behind wherever the enemy is at that moment.
+    pub fn aim_frame(&self, startup: u32) -> u32 {
+        startup.saturating_sub(Self::WARNING).max(self.vanish)
+    }
 }
 
 /// A projectile a move launches. It flies in a straight line and hits once for the move's damage.
@@ -152,6 +183,9 @@ pub struct ProjectileData {
     /// Item shown over the head during the wind-up; default "crescent".
     #[serde(default)]
     pub summon_image: Option<String>,
+    /// How many drawings the shot's image cycles through (`<image>_0`, `_1`, ...); default 2.
+    #[serde(default)]
+    pub drawings: usize,
     /// Speed in pixels per frame, straight ahead (default 5). With `lifetime` it sets the range.
     #[serde(default)]
     pub speed: i32,
@@ -216,6 +250,9 @@ impl ProjectileData {
     }
     pub fn summon_name(&self) -> &str {
         self.summon_image.as_deref().unwrap_or("crescent")
+    }
+    pub fn drawing_count(&self) -> usize {
+        if self.drawings > 0 { self.drawings } else { 2 }
     }
 }
 
@@ -303,6 +340,14 @@ pub struct MoveData {
     /// A volley's shots add up.
     #[serde(default)]
     pub guard_hits: Option<u32>,
+    /// Steps in during the startup and the active frames at this forward speed (subpixels per frame), instead of
+    /// walking.
+    #[serde(default)]
+    pub lunge: i32,
+    /// A hop backwards as the move starts: (upward, backward) speed in subpixels per frame. Unlike a leap,
+    /// landing doesn't end the move.
+    #[serde(default)]
+    pub hop: Option<(i32, i32)>,
     /// A leap: upward speed (subpixels per frame) and forward speed, applied when the startup ends.
     /// Landing ends the move.
     #[serde(default)]
@@ -411,6 +456,13 @@ pub struct MoveData {
     /// An unblocked hit leaves the opponent unable to attack for this many frames.
     #[serde(default)]
     pub silence: u32,
+    /// An unblocked hit stops the attacker's own lights for this many frames (the bite).
+    #[serde(default)]
+    pub light_lock: u32,
+    /// Once this move's shot lands (unblocked) it can be cast again to turn into a bat: faster, no lights or
+    /// specials. Casting it once more, or waiting it out, turns her back in a puff of smoke that stuns.
+    #[serde(default)]
+    pub bat_form: Option<BatFormData>,
     /// After this move starts it can't be started again for this many frames (the staff slam).
     #[serde(default)]
     pub cooldown: u32,
@@ -530,6 +582,16 @@ impl CharacterData {
 
     /// The move for `button`, preferring a crouching version when Down is held. Air moves are only
     /// found with `air` set.
+    /// The bat form one of the moves grants, if any.
+    pub fn bat_form(&self) -> Option<BatFormData> {
+        self.moves.iter().find_map(|m| m.bat_form)
+    }
+
+    /// The move that grants the bat form.
+    pub fn bat_move(&self) -> Option<usize> {
+        self.moves.iter().position(|m| m.bat_form.is_some())
+    }
+
     pub fn find_move(&self, button: Button, crouching: bool, air: bool) -> Option<usize> {
         let exact = self.moves.iter().position(|m| m.button == button && m.air == air && m.crouching == crouching);
         exact.or_else(|| self.moves.iter().position(|m| m.button == button && m.air == air && !m.crouching))

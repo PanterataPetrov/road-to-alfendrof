@@ -26,7 +26,17 @@ name = "trace_photo"
 path = "tools/trace_photo.rs"
 
 [dependencies]
-bevy = "0.20"
+# Only what this 2D game uses: no 3D/PBR, UI, glTF, scenes, picking, gamepads or system diagnostics (Bevy's defaults
+# compile and set all of that up).
+bevy = { version = "0.20", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "bevy_winit",
+    "default_font",
+    "2d_bevy_render",
+    "bevy_audio",
+] }
 ggrs = { version = "0.13", features = ["sync-send"] }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"

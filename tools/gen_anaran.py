@@ -252,16 +252,24 @@ def staff_line(canvas, a, b):
     put(canvas, ox + 2, oy, (255, 240, 200))
 
 
-def scroll(canvas, x0, y0, x1, y1):
-    """A scroll as a rectangle of paper with rolled ends."""
+def scroll(canvas, x0, y0, x1, y1, glow=False):
+    """A scroll as a rectangle of paper with rolled ends; with `glow` its writing burns gold and glints rise off it."""
     for y in range(y0, y1 + 1):
         for x in range(x0, x1 + 1):
             put(canvas, x, y, PAPER if y < y1 else PAPER_SHADE)
     for y in range(y0 - 1, y1 + 2):
         put(canvas, x0 - 1, y, BRACER_SHADE)
         put(canvas, x1 + 1, y, BRACER_SHADE)
-    for x in range(x0 + 2, x1 - 1, 3):
-        put(canvas, x, y0 + 1, (150, 110, 90))
+    ink = ORB if glow else (150, 110, 90)
+    for row in range(y0 + 1, y1, 2):
+        for x in range(x0 + 2, x1 - 1, 3):
+            put(canvas, x, row, ink)
+            if glow and (x + row) % 2:
+                put(canvas, x + 1, row, (255, 240, 200))
+    if glow:
+        for k, x in enumerate(range(x0 + 1, x1, 4)):
+            put(canvas, x, y0 - 3 - (k % 3), (255, 240, 200))
+            put(canvas, x + 1, y0 - 5 - (k % 2) * 2, ORB)
 
 
 def resting(p, back=True, front=True):
@@ -325,6 +333,86 @@ def rotated(p, angle, scale=1.0, lift=0):
 CROUCH = tuple(range(25, 29)) + tuple(range(36, 46))
 
 
+def tilt(p, degrees):
+    """Pitch a finished pose (and its ruby) about the feet: positive leans him back, negative forward."""
+    pivot = (33, H - 1)
+    mark = p.mark()
+    p.canvas = p.canvas.rotate(degrees, resample=Image.NEAREST, center=pivot)
+    p.mark_img = mark.rotate(degrees, resample=Image.NEAREST, center=pivot)
+    return p
+
+
+def glints(canvas, at_, n=6, r=4, seed=0):
+    """Gold glints scattered round a point (the orb charging)."""
+    x, y = at_
+    for k in range(n):
+        a = (k * 2.4 + seed) % (2 * math.pi)
+        d = r * (0.6 + 0.4 * ((k * 37 + seed * 11) % 10) / 10)
+        gx, gy = round(x + math.cos(a) * d), round(y + math.sin(a) * d)
+        put(canvas, gx, gy, (255, 240, 200))
+        if k % 2 == 0:
+            put(canvas, gx + 1, gy, ORB)
+
+
+def floor_circle(p, cx, strength):
+    """A gold summoning circle flat on the floor round his feet (an ellipse with runes on its rim): its far half
+    behind him, its near half in front. `strength` 0..1 is how far it has kindled; at full strength sparks rise."""
+    cy = H - 3
+    rx, ry = 20, 3.2
+    steps = int(96 * strength)
+    behind = blank()
+    canvas = p.canvas
+    for k in range(steps):
+        a = 2 * math.pi * k / 96
+        x, y = round(cx + math.cos(a) * rx), round(cy + math.sin(a) * ry)
+        layer = behind if math.sin(a) < 0 else canvas
+        put(layer, x, y, ORB if k % 6 else (255, 240, 200))
+        if k % 12 == 0:
+            put(layer, x, y - 1, BRACER_LIGHT)
+    behind.alpha_composite(canvas)
+    p.canvas = canvas = behind
+    if strength >= 1:
+        for k, x in enumerate(range(cx - 16, cx + 17, 5)):
+            for j in range(1 + k % 3):
+                put(canvas, x, cy - 4 - j * 3 - (k % 2) * 2, (255, 240, 200) if j == 0 else ORB)
+
+
+def swoosh(canvas, centre, radius, a0, a1):
+    """The gold trail of a swinging hand: an arc round `centre` from angle `a0` to `a1` (degrees, 0 = forward,
+    negative = up), faint where it starts and bright and thick where the hand is now."""
+    cx, cy = centre
+    steps = int(abs(a1 - a0) * radius / 25) + 8
+    for lane in (-1, 0, 1):
+        for k in range(steps + 1):
+            f = k / steps
+            if lane and f < 0.4:
+                continue
+            a = math.radians(a0 + (a1 - a0) * f)
+            put(canvas, round(cx + math.cos(a) * (radius + lane)), round(cy + math.sin(a) * (radius + lane)),
+                BRACER_SHADE if f < 0.5 else ORB if f < 0.85 else (255, 240, 200))
+
+
+def plunge_lines(canvas, x0, x1, top, bottom):
+    """Speed streaks above a body diving down."""
+    for k, x in enumerate(range(x0, x1, 4)):
+        for y in range(top + (k % 3) * 2, bottom - (k % 2) * 3):
+            if (y + k) % 5:
+                put(canvas, x, y, (255, 240, 200) if y > bottom - 4 else BRACER_LIGHT)
+
+
+def impact(canvas, at_):
+    """The orb striking the floor: a gold flash with rays, chips flying, and cracks running out along the ground."""
+    x, y = at_
+    for dx, dy, length in ((-1, -1, 5), (1, -1, 5), (0, -1, 6), (-1, 0, 6), (1, 0, 6), (-2, -1, 4), (2, -1, 4)):
+        for k in range(2, length):
+            put(canvas, x + dx * k, y + dy * k, (255, 240, 200) if k < 4 else ORB)
+    for dx in range(-9, 10):
+        if abs(dx) > 2 and dx % 3 != 0:
+            put(canvas, x + dx, y + 1 + (abs(dx) % 2), (60, 40, 30))
+    for cx, cy in ((-6, -5), (5, -6), (-3, -8), (8, -3)):
+        put(canvas, x + cx, y + cy, BRACER_SHADE)
+
+
 def build():
     frames = {}
 
@@ -337,13 +425,13 @@ def build():
     p = pose("idle_0"); resting(p)
     p = pose("idle_1", up=(0, 1)); resting(p)
 
-    # walking: the boots swap, the body dips as the feet pass, the front hand swings
+    # walking: a long stride with the passing foot lifted, the body dips as the feet pass, the front hand swings
     for k in range(6):
         a = 2 * math.pi * k / 6
         s_, c_ = math.sin(a), math.cos(a)
-        boots = ((round(3 * s_), -int(c_ > 0.4)), (-round(3 * s_), -int(c_ < -0.4)))
+        boots = ((round(4 * s_), -2 * int(c_ > 0.4)), (-round(4 * s_), -2 * int(c_ < -0.4)))
         p = pose(f"walk_{k}", up=(0, int(abs(c_) < 0.5)), boots=boots)
-        arms(p, back="rest", front=(31 + round(4 * s_), 33 - int(abs(c_) > 0.5)))
+        arms(p, back="rest", front=(31 + round(5 * s_), 33 - int(abs(c_) > 0.5)))
 
     # crouching
     p = pose("crouch", drop=CROUCH); resting(p)
@@ -365,8 +453,10 @@ def build():
     # light attacks (a quick jab with the front hand)
     p = pose("soft_0"); arms(p, back="rest", front=(24, 27))
     p = pose("soft_1", up=(1, 0)); arms(p, back="rest", front=(43, 24), upper=10, fore=11)
-    p = pose("air_soft_0"); arms(p, back="rest", front=(26, 26))
+    # the air whip: the hand raised high, then lashed down and out with a gold trail
+    p = pose("air_soft_0", up=(-1, 0)); arms(p, back=(2, 24), front=(31, -3), upper=10, fore=11)
     p = pose("air_soft_1", up=(1, 0)); arms(p, back=(2, 20), front=(42, 31), upper=10, fore=11)
+    swoosh(p.canvas, at(p, 30, 22), 13, -85, 25)
     for k, (back, front) in enumerate([("rest", (30, 32)), ("rest", (41, 25)), ((22, 23), (30, 33)), ("rest", (44, 28))]):
         p = pose(f"punch_{k}"); arms(p, back=back, front=front, upper=10, fore=11)
 
@@ -375,20 +465,37 @@ def build():
     p = pose("speak_1"); arms(p, back="rest", front=(34, 16)); p.face("open")
 
     # the scroll: rolled, unrolled and held out in front, read, rolled up again
-    p = pose("read_0"); arms(p, back=(13, 29), front=(25, 29)); scroll(p.canvas, *at(p, 14, 26), *at(p, 22, 29))
-    p = pose("read_1"); arms(p, back=(14, 28), front=(37, 28)); scroll(p.canvas, *at(p, 15, 22), *at(p, 36, 27))
-    p = pose("read_2", up=(0, 1)); arms(p, back=(14, 28), front=(37, 28)); scroll(p.canvas, *at(p, 15, 22), *at(p, 36, 27)); p.face("open")
+    # (he snaps it open, holds it out at arm's length with the writing burning gold as he reads, rolls it shut)
+    p = pose("read_0", up=(-1, 0)); arms(p, back=(16, 22), front=(30, 18)); scroll(p.canvas, *at(p, 18, 17), *at(p, 28, 20))
+    p = pose("read_1", up=(1, 0)); arms(p, back=(20, 27), front=(44, 25), upper=10, fore=11); scroll(p.canvas, *at(p, 21, 20), *at(p, 43, 26), glow=True)
+    p = pose("read_2", up=(1, 1)); arms(p, back=(20, 27), front=(44, 25), upper=10, fore=11); scroll(p.canvas, *at(p, 21, 20), *at(p, 43, 26), glow=True); p.face("open")
+    glints(p.canvas, at(p, 32, 14), 6, 6, 2)
     p = pose("read_3"); arms(p, back=(13, 29), front=(30, 28)); scroll(p.canvas, *at(p, 14, 26), *at(p, 24, 29))
 
-    # the staff: raised, the top of the swing, the slam, planted
-    p = pose("staff_0"); arms(p, back="rest", front=(31, 9)); staff_line(p.canvas, at(p, 31, 34), at(p, 32, -4)); fist(p.canvas, at(p, 31, 9))
-    p = pose("staff_1", up=(-1, 0)); arms(p, back="rest", front=(23, 5)); staff_line(p.canvas, at(p, 30, 14), at(p, 12, -4)); fist(p.canvas, at(p, 23, 5))
-    p = pose("staff_2", up=(1, 1)); arms(p, back="rest", front=(40, 30), upper=10, fore=11); staff_line(p.canvas, at(p, 40, 54), at(p, 40, 18)); fist(p.canvas, at(p, 40, 30)); p.face("open")
+    # the staff: crouched with it held across him in both hands; heaved up over his head (the orb glinting); the
+    # slam, low, both hands driving the orb into the floor in a burst of gold; rising with it planted
+    p = pose("staff_0", up=(-1, 0), drop=CROUCH[:4]); arms(p, back=(14, 32), front=(30, 24))
+    staff_line(p.canvas, at(p, 6, 40), at(p, 38, 16)); fist(p.canvas, at(p, 14, 32)); fist(p.canvas, at(p, 30, 24))
+    p = pose("staff_1", up=(-1, 0)); arms(p, back=(14, 2), front=(26, 0), upper=10, fore=11)
+    staff_line(p.canvas, at(p, 4, 8), at(p, 38, -6)); fist(p.canvas, at(p, 14, 2)); fist(p.canvas, at(p, 26, 0))
+    glints(p.canvas, at(p, 38, -6), 7, 5, 1); p.face("open")
+    p = pose("staff_2", up=(2, 0), drop=CROUCH); arms(p, back=(30, 34), front=(38, 32), back_bend=1, upper=10, fore=11)
+    # (the orb is placed on the floor itself, not relative to the sunken chest)
+    floor = (OFF_X + 50, H - 3)
+    staff_line(p.canvas, at(p, 26, 22), floor); fist(p.canvas, at(p, 30, 34)); fist(p.canvas, at(p, 38, 32))
+    impact(p.canvas, floor); p.face("open")
     p = pose("staff_3"); arms(p, back="rest", front=(34, 28)); staff_line(p.canvas, at(p, 34, 54), at(p, 35, 14)); fist(p.canvas, at(p, 34, 28))
 
     # airborne heavy: the staff over the head, then driven down
-    p = pose("air_hard_0"); arms(p, back=(4, 9), front=(31, 9)); staff_line(p.canvas, at(p, 31, 30), at(p, 32, -4)); fist(p.canvas, at(p, 31, 9))
-    p = pose("air_hard_1", up=(1, 1)); arms(p, back=(3, 21), front=(37, 30), upper=10, fore=10); staff_line(p.canvas, at(p, 33, 20), at(p, 47, 44)); fist(p.canvas, at(p, 37, 30))
+    # the plunge: the staff raised overhead in both hands, then driven down at the enemy with the orb blazing and
+    # streaks above him as he drops
+    p = pose("air_hard_0"); arms(p, back=(14, 0), front=(26, -1), upper=10, fore=11)
+    staff_line(p.canvas, at(p, 2, 6), at(p, 40, -6)); fist(p.canvas, at(p, 14, 0)); fist(p.canvas, at(p, 26, -1))
+    glints(p.canvas, at(p, 40, -6), 6, 4, 7); p.face("open")
+    p = pose("air_hard_1", up=(1, 1)); arms(p, back=(30, 28), front=(37, 30), back_bend=1, upper=10, fore=10)
+    staff_line(p.canvas, at(p, 30, 18), at(p, 48, 46)); fist(p.canvas, at(p, 30, 28)); fist(p.canvas, at(p, 37, 30))
+    glints(p.canvas, at(p, 48, 46), 8, 5, 8)
+    plunge_lines(p.canvas, OFF_X + 2, OFF_X + 36, 0, 8); p.face("open")
     heavy = [((31, 8), ((31, 36), (32, -3))), ((38, 15), ((33, 34), (47, 2))), ((44, 24), None), ((34, 28), ((34, 54), (35, 14)))]
     for k, (front, tip) in enumerate(heavy):
         p = pose(f"hard_{k}"); arms(p, back="rest", front=front, upper=10, fore=11)
@@ -396,12 +503,18 @@ def build():
             staff_line(p.canvas, at(p, *tip[0]), at(p, *tip[1])); fist(p.canvas, at(p, *front))
 
     # summoning: the arms come up, cross over the head, then throw forward
-    p = pose("summon_0"); arms(p, back=(4, 31), front=(33, 31))
-    p = pose("summon_1"); arms(p, back=(-4, 19), front=(41, 19), upper=10, fore=11)
-    p = pose("summon_2"); arms(p, back=(3, 6), front=(32, 6))
-    p = pose("summon_3"); arms(p, back=(16, -2), front=(22, -2), upper=12, fore=14)
-    p = pose("summon_4"); arms(p, back=(8, 6), front=(45, 21), upper=10, fore=11)
-    p = pose("summon_5"); arms(p, back=(4, 27), front=(45, 27), upper=10, fore=11)
+    # (a gold circle kindles on the floor round him as the arms rise, blazes while they are crossed overhead,
+    # and he flings the goblins out with a burst of glints at his hand)
+    centre = OFF_X + 19
+    p = pose("summon_0"); floor_circle(p, centre, 0.25); arms(p, back=(4, 31), front=(33, 31))
+    p = pose("summon_1"); floor_circle(p, centre, 0.6); arms(p, back=(-4, 19), front=(41, 19), upper=10, fore=11)
+    p = pose("summon_2"); floor_circle(p, centre, 1.0); arms(p, back=(3, 6), front=(32, 6))
+    glints(p.canvas, at(p, 3, 4), 5, 4, 3); glints(p.canvas, at(p, 32, 4), 5, 4, 4)
+    p = pose("summon_3"); floor_circle(p, centre, 1.0); arms(p, back=(16, -2), front=(22, -2), upper=12, fore=14)
+    glints(p.canvas, at(p, 19, -4), 8, 6, 5); p.face("open")
+    p = pose("summon_4", up=(2, 0)); floor_circle(p, centre, 1.0); arms(p, back=(8, 6), front=(45, 21), upper=10, fore=11)
+    glints(p.canvas, at(p, 48, 21), 9, 6, 6); p.face("open")
+    p = pose("summon_5"); floor_circle(p, centre, 0.5); arms(p, back=(4, 27), front=(45, 27), upper=10, fore=11)
 
     # knocked out: lying on his back, head to the left
     p = pose("ko"); arms(p, back=(-3, 33), front=(33, 36), upper=10, fore=10); p.face("closed")

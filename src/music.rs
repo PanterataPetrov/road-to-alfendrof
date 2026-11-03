@@ -32,7 +32,8 @@ impl Plugin for MusicPlugin {
 /// Decoded PCM that loops from `loop_start` to `loop_end` (sample indices) and can begin past the buildup.
 #[derive(Asset, TypePath, Clone)]
 pub struct Music {
-    samples: Arc<[Sample]>,
+    /// 16-bit samples as stored in the file, turned into floats as they play (half the memory of holding floats)
+    samples: Arc<[i16]>,
     channels: ChannelCount,
     rate: SampleRate,
     loop_start: usize,
@@ -64,10 +65,10 @@ impl Iterator for MusicDecoder {
             self.pos = self.music.loop_start;
             self.tail = Some(self.music.loop_end);
         }
-        let mut sample = *samples.get(self.pos)?;
+        let mut sample = *samples.get(self.pos)? as Sample / 32768.0;
         self.pos += 1;
         if let Some(t) = self.tail {
-            sample = (sample + samples[t]).clamp(-1.0, 1.0);
+            sample = (sample + samples[t] as Sample / 32768.0).clamp(-1.0, 1.0);
             self.tail = (t + 1 < samples.len()).then_some(t + 1);
         }
         Some(sample)
@@ -167,7 +168,7 @@ fn parse_wav(bytes: &[u8]) -> Result<Music, String> {
     }
     let channels = NonZero::new(channels).ok_or("no channels")?;
     let rate = NonZero::new(rate).ok_or("no sample rate")?;
-    let samples: Arc<[Sample]> = data.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as Sample / 32768.0).collect();
+    let samples: Arc<[i16]> = data.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect();
     // on a whole frame (one sample per channel)
     let frame_index = |at: Duration| (at.as_secs_f64() * rate.get() as f64).round() as usize * channels.get() as usize;
     let loop_end = frame_index(LOOP_END).min(samples.len());

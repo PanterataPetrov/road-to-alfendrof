@@ -9,6 +9,19 @@ use t2f::sim::{Fighter, FighterState, GameState, MarkKind, Phase, ProjectileData
 
 use crate::{AppState, Roster, Selection, Sim, GROUND_Y};
 
+/// Assign a component field only when the value is different. Every write through `DerefMut` marks the component
+/// changed, which makes Bevy redo its transform, visibility and render work for it, so values that are set every frame
+/// (positions, colours, images) go through this.
+macro_rules! set_ne {
+    ($place:expr, $value:expr) => {{
+        let value = $value;
+        if $place != value {
+            $place = value;
+        }
+    }};
+}
+
+
 /// Image handles of every drawing: one map per fighter, keyed by file name.
 #[derive(Resource, Default)]
 pub struct FrameHandles(pub Vec<HashMap<String, Handle<Image>>>);
@@ -89,7 +102,7 @@ pub struct CurseOf(pub usize);
 pub const LECTURE_LINE: &str = "here's the thing...";
 
 /// Every drawing's file name for a character.
-fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool, raven: bool) -> Vec<String> {
+fn all_stems(frames: &[Frame], effects: &[(String, usize)], mark: bool, whip: bool, raven: bool) -> Vec<String> {
     let mut stems: Vec<String> = frames.iter().map(|f| f.file_stem()).collect();
     if raven {
         stems.extend(frames.iter().map(|f| format!("{}_nr", f.file_stem())));
@@ -101,8 +114,8 @@ fn all_stems(frames: &[Frame], effects: &[String], mark: bool, whip: bool, raven
     if mark {
         stems.extend(frames.iter().map(|f| format!("{}_mark", f.file_stem())));
     }
-    for base in effects {
-        let count = if base == "goblin" { 5 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
+    for (base, drawings) in effects {
+        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 5 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
         stems.extend((0..count).map(|i| format!("{base}_{i}")));
     }
     stems
@@ -118,7 +131,7 @@ pub fn spawn_fighter(
     name: &str,
     color: Color,
     summon: Option<&ProjectileData>,
-    effects: &[String],
+    effects: &[(String, usize)],
     frames: &[Frame],
     mark: bool,
     whip: bool,
@@ -244,7 +257,7 @@ pub fn spawn_fighter(
             commands.entity(root).add_child(line);
         }
         // Jesus and his beam, in the sky
-        if effects.iter().any(|e| e == "jesus") {
+        if effects.iter().any(|e| e.0 == "jesus") {
             commands.spawn((
                 JesusOf(fighter),
                 DespawnOnExit(AppState::Fight),
@@ -277,7 +290,7 @@ pub fn spawn_fighter(
             commands.spawn((
                 StarOf(fighter, slot),
                 DespawnOnExit(AppState::Fight),
-                Sprite::from_image(get(&format!("{}_0", effects.first().map(String::as_str).unwrap_or("star"))).expect("loaded with the rest")),
+                Sprite::from_image(get(&format!("{}_0", effects.first().map(|e| e.0.as_str()).unwrap_or("star"))).expect("loaded with the rest")),
                 Transform::from_xyz(0.0, 0.0, 3.0),
                 Visibility::Hidden,
             ));
@@ -324,9 +337,9 @@ fn futile_tint(c: Color) -> Color {
 pub fn pose_bodies(sim: Res<Sim>, mut bodies: Query<(&Body, &mut Transform)>) {
     for (Body(i), mut tf) in &mut bodies {
         let f = &sim.0.fighters[*i];
-        tf.translation.x = (f.x / PX) as f32;
-        tf.translation.y = GROUND_Y + (f.y / PX) as f32;
-        tf.scale.x = f.facing as f32;
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32);
+        tf.scale.x = f.heading as f32;
     }
 }
 
@@ -348,20 +361,22 @@ pub fn animate_body(
         }
         if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&stem)) {
             if sprite.image != *image {
-                sprite.image = image.clone();
+                if sprite.image != *image {
+                    sprite.image = image.clone();
+                }
             }
         }
-        sprite.color = tint(f.state);
+        set_ne!(sprite.color, tint(f.state));
         // a fighter who can't attack (the staff's shockwave) is tinted violet
         if f.silenced > 0 && f.state != FighterState::Hitstun {
-            sprite.color = Color::srgb(0.78, 0.68, 1.0);
+            set_ne!(sprite.color, Color::srgb(0.78, 0.68, 1.0));
         }
         if f.futile > 0 {
-            sprite.color = futile_tint(sprite.color);
+            set_ne!(sprite.color, futile_tint(sprite.color));
         }
         // inside a portal there is nothing to see
         if f.hidden {
-            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
+            set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, 0.0));
         }
     }
 }
@@ -379,11 +394,13 @@ pub fn animate_crescent(
         let frame = frame_for(f, &roster.0[sel.chars[*i]], false, sim.0.frame);
         match frame {
             Frame::Summon(n) if n >= 1 => {
-                *visibility = Visibility::Inherited;
+                set_ne!(*visibility, Visibility::Inherited);
                 let twinkle = (sim.0.frame / 6 % CRESCENT_FRAMES as u32) as usize;
                 let base = roster.0[sel.chars[*i]].moves.iter().find_map(|m| m.projectile.as_ref().filter(|_| m.anim == t2f::sim::AnimKind::Summon)).map_or("crescent", |p| p.summon_name());
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("{base}_{twinkle}"))) {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
                 sprite.color = Color::srgba(1.0, 1.0, 1.0, if n >= 5 { 0.5 } else { 1.0 });
                 // swells while charging, flashes when fully charged
@@ -392,10 +409,10 @@ pub fn animate_crescent(
                 let grow = if mv.charge_frames > 0 { f.charge as f32 / mv.charge_frames as f32 } else { 0.0 };
                 tf.scale = Vec3::splat(1.0 + grow * 0.5);
                 if mv.charge_frames > 0 && f.charge >= mv.charge_frames && sim.0.frame / 3 % 2 == 0 {
-                    sprite.color = Color::srgb(1.6, 1.6, 1.3);
+                    set_ne!(sprite.color, Color::srgb(1.6, 1.6, 1.3));
                 }
             }
-            _ => *visibility = Visibility::Hidden,
+            _ => set_ne!(*visibility, Visibility::Hidden),
         }
     }
 }
@@ -411,9 +428,9 @@ pub fn animate_stars(
     for (StarOf(i, slot), mut sprite, mut tf, mut visibility) in &mut stars {
         match sim.0.projectiles.iter().filter(|p| p.owner == *i).nth(*slot) {
             Some(p) => {
-                *visibility = Visibility::Inherited;
-                tf.translation.x = (p.x / PX) as f32;
-                tf.translation.y = GROUND_Y + (p.y / PX) as f32;
+                set_ne!(*visibility, Visibility::Inherited);
+                set_ne!(tf.translation.x, (p.x / PX) as f32);
+                set_ne!(tf.translation.y, GROUND_Y + (p.y / PX) as f32);
                 let data = roster.0[sel.chars[*i]].moves[p.move_index].projectile.as_ref();
                 if data.is_some_and(|d| d.spin) {
                     tf.rotation = Quat::from_rotation_z(-(p.age as f32) * 0.5 * p.vx.signum() as f32);
@@ -427,13 +444,15 @@ pub fn animate_stars(
                 }
                 // a charged star is bigger
                 tf.scale = Vec3::splat(p.power as f32 / 100.0);
-                let flicker = (p.age / 3 % STAR_FRAMES as u32) as usize;
+                let flicker = (p.age / 3 % data.map_or(STAR_FRAMES, |d| d.drawing_count()) as u32) as usize;
                 let base = data.map_or("star", |d| d.image_name());
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("{base}_{flicker}"))) {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
 }
@@ -453,7 +472,9 @@ pub fn animate_marks(
         let frame = frame_for(f, data, speaking(&sim.0, *i), sim.0.frame);
         if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("{}_mark", frame.file_stem()))) {
             if sprite.image != *image {
-                sprite.image = image.clone();
+                if sprite.image != *image {
+                    sprite.image = image.clone();
+                }
             }
         }
         let frac = (f.meter as f32 / Fighter::METER_MAX as f32).clamp(0.0, 1.0);
@@ -483,7 +504,7 @@ pub fn animate_marks(
             None => Color::srgba(1.0, 1.0, 1.0, 0.0),
         };
         if f.hidden {
-            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
+            set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, 0.0));
         }
     }
 }
@@ -514,14 +535,16 @@ pub fn animate_ravens(
         match name.and_then(|n| handles.0.get(*i).and_then(|m| m.get(&n))) {
             Some(image) => {
                 if sprite.image != *image {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
-                tf.translation.x = (r.x / PX) as f32;
-                tf.translation.y = GROUND_Y + (r.y / PX) as f32;
+                set_ne!(tf.translation.x, (r.x / PX) as f32);
+                set_ne!(tf.translation.y, GROUND_Y + (r.y / PX) as f32);
                 tf.scale.x = r.facing as f32;
-                *visibility = Visibility::Inherited;
+                set_ne!(*visibility, Visibility::Inherited);
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
     for (RoseOf(i), mut sprite, mut tf, mut visibility) in &mut roses {
@@ -532,11 +555,11 @@ pub fn animate_ravens(
                         sprite.image = image.clone();
                     }
                 }
-                tf.translation.x = (rose.x / PX) as f32;
-                tf.translation.y = GROUND_Y + (rose.y / PX) as f32;
-                *visibility = Visibility::Inherited;
+                set_ne!(tf.translation.x, (rose.x / PX) as f32);
+                set_ne!(tf.translation.y, GROUND_Y + (rose.y / PX) as f32);
+                set_ne!(*visibility, Visibility::Inherited);
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
 }
@@ -598,17 +621,17 @@ pub fn animate_whips(
             }
         }
         if lash.is_some() || !path.is_empty() {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
         } else {
             match layer.and_then(|name| handles.0.get(*i).and_then(|m| m.get(&name))) {
                 Some(image) => {
                     if sprite.image != *image {
                         sprite.image = image.clone();
                     }
-                    sprite.color = tint(f.state);
-                    *visibility = Visibility::Inherited;
+                    set_ne!(sprite.color, tint(f.state));
+                    set_ne!(*visibility, Visibility::Inherited);
                 }
-                None => *visibility = Visibility::Hidden,
+                None => set_ne!(*visibility, Visibility::Hidden),
             }
         }
         for (WhipPixel(owner, index), mut px_sprite, mut tf, mut vis) in &mut pixels {
@@ -617,12 +640,12 @@ pub fn animate_whips(
             }
             match path.get(*index) {
                 Some(&(x, y)) => {
-                    px_sprite.color = lash_colour(*index, path.len(), tint(f.state));
-                    tf.translation.x = shift - FRAME_W as f32 / 2.0 + x as f32 + 0.5;
-                    tf.translation.y = FULL_H as f32 - y as f32 - 0.5;
-                    *vis = Visibility::Inherited;
+                    set_ne!(px_sprite.color, lash_colour(*index, path.len(), tint(f.state)));
+                    set_ne!(tf.translation.x, shift - FRAME_W as f32 / 2.0 + x as f32 + 0.5);
+                    set_ne!(tf.translation.y, FULL_H as f32 - y as f32 - 0.5);
+                    set_ne!(*vis, Visibility::Inherited);
                 }
-                None => *vis = Visibility::Hidden,
+                None => set_ne!(*vis, Visibility::Hidden),
             }
         }
     }
@@ -686,38 +709,42 @@ pub fn animate_moons(
     for (MoonOf(i), MoonImage(base), mut sprite, mut tf, mut visibility) in &mut moons {
         match sim.0.fighters[*i].moon {
             Some((x, y, age)) => {
-                *visibility = Visibility::Inherited;
-                tf.translation.x = (x / PX) as f32;
-                tf.translation.y = GROUND_Y + (y / PX) as f32;
+                set_ne!(*visibility, Visibility::Inherited);
+                set_ne!(tf.translation.x, (x / PX) as f32);
+                set_ne!(tf.translation.y, GROUND_Y + (y / PX) as f32);
                 let grow = (age as f32 / 12.0).min(1.0).max(0.1);
                 // a portal over the opponent is wide
                 tf.scale = if base == "portal" { Vec3::new(grow * 1.9, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
                 let fade = ((Fighter::MOON_LIFE - age.min(Fighter::MOON_LIFE)) as f32 / 25.0).min(1.0);
-                sprite.color = Color::srgba(1.0, 1.0, 1.0, fade);
+                set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, fade));
                 let twinkle = (sim.0.frame / 8 % CRESCENT_FRAMES as u32) as usize;
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("{base}_{twinkle}"))) {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
     for (MoonStarOf(i), mut sprite, mut tf, mut visibility) in &mut stars {
         match sim.0.fighters[*i].moon {
             Some((x, y, age)) => {
-                *visibility = Visibility::Inherited;
+                set_ne!(*visibility, Visibility::Inherited);
                 let bob = (time.elapsed_secs() * 3.0).sin() * 2.0;
-                tf.translation.x = (x / PX) as f32 + 22.0;
-                tf.translation.y = GROUND_Y + (y / PX) as f32 + 8.0 + bob;
+                set_ne!(tf.translation.x, (x / PX) as f32 + 22.0);
+                set_ne!(tf.translation.y, GROUND_Y + (y / PX) as f32 + 8.0 + bob);
                 tf.scale = Vec3::splat(((age as f32 - 6.0) / 12.0).clamp(0.1, 1.0));
                 let fade = ((Fighter::MOON_LIFE - age.min(Fighter::MOON_LIFE)) as f32 / 25.0).min(1.0);
-                sprite.color = Color::srgba(1.0, 1.0, 1.0, fade);
+                set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, fade));
                 let twinkle = (sim.0.frame / 6 % STAR_FRAMES as u32) as usize;
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("moon_star_{twinkle}"))) {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
 }
@@ -731,26 +758,35 @@ pub fn animate_bubbles(
     mut texts: Query<(&BubbleText, &mut Text2d)>,
     mut backs: Query<(&BubbleBack, &mut Sprite), Without<BubbleTail>>,
     mut tails: Query<(&BubbleTail, &mut Transform), (Without<BubbleOf>, Without<BubbleText>)>,
+    mut spoken: Local<[Option<usize>; 2]>,
 ) {
     for (BubbleOf(i), mut tf, mut visibility) in &mut roots {
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
-        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let attacking = f.state == FighterState::Attack;
+        // a line that was written stays up, whole, while what it made (the orb, the knives) is still out
+        let lingering = spoken[*i].filter(|&m| !attacking && sim.0.projectiles.iter().any(|p| p.owner == *i && p.move_index == m));
+        let index = lingering.unwrap_or(f.attack.min(data.moves.len() - 1));
+        let mv = &data.moves[index];
         // a writing move says its line (with the enemy's name in it) while it plays
         let line = mv.say.as_ref().map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
+        spoken[*i] = if attacking && line.is_some() { Some(index) } else { lingering };
         // a grab says it while he holds the enemy (after the pull); the others while they wind up
         let grabbing = mv.hits > 1;
-        let lecturing = f.state == FighterState::Attack
-            && (line.is_some() || matches!(mv.anim, t2f::sim::AnimKind::Lecture | t2f::sim::AnimKind::Grab))
-            && f.state_frame + 3 < mv.total_frames()
-            && (!grabbing || f.state_frame > mv.startup);
-        *visibility = if lecturing { Visibility::Inherited } else { Visibility::Hidden };
-        tf.translation.x = (f.x / PX) as f32;
-        tf.translation.y = GROUND_Y + (f.y / PX) as f32 + 84.0;
+        let lecturing = lingering.is_some()
+            || (attacking
+                && (line.is_some() || matches!(mv.anim, t2f::sim::AnimKind::Lecture | t2f::sim::AnimKind::Grab))
+                && (line.is_some() || f.state_frame + 3 < mv.total_frames())
+                && (!grabbing || f.state_frame > mv.startup));
+        set_ne!(*visibility, if lecturing { Visibility::Inherited } else { Visibility::Hidden });
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 84.0);
         if lecturing {
             // a long line goes onto several rows
             let full = wrap_words(&line.clone().unwrap_or_else(|| LECTURE_LINE.to_string()), BUBBLE_LINE);
-            let progress = if grabbing {
+            let progress = if lingering.is_some() {
+                1.0
+            } else if grabbing {
                 (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
             } else {
                 (f.state_frame as f32 / (mv.startup as f32 * 0.85).max(1.0)).min(1.0)
@@ -775,7 +811,7 @@ pub fn animate_bubbles(
             }
             for (BubbleTail(owner, border), mut tail) in &mut tails {
                 if owner == i {
-                    tail.translation.y = -(height / 2.0) - if *border { 1.0 } else { 0.0 };
+                    set_ne!(tail.translation.y, -(height / 2.0) - if *border { 1.0 } else { 0.0 });
                 }
             }
         }
@@ -848,8 +884,14 @@ pub fn animate_skill_bar(
     mut shades: Query<(&SkillShade, &mut Sprite, &mut Transform, &mut Visibility), (Without<SkillIcon>, Without<SkillGlow>)>,
     mut glows: Query<(&SkillGlow, &mut Sprite), (Without<SkillIcon>, Without<SkillShade>)>,
     mut timers: Query<(&SkillTimer, &mut Text2d)>,
+    fresh: Query<(), Added<SkillIcon>>,
+    // which icon each slot shows now, so the image is only asked for when it changes
+    mut shown: Local<(String, [&'static str; 3])>,
 ) {
     use t2f::sim::Button;
+    if !fresh.is_empty() {
+        *shown = Default::default();
+    }
     let side = net.as_ref().map_or(0, |n| n.local);
     let f = &sim.0.fighters[side.min(1)];
     let data = &roster.0[sel.chars[side.min(1)]];
@@ -863,27 +905,43 @@ pub fn animate_skill_bar(
         let raven_away = index.is_some_and(|i| data.moves[i].raven_move.is_some() && f.raven_away);
         let waiting_for_meter = buttons[k] == Button::Special && f.meter < Fighter::METER_MAX;
         let silenced = f.silenced > 0;
-        let frames = if cooling { index.map_or(0, |i| f.cooldown_left(i)) } else if silenced { f.silenced } else { 0 };
-        let shade = if waiting_for_meter && !cooling && !silenced { 1.0 - f.meter as f32 / Fighter::METER_MAX as f32 } else { 1.0 };
-        (!(cooling || silenced || raven_away || waiting_for_meter), frames, shade)
+        // the heavy turns into a bat (and back) whatever its cooldown; a bat can't use the others
+        let bat_slot = buttons[k] == Button::Heavy && (f.bat_ready > 0 || f.bat_form > 0);
+        let cooling = cooling && !bat_slot;
+        let bat_blocked = f.bat_form > 0 && buttons[k] != Button::Heavy;
+        let resting = buttons[k] == Button::Light && f.light_lock > 0;
+        let frames = if cooling { index.map_or(0, |i| f.cooldown_left(i)) } else if silenced { f.silenced } else if resting { f.light_lock } else { 0 };
+        let shade = if waiting_for_meter && !cooling && !silenced && !bat_blocked { 1.0 - f.meter as f32 / Fighter::METER_MAX as f32 } else { 1.0 };
+        (!(cooling || silenced || raven_away || waiting_for_meter || bat_blocked || resting), frames, shade)
     };
     for (SkillIcon(k), mut sprite) in &mut icons {
-        sprite.image = asset_server.load(format!("icons/{folder}/{}.png", names[*k]));
+        let name = match names[*k] {
+            "heavy" if f.bat_form > 0 => "poof",
+            "heavy" if f.bat_ready > 0 => "bat",
+            name => name,
+        };
+        if shown.0 != folder || shown.1[*k] != name {
+            sprite.image = asset_server.load(format!("icons/{folder}/{name}.png"));
+            shown.1[*k] = name;
+        }
+    }
+    if shown.0 != folder {
+        shown.0 = folder.clone();
     }
     for (SkillShade(k), mut sprite, mut tf, mut visibility) in &mut shades {
         let (available, _, shade) = state(*k);
-        *visibility = if available { Visibility::Hidden } else { Visibility::Inherited };
+        set_ne!(*visibility, if available { Visibility::Hidden } else { Visibility::Inherited });
         let h = SKILL_SIZE * shade;
         sprite.custom_size = Some(Vec2::new(SKILL_SIZE, h));
         // the grey covers the top of the icon down to `h`
-        tf.translation.y = SKILL_Y + SKILL_SIZE / 2.0 - h / 2.0;
+        set_ne!(tf.translation.y, SKILL_Y + SKILL_SIZE / 2.0 - h / 2.0);
     }
     for (SkillGlow(k), mut sprite) in &mut glows {
         let (available, _, _) = state(*k);
         let pulse = 0.55 + 0.45 * (time.elapsed_secs() * 7.0).sin();
         // the special shouts when it's ready; the others have a quiet edge
         let alpha = if available && buttons[*k] == Button::Special { pulse } else { 0.0 };
-        sprite.color = Color::srgba(1.0, 0.85, 0.3, alpha);
+        set_ne!(sprite.color, Color::srgba(1.0, 0.85, 0.3, alpha));
     }
     for (SkillTimer(k), mut text) in &mut timers {
         let (_, frames, _) = state(*k);
@@ -936,10 +994,9 @@ pub fn animate_portals(
     for (GateOf(i, which), mut sprite, mut tf, mut visibility) in &mut gates {
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
-        let folder = data.sprites.clone().unwrap_or_else(|| data.name.to_lowercase());
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
         let (Some(pd), true) = (mv.portal, f.state == FighterState::Attack) else {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
         let frame = f.state_frame;
@@ -951,20 +1008,21 @@ pub fn animate_portals(
         let (from, to, x) = if *which == 0 {
             (1, pd.vanish + 10, start[*i] - f.facing as f32 * 14.0)
         } else {
-            (pd.vanish, if f.hidden { end } else { (mv.startup + mv.active + 10).min(end) }, f.portal_x.map_or(0.0, |p| (p / PX) as f32))
+            (pd.aim_frame(mv.startup), if f.hidden { end } else { (mv.startup + mv.active + 10).min(end) }, f.portal_x.map_or(0.0, |p| (p / PX) as f32))
         };
         if frame < from || frame > to || (*which == 1 && f.portal_x.is_none()) {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         }
-        *visibility = Visibility::Inherited;
+        set_ne!(*visibility, Visibility::Inherited);
         // it swirls open, then shrinks shut over its last frames
         let age = (frame - from) as f32;
         let left = (to - frame) as f32;
         let size = (age / 6.0).min(1.0).min(left / 6.0).max(0.1);
-        tf.translation.x = x;
-        tf.translation.y = GROUND_Y + 22.0;
+        set_ne!(tf.translation.x, x);
+        set_ne!(tf.translation.y, GROUND_Y + 22.0);
         tf.scale = Vec3::new(size, size, 1.0);
+        let folder = data.sprites.clone().unwrap_or_else(|| data.name.to_lowercase());
         sprite.image = asset_server.load(format!("sprites/{folder}/gate_{}.png", (sim.0.frame / 5) % 2));
     }
     for (HandOf(i), mut sprite, mut tf, mut visibility) in &mut hands {
@@ -972,21 +1030,21 @@ pub fn animate_portals(
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
         let (Some(x), true) = (f.portal_x, f.state == FighterState::Attack && f.hidden && mv.portal.is_some()) else {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
         let frame = f.state_frame;
         if frame + 8 < mv.startup {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         }
-        *visibility = Visibility::Inherited;
+        set_ne!(*visibility, Visibility::Inherited);
         // it creeps out of the portal, then lunges over the grab
         let reach = if frame <= mv.startup { (frame + 8 - mv.startup) as f32 * 0.8 } else { 6.0 + (frame - mv.startup).min(4) as f32 * 4.0 };
-        tf.translation.x = (x / PX) as f32 + f.facing as f32 * reach;
-        tf.translation.y = GROUND_Y + 30.0;
+        set_ne!(tf.translation.x, (x / PX) as f32 + f.facing as f32 * reach);
+        set_ne!(tf.translation.y, GROUND_Y + 30.0);
         tf.scale.x = f.facing as f32;
-        sprite.color = Color::WHITE;
+        set_ne!(sprite.color, Color::WHITE);
     }
 }
 
@@ -1022,9 +1080,9 @@ pub fn animate_curses(
         let f = &sim.0.fighters[*i];
         match f.curse {
             Some(c) => {
-                *visibility = Visibility::Inherited;
-                tf.translation.x = (f.x / PX) as f32;
-                tf.translation.y = GROUND_Y + (f.y / PX) as f32 + 38.0;
+                set_ne!(*visibility, Visibility::Inherited);
+                set_ne!(tf.translation.x, (f.x / PX) as f32);
+                set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 38.0);
                 let grow = (c.age as f32 / 14.0).min(1.0);
                 let pulse = 1.0 + 0.03 * (time.elapsed_secs() * 5.0).sin();
                 let squeeze = if c.squeeze > 0 { c.squeeze as f32 / c.squeeze_frames.max(1) as f32 } else { 0.0 };
@@ -1032,12 +1090,12 @@ pub fn animate_curses(
                 let s = grow * pulse * (1.0 - 0.9 * squeeze * squeeze);
                 tf.scale = Vec3::new(s, s, 1.0);
             }
-            None => *visibility = Visibility::Hidden,
+            None => set_ne!(*visibility, Visibility::Hidden),
         }
     }
     for (part, CurseOf(i), mut sprite, mut visibility) in &mut parts {
         let Some(c) = sim.0.fighters[*i].curse else {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
         let shown = match part {
@@ -1045,7 +1103,7 @@ pub fn animate_curses(
             CursePart::PetalsLeft => c.left,
             CursePart::PetalsRight => c.right,
         };
-        *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
+        set_ne!(*visibility, if shown { Visibility::Inherited } else { Visibility::Hidden });
         let glow = 0.72 + 0.28 * (time.elapsed_secs() * 6.0 + c.age as f32 * 0.02).sin();
         sprite.color = match part {
             CursePart::PetalsLeft | CursePart::PetalsRight => Color::srgba(1.0, 1.0, 1.0, glow),
@@ -1095,7 +1153,7 @@ pub fn animate_combo_ui(
 ) {
     for (ComboSquare(i, k), mut sprite, mut tf) in &mut squares {
         let f = &sim.0.fighters[*i];
-        tf.translation.x = (f.x / PX) as f32 + (*k as f32 - 1.0) * 9.0;
+        set_ne!(tf.translation.x, (f.x / PX) as f32 + (*k as f32 - 1.0) * 9.0);
         let lit = (*k as u8) < f.combo;
         sprite.color = if lit {
             if *k == 2 { Color::srgb(1.0, 0.4, 0.15) } else { Color::srgb(1.0, 0.85, 0.25) }
@@ -1112,10 +1170,10 @@ pub fn animate_combo_ui(
         let disabled = f.block_disabled > 0;
         // blinks near the end so you can see the guard is coming back
         let blinking_off = f.block_disabled < 40 && (f.block_disabled / 5) % 2 == 0;
-        *visibility = if disabled && !blinking_off { Visibility::Inherited } else { Visibility::Hidden };
-        tf.translation.x = (f.x / PX) as f32;
-        tf.translation.y = GROUND_Y + (f.y / PX) as f32 + 74.0 + (time.elapsed_secs() * 4.0).sin() * 1.5;
-        sprite.color = Color::WHITE;
+        set_ne!(*visibility, if disabled && !blinking_off { Visibility::Inherited } else { Visibility::Hidden });
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 74.0 + (time.elapsed_secs() * 4.0).sin() * 1.5);
+        set_ne!(sprite.color, Color::WHITE);
     }
 }
 
@@ -1146,10 +1204,10 @@ pub fn animate_minions(
 ) {
     for (MinionSprite(owner, slot), mut sprite, mut tf, mut visibility) in &mut sprites {
         let Some(m) = sim.0.minions.iter().find(|m| m.owner == *owner && m.slot as usize == *slot) else {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
-        *visibility = Visibility::Inherited;
+        set_ne!(*visibility, Visibility::Inherited);
         let frame = match m.mode {
             _ => {
                 let foe_x = sim.0.fighters[1 - *owner].x;
@@ -1165,12 +1223,14 @@ pub fn animate_minions(
         };
         if let Some(image) = handles.0.get(*owner).and_then(|h| h.get(&format!("goblin_{frame}"))) {
             if sprite.image != *image {
-                sprite.image = image.clone();
+                if sprite.image != *image {
+                    sprite.image = image.clone();
+                }
             }
         }
         sprite.flip_x = m.facing < 0;
-        tf.translation.x = (m.x / PX) as f32;
-        tf.translation.y = GROUND_Y + 12.0;
+        set_ne!(tf.translation.x, (m.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + 12.0);
         // fades out in its last half second
         let left = 480u32.saturating_sub(m.age);
         let alpha = if left < 30 { left as f32 / 30.0 } else { 1.0 };
@@ -1213,7 +1273,7 @@ pub fn animate_scribe_effects(
 ) {
     for (WorryLine(i, index), mut tf, mut visibility) in &mut worry {
         let f = &sim.0.fighters[*i];
-        *visibility = if f.futile > 0 { Visibility::Inherited } else { Visibility::Hidden };
+        set_ne!(*visibility, if f.futile > 0 { Visibility::Inherited } else { Visibility::Hidden });
         // three short strokes fanning out above the head, trembling
         let shake = if (sim.0.frame / 4 + *index as u32) % 2 == 0 { 0.0 } else { 1.0 };
         let (x, y, angle) = match index {
@@ -1231,19 +1291,21 @@ pub fn animate_scribe_effects(
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
         match (f.state == FighterState::Attack, mv.beam, f.beam_lock) {
             (true, Some(b), Some(lock)) => {
-                *visibility = Visibility::Inherited;
+                set_ne!(*visibility, Visibility::Inherited);
                 let age = f.state_frame.saturating_sub(b.lock_frame);
                 let rise = (age as f32 / 14.0).min(1.0);
                 let leave = if f.state_frame > mv.startup + mv.active { ((mv.total_frames() - f.state_frame.min(mv.total_frames())) as f32 / 12.0).min(1.0) } else { 1.0 };
-                tf.translation.x = (lock / PX) as f32 - f.facing as f32 * b.lead as f32;
-                tf.translation.y = GROUND_Y + 128.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5;
-                sprite.color = Color::srgba(1.0, 1.0, 1.0, rise * leave);
+                set_ne!(tf.translation.x, (lock / PX) as f32 - f.facing as f32 * b.lead as f32);
+                set_ne!(tf.translation.y, GROUND_Y + 128.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5);
+                set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, rise * leave));
                 let frame = (sim.0.frame / 8 % 2) as usize;
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("jesus_{frame}"))) {
-                    sprite.image = image.clone();
+                    if sprite.image != *image {
+                        sprite.image = image.clone();
+                    }
                 }
             }
-            _ => *visibility = Visibility::Hidden,
+            _ => set_ne!(*visibility, Visibility::Hidden),
         }
     }
     for (BeamPart(i, core), mut sprite, mut tf, mut visibility) in &mut beams {
@@ -1251,16 +1313,16 @@ pub fn animate_scribe_effects(
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
         let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) else {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
         // charging before it fires, then the sweep, then it fades
         let firing = f.state == FighterState::Attack && f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.active + 6;
         if !firing {
-            *visibility = Visibility::Hidden;
+            set_ne!(*visibility, Visibility::Hidden);
             continue;
         }
-        *visibility = Visibility::Inherited;
+        set_ne!(*visibility, Visibility::Inherited);
         let progress = (f.state_frame.saturating_sub(mv.startup) as f32).min(mv.active as f32) / mv.active.max(1) as f32;
         let lock_x = (lock / PX) as f32;
         let (start, end) = (lock_x - f.facing as f32 * b.lead as f32, lock_x + f.facing as f32 * b.sweep as f32);
@@ -1273,8 +1335,8 @@ pub fn animate_scribe_effects(
         let thick = if *core { 9.0 } else { 20.0 } * pulse * fade.max(0.1);
         sprite.custom_size = Some(Vec2::new(thick, length));
         let mid = (from + to) / 2.0;
-        tf.translation.x = mid.x;
-        tf.translation.y = mid.y;
+        set_ne!(tf.translation.x, mid.x);
+        set_ne!(tf.translation.y, mid.y);
         // a rectangle is tall by default: turn it to lie along the beam
         tf.rotation = Quat::from_rotation_z(-(dx.atan2(-dy)) + std::f32::consts::PI);
         sprite.color = if *core { Color::srgba(1.0, 1.0, 0.95, fade) } else { Color::srgba(1.0, 0.88, 0.45, 0.55 * fade) };
