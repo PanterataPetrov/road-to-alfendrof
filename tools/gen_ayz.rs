@@ -782,7 +782,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
