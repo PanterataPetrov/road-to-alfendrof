@@ -33,6 +33,9 @@ bevy = { version = "0.20", default-features = false, features = [
     "std",
     "multi_threaded",
     "bevy_winit",
+    # Linux window backends are opt-in when Bevy's defaults are disabled.
+    "x11",
+    "wayland",
     "default_font",
     "2d_bevy_render",
     "bevy_audio",

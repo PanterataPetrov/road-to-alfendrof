@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Road to Alfendrof
+Comment=Road to Alfendrof fighting game
+Exec=road-to-alfendrof
+Icon=road-to-alfendrof
+Terminal=false
+Categories=Game;ActionGame;
