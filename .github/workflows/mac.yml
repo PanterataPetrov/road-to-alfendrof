@@ -1,18 +1,16 @@
 # Builds the Mac version: one universal app (Apple Silicon and Intel) in a zip.
-# Run it by hand from the Actions tab ("Mac build" > Run workflow), or push a tag like v0.1.4 to also attach
-# the zip to that release.
+# Run it by hand for an artifact, or let release.yml collect it for a stable release on main.
 name: Mac build
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
 
 jobs:
   build:
     runs-on: macos-14
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -23,12 +21,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --lib
+        run: cargo test --locked --lib
 
       - name: Build (Apple Silicon and Intel)
         run: |
-          cargo build --release --bin t2f --target aarch64-apple-darwin
-          cargo build --release --bin t2f --target x86_64-apple-darwin
+          cargo build --locked --release --bin t2f --target aarch64-apple-darwin
+          cargo build --locked --release --bin t2f --target x86_64-apple-darwin
 
       - name: Make the app
         run: |
@@ -52,10 +50,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: RoadToAlfendrof-Mac
+          if-no-files-found: error
           path: dist/RoadToAlfendrof-Mac.zip
-
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/RoadToAlfendrof-Mac.zip
