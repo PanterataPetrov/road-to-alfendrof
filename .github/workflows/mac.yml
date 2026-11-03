@@ -1,4 +1,4 @@
-# Builds the Mac version: one universal app (Apple Silicon and Intel) in a zip.
+# Builds the Mac version: one Apple Silicon app in a zip (Intel Macs are not supported).
 # Run it by hand for an artifact, or let release.yml collect it for a stable release on main.
 name: Mac build
 
@@ -8,34 +8,31 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test
-        run: cargo test --locked --lib
+      # Tests and the app use the same release profile and ARM64 target to reuse dependencies.
+      - name: Test (release profile)
+        run: cargo test --locked --release --lib --target aarch64-apple-darwin
 
-      - name: Build (Apple Silicon and Intel)
-        run: |
-          cargo build --locked --release --bin t2f --target aarch64-apple-darwin
-          cargo build --locked --release --bin t2f --target x86_64-apple-darwin
+      - name: Build (Apple Silicon)
+        run: cargo build --locked --release --bin t2f --target aarch64-apple-darwin
 
       - name: Make the app
         run: |
           VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
           APP="dist/Road to Alfendrof.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          lipo -create -output "$APP/Contents/MacOS/t2f" \
-            target/aarch64-apple-darwin/release/t2f \
-            target/x86_64-apple-darwin/release/t2f
+          install -m755 target/aarch64-apple-darwin/release/t2f "$APP/Contents/MacOS/t2f"
           sed "s/__VERSION__/$VERSION/g" installer/mac/Info.plist > "$APP/Contents/Info.plist"
           cp installer/mac/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp -R assets "$APP/Contents/Resources/assets"
@@ -47,7 +44,7 @@ jobs:
           (cd pack && ditto -c -k . ../RoadToAlfendrof-Mac.zip)
           ls -la
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RoadToAlfendrof-Mac
           if-no-files-found: error
