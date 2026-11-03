@@ -179,6 +179,7 @@ impl GameState {
         match self.phase {
             Phase::Fighting => {
                 self.start_lashes(chars);
+                self.update_portals(chars);
                 self.apply_slams(inputs);
                 self.lock_beams(chars);
                 self.launch_projectiles(chars);
@@ -349,7 +350,18 @@ impl GameState {
             self.fighters[a].hit_done = true;
             self.fighters[a].hitstop = mv.hitstop;
             let power = if self.fighters[a].finisher { 150 } else { 100 };
-            let blocked = self.apply_hit(1 - a, mv, dir, blocks[1 - a], power);
+            // a hand out of a portal can't be blocked, only dodged
+            let can_block = blocks[1 - a] && base.portal.is_none();
+            let blocked = self.apply_hit(1 - a, mv, dir, can_block, power);
+            if base.portal.is_some() && !blocked && base.window(self.fighters[a].state_frame) == Some(0) {
+                // the grab held: she comes out of the portal for the bite
+                self.fighters[a].grabbed = true;
+                self.fighters[a].hidden = false;
+            }
+            if mv.heal_pct > 0 && mv.damage > 0 && !blocked {
+                let f = &mut self.fighters[a];
+                f.health = (f.health + f.max_health * mv.heal_pct / 100).min(f.max_health);
+            }
             if mv.silence > 0 && !blocked {
                 self.fighters[1 - a].silenced = mv.silence;
             }
@@ -608,6 +620,45 @@ impl GameState {
                 self.fighters[owner].aim_low = (h >> 13) & 1 == 1;
             } else if f.state_frame == mv.startup + 1 && mv.button == super::data::Button::Special {
                 self.fighters[owner].meter = 0;
+            }
+        }
+    }
+
+    /// The portal special (see `MoveData::portal`): at `vanish` she is gone, the meter is spent and the far portal
+    /// opens behind the opponent; when the startup ends she is moved there (still unseen) facing them, so the grab
+    /// comes out of the far portal. If the grab misses she steps out when its window is over.
+    fn update_portals(&mut self, chars: [&CharacterData; 2]) {
+        for owner in 0..2 {
+            let f = &self.fighters[owner];
+            let portal = if f.state == FighterState::Attack { chars[owner].moves[f.attack].portal } else { None };
+            let Some(pd) = portal else {
+                let f = &mut self.fighters[owner];
+                f.hidden = false;
+                f.portal_x = None;
+                continue;
+            };
+            let mv = &chars[owner].moves[f.attack];
+            let (frame, foe_x) = (f.state_frame, self.fighters[1 - owner].x);
+            let f = &mut self.fighters[owner];
+            if frame == pd.vanish {
+                let dir = if foe_x >= f.x { 1 } else { -1 };
+                let limit = Self::STAGE_HALF_WIDTH - Fighter::HALF_WIDTH;
+                f.portal_x = Some((foe_x + dir * pd.gap * PX).clamp(-limit, limit));
+                f.hidden = true;
+                f.meter = 0;
+            }
+            if frame == mv.startup {
+                if let Some(x) = f.portal_x {
+                    if x != foe_x {
+                        f.facing = if foe_x > x { 1 } else { -1 };
+                    }
+                    f.x = x;
+                    f.y = 0;
+                    f.vx = 0;
+                }
+            }
+            if f.hidden && frame > mv.startup + mv.active {
+                f.hidden = false;
             }
         }
     }
@@ -3126,5 +3177,72 @@ mod tests {
         assert_eq!(state, FighterState::Attack, "the hail goes on");
         assert!(health < Fighter::MAX_HEALTH, "though it hurt");
         assert_eq!(hit_at(true, 90).0, FighterState::Attack, "and so does the beam");
+    }
+
+    fn gray_persona() -> CharacterData {
+        CharacterData::from_ron(include_str!("../../assets/characters/gray_persona.ron")).unwrap()
+    }
+
+    #[test]
+    fn gray_personas_combo_finisher_bites_and_heals_her_three_percent() {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 30 * PX;
+        s.fighters[0].health = 500;
+        s.fighters[0].combo = 2;
+        s.fighters[0].combo_timer = 20;
+        s.step([Input(Input::LIGHT), Input(0)], [&g, &evilayz()]);
+        assert_eq!(g.moves[s.fighters[0].attack].name, "Fang Frenzy");
+        for _ in 0..30 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+        }
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the bite should land");
+        assert_eq!(s.fighters[0].health, 500 + Fighter::MAX_HEALTH * 3 / 100, "and heal her 3%");
+    }
+
+    /// Gray Persona (P1) opens her portal with the opponent 60 px away; `dodge` makes them walk away from the far portal.
+    fn portal_run(dodge: bool) -> GameState {
+        let g = gray_persona();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 60 * PX;
+        s.fighters[0].health = 700;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
+        for frame in 1..110 {
+            let foe = if dodge && (15..50).contains(&frame) { Input::LEFT } else { 0 };
+            s.step([Input(0), Input(foe)], [&g, &evilayz()]);
+            if frame == 20 {
+                assert!(s.fighters[0].hidden && s.fighters[0].invulnerable(), "inside the portal she is gone and can't be hit");
+                assert_eq!(s.fighters[0].meter, 0, "the portal spends the meter");
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn the_portal_grab_holds_the_opponent_for_a_bite_that_heals_ten_percent() {
+        let s = portal_run(false);
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 130, "the grab does nothing, the bite does the damage");
+        assert_eq!(s.fighters[0].health, 700 + Fighter::MAX_HEALTH / 10, "the bite heals her 10%");
+        assert!(s.fighters[0].x > s.fighters[1].x, "she came out behind them");
+        assert!(!s.fighters[0].hidden);
+    }
+
+    #[test]
+    fn moving_away_from_the_hand_dodges_the_portal() {
+        let s = portal_run(true);
+        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "the hand misses and no bite follows");
+        assert_eq!(s.fighters[0].health, 700, "no heal");
+        assert!(!s.fighters[0].hidden, "she steps out of the portal anyway");
+    }
+
+    #[test]
+    fn gray_personas_heavy_has_a_cooldown_and_sends_bats() {
+        let g = gray_persona();
+        let heavy = &g.moves[g.find_move(Button::Heavy, false, false).unwrap()];
+        assert!(heavy.cooldown > 0);
+        assert_eq!(heavy.projectile.as_ref().unwrap().image_name(), "bats");
     }
 }

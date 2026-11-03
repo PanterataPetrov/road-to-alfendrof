@@ -141,6 +141,16 @@ pub fn emit(
                     shake.0 = shake.0.max((lost as f32 / 14.0).min(6.0));
                 }
             }
+            // a bite that heals: blood flies out of the victim towards the biter
+            if f.health > prev.health && f.state == FighterState::Attack && data.moves[f.attack.min(data.moves.len() - 1)].heal_pct > 0 {
+                let o = &s.fighters[1 - i];
+                let from = Vec2::new((o.x / PX) as f32, GROUND_Y + (o.y / PX) as f32 + 38.0);
+                let blood = [Color::srgb(0.75, 0.04, 0.06), Color::srgb(0.5, 0.0, 0.03), Color::srgb(0.95, 0.15, 0.15)];
+                for k in 0..18 {
+                    let v = Vec2::new(-towards * seen.range(30.0, 140.0), seen.range(10.0, 120.0));
+                    spawn(&mut commands, from + Vec2::new(seen.range(-4.0, 4.0), seen.range(-6.0, 6.0)), v, blood[k % 3], seen.range(1.5, 3.0), 0.6, -220.0, false);
+                }
+            }
             if f.state == FighterState::Ko && prev.state != FighterState::Ko {
                 burst(&mut commands, &mut seen, feet + Vec2::new(0.0, 30.0), 36, 60.0, 240.0, &spark, 3.0, 0.7, -120.0);
                 shake.0 = 8.0;

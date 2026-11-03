@@ -61,6 +61,8 @@ pub enum Frame {
     Write(usize),
     /// The roll: tuck in, a tight ball turning in eighths of a turn (1..=8), then rise (9).
     Roll(usize),
+    /// The portal special: stepping back, leaping into the portal, the bite, recovery.
+    Portal(usize),
 }
 
 impl Frame {
@@ -96,6 +98,7 @@ impl Frame {
             Frame::Boost(i) => format!("boost_{i}"),
             Frame::Write(i) => format!("write_{i}"),
             Frame::Lean(i) => format!("lean_{i}"),
+            Frame::Portal(i) => format!("portal_{i}"),
         }
     }
 
@@ -144,6 +147,9 @@ pub const LEAN_FRAMES: usize = 3;
 /// Finger-gun volley drawings.
 pub const GUN_FRAMES: usize = 5;
 
+/// Portal special drawings.
+pub const PORTAL_FRAMES: usize = 4;
+
 /// Everything this character needs: the common set plus what its moves use.
 pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     let mut v = Frame::all();
@@ -168,6 +174,9 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Read) {
         v.extend((0..READ_FRAMES).map(Frame::Read));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Portal) {
+        v.extend((0..PORTAL_FRAMES).map(Frame::Portal));
     }
     if data.moves.iter().any(|m| m.anim == AnimKind::Staff) {
         v.extend((0..STAFF_FRAMES).map(Frame::Staff));
@@ -467,6 +476,19 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
                 4
             } else {
                 5
+            })
+        }
+        AnimKind::Portal => {
+            // step back, leap into the portal (unseen until she comes out), then the bite if the grab held
+            let vanish = mv.portal.map_or(mv.startup, |p| p.vanish);
+            Frame::Portal(if frame * 2 <= vanish {
+                0
+            } else if frame <= mv.startup + mv.active && !f.grabbed {
+                1
+            } else if f.grabbed && frame <= mv.startup + mv.hit_gap + mv.active + 6 {
+                2
+            } else {
+                3
             })
         }
         AnimKind::Soft => Frame::Soft(if frame <= mv.startup { 0 } else { 1 }),

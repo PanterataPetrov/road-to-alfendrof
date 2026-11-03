@@ -121,6 +121,11 @@ pub struct Fighter {
     pub silenced: u32,
     /// Frames left on each move's cooldown, by index into the character's moves.
     pub cooldowns: [u32; MAX_MOVES],
+    /// The portal special: where the far portal opened, whether she is inside a portal (unseen and untouchable),
+    /// and whether her grab held (only then does the bite come).
+    pub portal_x: Option<i32>,
+    pub hidden: bool,
+    pub grabbed: bool,
     /// Dash double-tap: direction of the last tap and frames since.
     pub tap_dir: i32,
     pub tap_timer: u32,
@@ -262,6 +267,9 @@ impl Fighter {
             raven_away: false,
             silenced: 0,
             cooldowns: [0; MAX_MOVES],
+            portal_x: None,
+            hidden: false,
+            grabbed: false,
         }
     }
 
@@ -280,7 +288,7 @@ impl Fighter {
 
     /// Can't be hit right now (mid-roll).
     pub fn invulnerable(&self) -> bool {
-        self.state == FighterState::Roll && Self::ROLL_SAFE.contains(&self.state_frame)
+        (self.state == FighterState::Roll && Self::ROLL_SAFE.contains(&self.state_frame)) || self.hidden
     }
 
     fn begin_dash(&mut self, dir: i32) {
@@ -320,6 +328,8 @@ impl Fighter {
             return;
         }
         self.slamming = false;
+        self.hidden = false;
+        self.portal_x = None;
         self.state = state;
         self.state_frame = 0;
         self.stun = frames;
@@ -379,6 +389,9 @@ impl Fighter {
         self.charge = 0;
         self.shots = 0;
         self.lob_target = None;
+        self.portal_x = None;
+        self.hidden = false;
+        self.grabbed = false;
         self.vx = 0;
     }
 
@@ -470,8 +483,9 @@ impl Fighter {
                     self.air_used = true;
                 }
                 // each further hit window of a multi-hit move can hit again
+                // (a portal's bite only comes if its grab held)
                 if mv.hits > 1 && (1..mv.hits).any(|k| self.state_frame == mv.startup + k * mv.hit_gap + 1) {
-                    self.hit_done = false;
+                    self.hit_done = mv.portal.is_some() && !self.grabbed;
                 }
                 // a lobbing special hangs its moon where the move started
                 if self.state_frame == 1 {

@@ -328,6 +328,7 @@ fn main() {
                 .run_if(in_state(AppState::Fight)),
         )
         .add_systems(Update, render::animate_scribe_effects.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_portals.run_if(in_state(AppState::Fight)))
         .add_systems(Update, (toggle_debug, dev_screenshot));
 
     if dev.fight {
@@ -515,6 +516,12 @@ fn spawn_fight(
         }
         let frames = t2f::anim::frames_for(c);
         render::spawn_fighter(&mut commands, &asset_server, &assets_dir(), &mut handles, i, c.sprites.as_deref().unwrap_or(&c.name), rgb(c.color), summon, &effects, &frames, c.special_mark.is_some(), c.whip || c.moves.iter().any(|m| m.rope), c.raven.is_some());
+    }
+    for i in 0..2 {
+        let c = &roster.0[selection.chars[i]];
+        if c.moves.iter().any(|m| m.portal.is_some()) {
+            render::spawn_portals(&mut commands, &asset_server, i, c.sprites.as_deref().unwrap_or(&c.name));
+        }
     }
     render::spawn_curses(&mut commands, &asset_server);
     render::spawn_combo_ui(&mut commands, &asset_server);

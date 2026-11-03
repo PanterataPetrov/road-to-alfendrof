@@ -120,6 +120,16 @@ pub enum AnimKind {
     Boost,
     /// Writing in a book: it opens, he writes (two drawings alternate), then a flourish (4 drawings).
     Write,
+    /// Stepping back into a portal, gone, coming out behind the enemy with fangs bared, recovering (4 drawings).
+    Portal,
+}
+
+/// The portal special (see `MoveData::portal`): at frame `vanish` the fighter is gone into a portal behind
+/// her and a second one opens `gap` pixels behind the opponent.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct PortalData {
+    pub vanish: u32,
+    pub gap: i32,
 }
 
 /// A projectile a move launches. It flies in a straight line and hits once for the move's damage.
@@ -333,6 +343,15 @@ pub struct MoveData {
     /// he is up in the air).
     #[serde(default)]
     pub volley_delay: u32,
+    /// An unblocked hit that does damage heals the attacker by this percent of their health (a bite).
+    #[serde(default)]
+    pub heal_pct: i32,
+    /// The portal special: she steps into a portal and is gone (and can't be hit) from `vanish`, the far portal
+    /// opens behind the opponent, and when the startup ends she is moved there, still hidden, so only her hand
+    /// reaches out: the first hit window is the grab (unblockable, and dodged by moving away), the second the
+    /// bite, which only comes if the grab held. She shows herself once the grab holds or misses.
+    #[serde(default)]
+    pub portal: Option<PortalData>,
     /// What each projectile hits for, if that isn't the move's `damage` (the cowboy's heavy splashes
     /// for `damage` on the ground and then shoots weaker bullets).
     #[serde(default)]

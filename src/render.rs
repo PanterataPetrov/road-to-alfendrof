@@ -359,6 +359,10 @@ pub fn animate_body(
         if f.futile > 0 {
             sprite.color = futile_tint(sprite.color);
         }
+        // inside a portal there is nothing to see
+        if f.hidden {
+            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
+        }
     }
 }
 
@@ -478,6 +482,9 @@ pub fn animate_marks(
             }
             None => Color::srgba(1.0, 1.0, 1.0, 0.0),
         };
+        if f.hidden {
+            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
+        }
     }
 }
 
@@ -884,6 +891,102 @@ pub fn animate_skill_bar(
         if text.0 != shown {
             text.0 = shown;
         }
+    }
+}
+
+/// One of a fighter's two portals (0: the one behind her that she leaps into, 1: the one behind the enemy).
+#[derive(Component)]
+pub struct GateOf(pub usize, pub usize);
+/// The hand that reaches out of the far portal.
+#[derive(Component)]
+pub struct HandOf(pub usize);
+
+/// Spawn the hidden portals and hand for a fighter whose moves open portals (drawings `gate_0`, `gate_1` and
+/// `hand_0` in their sprite folder).
+pub fn spawn_portals(commands: &mut Commands, asset_server: &AssetServer, fighter: usize, folder: &str) {
+    for which in 0..2 {
+        commands.spawn((
+            GateOf(fighter, which),
+            DespawnOnExit(AppState::Fight),
+            Sprite::from_image(asset_server.load(format!("sprites/{folder}/gate_0.png"))),
+            Transform::from_xyz(0.0, 0.0, 0.6),
+            Visibility::Hidden,
+        ));
+    }
+    commands.spawn((
+        HandOf(fighter),
+        DespawnOnExit(AppState::Fight),
+        Sprite::from_image(asset_server.load(format!("sprites/{folder}/hand_0.png"))),
+        Transform::from_xyz(0.0, 0.0, 2.6),
+        Visibility::Hidden,
+    ));
+}
+
+/// Open the portal behind her as she steps back, the far one behind the enemy once she is gone, and reach the
+/// hand out of the far one during the grab (holding on if it caught them). Both close once she is out.
+pub fn animate_portals(
+    mut start: Local<[f32; 2]>,
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    asset_server: Res<AssetServer>,
+    mut gates: Query<(&GateOf, &mut Sprite, &mut Transform, &mut Visibility), Without<HandOf>>,
+    mut hands: Query<(&HandOf, &mut Sprite, &mut Transform, &mut Visibility), Without<GateOf>>,
+) {
+    for (GateOf(i, which), mut sprite, mut tf, mut visibility) in &mut gates {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let folder = data.sprites.clone().unwrap_or_else(|| data.name.to_lowercase());
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(pd), true) = (mv.portal, f.state == FighterState::Attack) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        let frame = f.state_frame;
+        if frame <= 1 {
+            start[*i] = (f.x / PX) as f32;
+        }
+        let end = mv.total_frames();
+        // (near) from the first frame until a little after she is gone; (far) from then until she is out
+        let (from, to, x) = if *which == 0 {
+            (1, pd.vanish + 10, start[*i] - f.facing as f32 * 14.0)
+        } else {
+            (pd.vanish, if f.hidden { end } else { (mv.startup + mv.active + 10).min(end) }, f.portal_x.map_or(0.0, |p| (p / PX) as f32))
+        };
+        if frame < from || frame > to || (*which == 1 && f.portal_x.is_none()) {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        *visibility = Visibility::Inherited;
+        // it swirls open, then shrinks shut over its last frames
+        let age = (frame - from) as f32;
+        let left = (to - frame) as f32;
+        let size = (age / 6.0).min(1.0).min(left / 6.0).max(0.1);
+        tf.translation.x = x;
+        tf.translation.y = GROUND_Y + 22.0;
+        tf.scale = Vec3::new(size, size, 1.0);
+        sprite.image = asset_server.load(format!("sprites/{folder}/gate_{}.png", (sim.0.frame / 5) % 2));
+    }
+    for (HandOf(i), mut sprite, mut tf, mut visibility) in &mut hands {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(x), true) = (f.portal_x, f.state == FighterState::Attack && f.hidden && mv.portal.is_some()) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        let frame = f.state_frame;
+        if frame + 8 < mv.startup {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        *visibility = Visibility::Inherited;
+        // it creeps out of the portal, then lunges over the grab
+        let reach = if frame <= mv.startup { (frame + 8 - mv.startup) as f32 * 0.8 } else { 6.0 + (frame - mv.startup).min(4) as f32 * 4.0 };
+        tf.translation.x = (x / PX) as f32 + f.facing as f32 * reach;
+        tf.translation.y = GROUND_Y + 30.0;
+        tf.scale.x = f.facing as f32;
+        sprite.color = Color::WHITE;
     }
 }
 

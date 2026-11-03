@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn a_close_range_cpu_closes_the_gap_on_a_shooter_and_a_ranged_cpu_still_fights_without_breaking() {
         // every pairing of champions plays on without panicking or standing still for good
-        let names = ["ayz", "anaran", "cowboy", "scribe", "junkhead", "evilayz"];
+        let names = ["ayz", "anaran", "cowboy", "scribe", "junkhead", "evilayz", "gray_persona"];
         for a in names {
             for b in names {
                 let (ca, cb) = (load(a), load(b));

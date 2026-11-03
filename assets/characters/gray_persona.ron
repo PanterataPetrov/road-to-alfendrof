@@ -1,0 +1,44 @@
+// Gray Persona: a pale vampire in a black gothic dress with teal cuffs, long dark hair and a ruby brooch.
+// Light: a nail scratch that switches arms while you spam it. The third hit of a combo (the eyeless face) rakes with
+//        both hands and bites with two fangs; if it lands, blood flies out of the enemy and heals her 3%.
+// Heavy: she lifts her arms and sends a wave of bats.
+// Special (the brooch glows when the meter is full): a portal opens behind her and she leaps back into it, then one
+//        opens right behind the enemy and a hand reaches out to grab (move away to dodge it). If it holds, the enemy is
+//        stuck while she comes out and bites, healing 10%.
+// Drawings come from `python tools/gen_gray_persona.py`. See ayz.ron for what each field means; heal_pct and
+// portal are explained in src/sim/data.rs.
+(
+    name: "Gray Persona",
+    subtitle: Some("gaypersona"),
+    sprites: Some("gray_persona"),
+    color: (0.55, 0.55, 0.62),
+    walk_speed: 205,
+    jump_speed: 1050,
+    special_mark: Some(Scar(color: (0.55, 0.08, 0.1), glow: (1.0, 0.2, 0.25))),
+    moves: [
+        (name: "Nail Scratch", button: Light, crouching: false, anim: Punch, walk_pct: 60,
+         startup: 5, active: 3, recovery: 8, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 10, y: 24, w: 30, h: 16)),
+        // third hit of the combo: both hands and the fangs; a landed bite heals her
+        (name: "Fang Frenzy", button: Light, crouching: false, anim: Hard, walk_pct: 0, finisher_move: true, heal_pct: 3,
+         startup: 9, active: 5, recovery: 14, damage: 38, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 7,
+         hitbox: (x: 8, y: 20, w: 34, h: 28)),
+        (name: "Low Scratch", button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 6, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 10, y: 0, w: 30, h: 12)),
+        (name: "Air Scratch", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
+         hitbox: (x: 8, y: 0, w: 30, h: 26)),
+        // the bats fly straight ahead as one wide wave
+        (name: "Bat Wave", button: Heavy, crouching: false, anim: Summon, walk_pct: 0, cooldown: 180, guard_hits: Some(2),
+         startup: 18, active: 3, recovery: 20, damage: 60, hitstun: 20, blockstun: 12, knockback: 4, hitstop: 6,
+         hitbox: (x: 0, y: 0, w: 0, h: 0),
+         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 80, size: (34, 28), image: Some("bats"), summon_image: Some("none"), speed: 4))),
+        // the portal: gone at frame 14; the grab (window 1) holds them for the bite (window 2)
+        (name: "Blood Portal", button: Special, crouching: false, anim: Portal, walk_pct: 0,
+         portal: Some((vanish: 14, gap: 26)), heal_pct: 10, hits: 2, hit_gap: 24, guard_hits: Some(0),
+         hit_overrides: [(damage: 0, hitstun: 60, knockback: 0), (damage: 130, hitstun: 26, knockback: 5)],
+         startup: 36, active: 6, recovery: 24, damage: 130, hitstun: 26, blockstun: 0, knockback: 5, hitstop: 8,
+         hitbox: (x: 2, y: 8, w: 36, h: 46)),
+    ],
+)

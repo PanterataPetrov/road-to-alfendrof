@@ -24,7 +24,7 @@
          channel: Some((first: 45, every: 60)),
          startup: 14, active: 1, recovery: 12, damage: 70, hitstun: 22, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 20, y: 42, aim_y: 30, travel_frames: 1, lifetime: 300, size: (10, 10), image: Some("missile"), summon_image: Some("none"), homing: true, homing_turn: 7, detonate: 22, speed_tenths: 36))),
+         projectile: Some((x: 18, y: 30, aim_y: 30, travel_frames: 1, lifetime: 300, size: (10, 10), image: Some("missile"), summon_image: Some("none"), homing: true, homing_turn: 7, detonate: 22, speed_tenths: 36))),
         (name: "Staff Slam", button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 150, guard_hits: Some(2),
          startup: 7, active: 4, recovery: 24, damage: 80, hitstun: 16, blockstun: 14, knockback: 9, hitstop: 8,
          hitbox: (x: -84, y: 0, w: 168, h: 36)),
