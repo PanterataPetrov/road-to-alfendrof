@@ -25,9 +25,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test library
+      - name: Test library (release profile)
         run: |
-          cargo test --locked --lib
+          cargo test --locked --release --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # The MSVC runner's host target is x86_64-pc-windows-msvc; keeping the default

@@ -32,8 +32,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test
-        run: cargo test --locked --lib
+      - name: Test (release profile)
+        run: cargo test --locked --release --lib
 
       - name: Build
         run: cargo build --locked --release --bin t2f

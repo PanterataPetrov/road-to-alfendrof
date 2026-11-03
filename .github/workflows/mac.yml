@@ -20,8 +20,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test
-        run: cargo test --locked --lib
+      # Match the explicit native target below so its release dependencies are reused.
+      - name: Test (release profile)
+        run: cargo test --locked --release --lib --target "$(rustc --print host-tuple)"
 
       - name: Build (Apple Silicon and Intel)
         run: |

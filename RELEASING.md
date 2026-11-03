@@ -25,7 +25,7 @@ Every main push is a release candidate. Once a version is published, bump the ve
 
    If dependencies are not cached, omit `--offline`. Commit `Cargo.toml`, `Cargo.lock`, and the installer version change together.
 
-5. Run `cargo test --locked --lib` in the appropriate development environment. For packaging prerequisites, use the platform workflows as the source of truth.
+5. Run `cargo test --locked --release --lib` in the appropriate development environment. For packaging prerequisites, use the platform workflows as the source of truth.
 6. Commit and push the feature branch, then open a pull request against `main` in the repository that should publish the release. Do not create the release tag manually.
 
 The original repository is `thracian141/road-to-alfendrof`; `zerw0/road-to-alfendrof` is a fork. Workflows publish into the repository where they run, not into its parent. The built-in Windows updater currently checks the original repository, so releases made in a fork do not redirect existing clients to that fork.
@@ -33,6 +33,8 @@ The original repository is `thracian141/road-to-alfendrof`; `zerw0/road-to-alfen
 ## Build and smoke-test before deployment
 
 Once the workflows exist on the repository's default branch, open **Actions** and run **Linux build**, **Windows build**, or **Mac build**, selecting the candidate branch. These runs do not publish releases. Alternatively, run **Stable release** on the candidate branch to build all three platforms together without publishing.
+
+The platform jobs run in parallel and cache Rust dependencies. Tests use the release profile so the subsequent game build can reuse compiled dependencies instead of compiling a separate development profile. The Mac test command explicitly selects the native host target to match one of the universal app's builds. Linux's three package formats share one executable; Windows and macOS require different binaries, and the universal Mac app requires both Apple Silicon and Intel builds.
 
 Download and extract the resulting Actions artifacts:
 
