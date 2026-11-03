@@ -1,6 +1,8 @@
 Road to Alfendrof for Mac
 =========================
 
+Requires an Apple Silicon Mac (M1 or later). Intel Macs are not supported.
+
 1. Unzip, and drag "Road to Alfendrof" into your Applications folder (or anywhere you like).
 2. The first time, macOS will say it can't verify the app (it isn't signed with an Apple developer
    account). Right-click (or Control-click) the app, choose "Open", then "Open" again. After that it

@@ -34,7 +34,7 @@ The original repository is `thracian141/road-to-alfendrof`; `zerw0/road-to-alfen
 
 Once the workflows exist on the repository's default branch, open **Actions** and run **Linux build**, **Windows build**, or **Mac build**, selecting the candidate branch. These runs do not publish releases. Alternatively, run **Stable release** on the candidate branch to build all three platforms together without publishing.
 
-The platform jobs run in parallel and cache Rust dependencies. Tests use the release profile so the subsequent game build can reuse compiled dependencies instead of compiling a separate development profile. The Mac test command explicitly selects the native host target to match one of the universal app's builds. Linux's three package formats share one executable; Windows and macOS require different binaries, and the universal Mac app requires both Apple Silicon and Intel builds.
+The platform jobs run in parallel and cache Rust dependencies. Tests use the release profile so the subsequent game build can reuse compiled dependencies instead of compiling a separate development profile. The Mac workflow uses `aarch64-apple-darwin` for both tests and the app on GitHub's ARM64 `macos-15` runner. Linux's three package formats share one executable; Windows and macOS require different binaries. The Mac package is Apple Silicon-only; there is no Intel build.
 
 Download and extract the resulting Actions artifacts:
 
@@ -42,13 +42,13 @@ Download and extract the resulting Actions artifacts:
 | --- | --- |
 | `RoadToAlfendrof-Linux-x86_64` | `.AppImage`, Debian `.deb`, Fedora `.rpm` |
 | `RoadToAlfendrof-Windows-x86_64` | `RoadToAlfendrof-Setup.exe` |
-| `RoadToAlfendrof-Mac` | `RoadToAlfendrof-Mac.zip` containing a universal app |
+| `RoadToAlfendrof-Mac` | `RoadToAlfendrof-Mac.zip` containing an Apple Silicon (ARM64) app |
 
 Install and launch on the intended platforms. Check the title screen, music, character selection, and a fight on a stage. Launch from the desktop or another working directory to confirm assets are found independently of the source checkout.
 
 - **Linux:** x86-64, glibc 2.35 or newer (Debian 12+ and current Fedora), with a working Vulkan graphics driver. Install DEB with `sudo apt install ./road-to-alfendrof_*.deb` or RPM with `sudo dnf install ./road-to-alfendrof-*.rpm`. For AppImage, run `chmod +x RoadToAlfendrof-*.AppImage`; if FUSE is unavailable, use `./RoadToAlfendrof-<version>-x86_64.AppImage --appimage-extract-and-run`.
 - **Windows:** the x64 installer includes the game executable, all assets, the icon, and `dxcompiler.dll`/`dxil.dll`. It does not install the user's graphics driver. The installer is unsigned; check the repository and release origin before trusting it.
-- **Mac:** test Apple Silicon and Intel where available. The app has an ad-hoc signature, not Apple notarization; see `installer/mac/README.txt` for the existing installation instructions.
+- **Mac:** Apple Silicon (M1 or later) only; Intel Macs are not supported. The app has an ad-hoc signature, not Apple notarization; see `installer/mac/README.txt` for the installation instructions.
 
 A passing build does not prove graphical gameplay works on the user's GPU. Keep native runtime checks separate from compile and packaging checks.
 
@@ -68,3 +68,9 @@ The workflows use the repository's `GITHUB_TOKEN`; no personal access token is n
 - If the version guard reports that a tag belongs to another commit, bump the version and merge the correction. Do not delete or force-move a stable tag to bypass the guard.
 - If the upload fails partway through, inspect the release for partial assets and rerun the same commit to complete it. Verify all five files before announcing the release.
 - To roll back a bad published version, mark the previous known-good stable release as latest and reinstall its packages where necessary. The Windows updater does not automatically downgrade clients already on a newer version. Ship the permanent fix under a new, higher version; never replace the historical tag with different code.
+
+### Action runtimes and runner notices
+
+The JavaScript actions use Node 24-compatible versions: `actions/checkout@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, and `softprops/action-gh-release@v3`. Resolve runtime deprecation warnings by updating the action references, not by suppressing the warnings or forcing an unsupported runtime. When upgrading artifact actions, preserve named archive uploads and automatic download extraction so the publisher still receives the expected package files.
+
+A macOS ARM64 capacity notice concerns GitHub's runner scheduling. A job may wait in the queue before any compilation starts; changing Rust build flags does not shorten that wait. It is a scheduler notice, not a game compiler error.
