@@ -156,6 +156,8 @@ pub struct Fighter {
     /// the game state deals the splash.
     pub slamming: bool,
     pub slam_landed: bool,
+    /// What the landing of the plunge in progress deals (a floor smash sets its own).
+    pub slam_damage: i32,
     /// Futility: frames left in which every attack this fighter starts costs them `FUTILITY_DAMAGE`.
     pub futile: u32,
     /// A committed move is firing: hits no longer interrupt it (set each frame by `step`).
@@ -273,6 +275,7 @@ impl Fighter {
             roll_cd: 0,
             slamming: false,
             slam_landed: false,
+            slam_damage: Self::SLAM_DAMAGE,
             futile: 0,
             armored: false,
             portal: false,
@@ -494,6 +497,10 @@ impl Fighter {
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
         self.light_lock = self.light_lock.saturating_sub(1);
+        // a grab only holds someone while they are stunned by it
+        if self.state != FighterState::Hitstun {
+            self.held = false;
+        }
         self.bat_ready = self.bat_ready.saturating_sub(1);
         self.poof = false;
         if self.bat_form > 0 {
@@ -540,9 +547,24 @@ impl Fighter {
             }
             FighterState::Attack => {
                 let mv = &data.moves[self.attack];
-                self.armored = mv.committed && self.state_frame > mv.startup;
+                self.armored = mv.committed && self.state_frame >= mv.commit_frame();
                 self.hovering = mv.hover && !self.grounded() && self.state_frame <= mv.total_frames() - mv.recovery;
                 self.slow_fall = mv.slow_fall;
+                // a pulling move that ends in a floor smash: once it has connected he flies on to the opponent
+                // without falling, then plunges and smashes the floor where he arrived
+                if mv.smash_damage > 0 && self.hit_done && !self.grounded() {
+                    self.state_frame = self.state_frame.min(mv.startup + mv.active);
+                    if self.pull != 0 {
+                        self.hovering = true;
+                    } else if !self.slamming {
+                        self.slamming = true;
+                        self.slam_damage = mv.smash_damage;
+                    }
+                }
+                if self.slamming {
+                    self.vx = 0;
+                    self.vy = -Self::SLAM_SPEED;
+                }
                 // a hop back as it starts (landing doesn't end the move)
                 if let (Some((up, back)), 1, true) = (mv.hop, self.state_frame, self.grounded()) {
                     self.vy = up;

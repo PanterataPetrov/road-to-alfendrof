@@ -420,6 +420,15 @@ class Pose:
             arm(self.canvas, self.shoulder("front"), self.at(*front), bend=front_bend, **kw)
         return self
 
+    def swing(self, back=(0, 0), front=(0, 0)):
+        """Both arms as drawn, swung from the shoulder: each row of an arm moves in proportion to how far down it is,
+        so the sleeve stays joined to the body and the hand travels the furthest. `(swing, lift)` for each arm."""
+        for arm_pixels, (dx, lift), top, bottom in ((BACK_ARM, back, 20, 31), (FRONT_ARM, front, 19, 36)):
+            for (x, y), col in arm_pixels.items():
+                t = max(0.0, (y - top) / (bottom - top))
+                put(self.canvas, x + OFF_X + self.up[0] + round(dx * t), y + OFF_Y + self.up[1] - round(lift * t), col)
+        return self
+
     def mark(self):
         """The ruby brooch at her throat."""
         if self.mark_img is not None:
@@ -472,14 +481,18 @@ def build():
     pose("idle_0").arms("rest", "rest")
     pose("idle_1", up=(0, 1)).arms("rest", "rest")
 
-    # walking: the boots swap, she dips as they pass, the skirt sways and both arms swing against the legs
+    # walking: a long stride, both arms drawn from the shoulder (never shifted pieces of the rest arm, which come away
+    # from the body) swinging against the legs, she bobs and leans into each step and the skirt swings the other way
     for k in range(6):
         a = 2 * math.pi * k / 6
         s_, c_ = math.sin(a), math.cos(a)
-        boots = ((round(3 * s_), -int(c_ > 0.4)), (-round(3 * s_), -int(c_ < -0.4)))
-        p = pose(f"walk_{k}", up=(0, int(abs(c_) < 0.5)), boots=boots)
-        # the arm opposite the forward boot comes forward, rising a pixel at the front of its swing
-        p.arms("rest", "rest", back_shift=(-round(2 * s_), -int(-s_ > 0.6)), front_shift=(round(2 * s_), -int(s_ > 0.6)))
+        boots = ((round(4 * s_), -int(c_ > 0.4)), (-round(4 * s_), -int(c_ < -0.4)))
+        down = int(abs(c_) < 0.5)  # lowest as the boots pass
+        p = pose(f"walk_{k}", up=(1 if abs(s_) > 0.5 else 0, down), skirt=(-round(s_), down), boots=boots)
+        # the arm opposite the forward boot swings forward and lifts, the other trails behind
+        front = (round(7 * s_), round(3 * max(s_, 0)))
+        back = (-round(7 * s_), round(3 * max(-s_, 0)))
+        p.swing(back=back, front=front)
 
     # nail scratch: front hand cocks and rakes, then the back hand
     # (she leans back as the hand cocks, the swing carries her forward, and on the strike she is stepping in,

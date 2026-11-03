@@ -1192,10 +1192,16 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
     }
     for f in every {
         let (body, mark) = drawing_and_mark_with(&parts, f, raven);
-        frames.push((f.file_stem(), body.to_png()));
+        let mut img = body.to_png();
+        if raven {
+            professor_flair(f, &mut img);
+        }
+        frames.push((f.file_stem(), img));
         if raven {
             // The same pose with the raven gone from the shoulder (while it is out flying).
-            frames.push((format!("{}_nr", f.file_stem()), drawing_and_mark_with(&parts, f, false).0.to_png()));
+            let mut bare = drawing_and_mark_with(&parts, f, false).0.to_png();
+            professor_flair(f, &mut bare);
+            frames.push((format!("{}_nr", f.file_stem()), bare));
         }
         frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
     }
@@ -1210,6 +1216,133 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
     frames
 }
 
+
+/// Drawn touches on the Professor's frames: sound waves rolling out of his mouth as he says "uh" and "meh" (and
+/// as he lectures the enemy he holds), a glint of command on the raised finger and a thrust of lines as he
+/// points, impact lines on the shove and the jab, and black feathers whirling round his hands as he calls the
+/// raven storm. Nothing is drawn over the drawing itself (or the raven on his shoulder), only round it.
+fn professor_flair(frame: Frame, img: &mut image::RgbaImage) {
+    fn put(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 3]) {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() && img.get_pixel(x as u32, y as u32)[3] == 0 {
+            img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+        }
+    }
+    const WAVE: [u8; 3] = [236, 240, 255];
+    const WAVE_FAINT: [u8; 3] = [160, 176, 214];
+    const GLINT: [u8; 3] = [255, 255, 255];
+    const GOLD: [u8; 3] = [255, 222, 120];
+    const FEATHER: [u8; 3] = [22, 22, 36];
+    const SHEEN: [u8; 3] = [70, 90, 150];
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let opaque = |img: &image::RgbaImage, x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && img.get_pixel(x as u32, y as u32)[3] > 0;
+    let skin = |img: &image::RgbaImage, x: i32, y: i32| {
+        if !opaque(img, x, y) {
+            return false;
+        }
+        let p = img.get_pixel(x as u32, y as u32);
+        p[0] > 180 && p[1] > 120 && p[2] < 170
+    };
+    // the furthest-forward skin pixel between two rows (a hand)
+    let front_hand = |img: &image::RgbaImage, top: i32, bottom: i32| -> Option<(i32, i32)> {
+        (0..w).rev().find_map(|x| (top..bottom.min(h)).find(|&y| skin(img, x, y)).map(|y| (x, y)))
+    };
+    // the mouth: the head is the topmost thing in the middle columns, the mouth a dozen rows below its crown at
+    // the front of the face
+    let mouth = |img: &image::RgbaImage| -> Option<(i32, i32)> {
+        let crown = (0..h).find(|&y| (24..44).any(|x| opaque(img, x, y)))?;
+        let y = crown + 13;
+        let x = (24..46).rev().find(|&x| skin(img, x, y) || skin(img, x, y - 2))?;
+        Some((x, y))
+    };
+    // sound rolling out: arcs opening forwards, each further one wider and fainter
+    let waves = |img: &mut image::RgbaImage, (mx, my): (i32, i32), rings: &[i32]| {
+        for (n, &r) in rings.iter().enumerate() {
+            for t in -10i32..=10 {
+                let a = t as f32 / 10.0 * 0.9;
+                let x = mx + 1 + (a.cos() * r as f32).round() as i32;
+                let y = my + (a.sin() * r as f32).round() as i32;
+                if t.abs() <= 8 - n as i32 * 2 || t.abs() <= 3 {
+                    put(img, x, y, if n == 0 { WAVE } else { WAVE_FAINT });
+                }
+            }
+        }
+    };
+    let impact = |img: &mut image::RgbaImage, (x, y): (i32, i32)| {
+        for (dx, dy) in [(2, 0), (2, -2), (2, 2), (1, -3), (1, 3)] {
+            for k in 1..3 {
+                put(img, x + 1 + dx * k, y + dy * k / 2, if k == 1 { GLINT } else { GOLD });
+            }
+        }
+    };
+    // a black feather: a short slanted quill with a blue sheen down its middle
+    let feather = |img: &mut image::RgbaImage, (x, y): (i32, i32), slant: i32| {
+        for k in -2..=2 {
+            put(img, x + k, y + k * slant / 2, FEATHER);
+            put(img, x + k, y + k * slant / 2 + 1, FEATHER);
+        }
+        put(img, x, y, SHEEN);
+        put(img, x + 1, y + slant / 2, SHEEN);
+    };
+    match frame {
+        Frame::Speak(k) => {
+            if let Some(m) = mouth(img) {
+                waves(img, m, if k == 0 { &[12, 16] } else { &[13, 17, 21] });
+            }
+        }
+        Frame::Grab(2) | Frame::Grab(3) => {
+            if let Some(m) = mouth(img) {
+                waves(img, m, if frame == Frame::Grab(2) { &[12, 16, 20] } else { &[13, 17] });
+            }
+        }
+        Frame::Point(0) => {
+            // the finger raised: a glint of command on its tip
+            if let Some((x, y)) = (0..h).find_map(|y| (40..w).find(|&x| skin(img, x, y)).map(|x| (x, y))) {
+                for (dx, dy) in [(0, -2), (0, -3), (-2, 0), (-3, 0), (2, 0), (3, 0), (-1, -1), (1, -1)] {
+                    put(img, x + dx, y + dy, if dx.abs() + dy.abs() > 2 { GOLD } else { GLINT });
+                }
+            }
+        }
+        Frame::Point(1) => {
+            // the arm thrust out: lines along it and a glint off the fingertip
+            if let Some((x, y)) = front_hand(img, 12, 40) {
+                for (dy, len) in [(-3, 9), (3, 8), (-5, 5)] {
+                    for k in 0..len {
+                        if k % 4 != 3 {
+                            put(img, x - 3 - k, y + dy, if k < len / 2 { WAVE } else { WAVE_FAINT });
+                        }
+                    }
+                }
+                impact(img, (x, y));
+            }
+        }
+        Frame::Grab(4) | Frame::Soft(1) => {
+            if let Some(hand) = front_hand(img, 12, 44) {
+                impact(img, hand);
+            }
+        }
+        Frame::Summon(k @ (2 | 3)) => {
+            // feathers whirling round both raised hands
+            // (the hands are out to the sides of his bald head, which is the same colour)
+            for (x0, x1, side) in [(0, 25, -1), (43, w, 1)] {
+                if let Some((hx, hy)) = (0..h).find_map(|y| (x0..x1).find(|&x| skin(img, x, y)).map(|x| (x, y))) {
+                    let spots: &[(i32, i32, i32)] = if k == 2 { &[(-5, 3, 1), (5, 2, -1), (side * 7, 8, 2)] } else { &[(side * 6, 4, 1), (side * 8, 9, -1), (side * 5, 14, 2)] };
+                    for &(dx, dy, slant) in spots {
+                        feather(img, (hx + dx, hy + dy), slant);
+                    }
+                }
+            }
+        }
+        Frame::Summon(4) => {
+            // the throw: feathers bursting off the forward hand
+            if let Some((x, y)) = front_hand(img, 8, 40) {
+                for (dx, dy, slant) in [(0, -6, -2), (2, 6, 2), (-5, -8, -1), (-4, 8, 1), (-9, -4, 0)] {
+                    feather(img, (x + dx, y + dy), slant);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 // The Professor's raven (black with a blue sheen, like his hair), the rose it drops, and the
 // words ("uh", "meh") he speaks at the enemy. The shapes are drawn from ellipses and polygons so

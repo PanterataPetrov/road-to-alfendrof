@@ -183,6 +183,9 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.7), Vec2::new(86.0, 12.0)), Transform::from_xyz(0.0, 8.0, 4.0)));
     let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);
     commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
+    // the version, small in the bottom right corner
+    let version = spawn_text(&mut commands, state.clone(), format!("v{}", env!("CARGO_PKG_VERSION")), 8.0, Color::srgba(0.85, 0.85, 0.95, 0.75), -102.0);
+    commands.entity(version).insert((Transform::from_xyz(172.0, -102.0, 5.0), bevy::sprite::Anchor::CENTER_RIGHT));
 
     let white = Color::WHITE;
     let online = Item::new("Online", white);
@@ -432,6 +435,7 @@ fn left_right(keys: &ButtonInput<KeyCode>) -> i32 {
 fn options_labels(settings: &Settings) -> Vec<String> {
     vec![
         format!("Music volume  < {} >", settings.music_volume),
+        format!("Effects volume  < {} >", settings.sfx_volume),
         format!("Display  < {} >", settings.display.label()),
         "Controls".into(),
         "Back".into(),
@@ -467,13 +471,14 @@ fn options_confirm(
     }
     match menu.cursor {
         0 if step != 0 => settings.music_volume = (settings.music_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8,
-        1 if step != 0 || confirm => {
+        1 if step != 0 => settings.sfx_volume = (settings.sfx_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8,
+        2 if step != 0 || confirm => {
             let n = Display::ALL.len() as i32;
             let i = Display::ALL.iter().position(|&d| d == settings.display).unwrap_or(0) as i32;
             settings.display = Display::ALL[(i + if step == 0 { 1 } else { step }).rem_euclid(n) as usize];
         }
-        2 if confirm => next.set(AppState::Controls),
-        3 if confirm => next.set(AppState::Title),
+        3 if confirm => next.set(AppState::Controls),
+        4 if confirm => next.set(AppState::Title),
         _ => {}
     }
     // F11 changes the display mode too

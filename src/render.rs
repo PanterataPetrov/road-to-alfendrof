@@ -786,6 +786,9 @@ pub fn animate_bubbles(
             let full = wrap_words(&line.clone().unwrap_or_else(|| LECTURE_LINE.to_string()), BUBBLE_LINE);
             let progress = if lingering.is_some() {
                 1.0
+            } else if line.is_some() {
+                // a written line types at its own pace (30 letters a second), whatever the move is doing
+                (f.state_frame as f32 * 0.5 / full.chars().count().max(1) as f32).min(1.0)
             } else if grabbing {
                 (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
             } else {
@@ -1337,8 +1340,9 @@ pub fn animate_scribe_effects(
         let mid = (from + to) / 2.0;
         set_ne!(tf.translation.x, mid.x);
         set_ne!(tf.translation.y, mid.y);
-        // a rectangle is tall by default: turn it to lie along the beam
-        tf.rotation = Quat::from_rotation_z(-(dx.atan2(-dy)) + std::f32::consts::PI);
+        // a rectangle is tall by default: turn it to lie along the beam, so its top stays at Jesus and only the
+        // bottom sweeps
+        tf.rotation = Quat::from_rotation_z(dx.atan2(-dy));
         sprite.color = if *core { Color::srgba(1.0, 1.0, 0.95, fade) } else { Color::srgba(1.0, 0.88, 0.45, 0.55 * fade) };
     }
 }

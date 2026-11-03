@@ -356,7 +356,7 @@ impl GameState {
             let blocked = self.apply_hit(1 - a, mv, dir, can_block, power);
             // the first window of a grab (it does no damage, a later hit does) holds them where they are,
             // even in the middle of a jump
-            if !blocked && base.hits > 1 && mv.damage == 0 && base.window(self.fighters[a].state_frame) == Some(0) {
+            if !blocked && base.hits > 1 && mv.damage == 0 && base.window(self.fighters[a].state_frame) == Some(0) && self.fighters[1 - a].state == FighterState::Hitstun {
                 let d = &mut self.fighters[1 - a];
                 d.held = true;
                 d.vx = 0;
@@ -392,6 +392,8 @@ impl GameState {
                 continue;
             }
             self.fighters[a].slam_landed = false;
+            // (a floor smash deals its own damage; the plain ground pound the usual amount)
+            let slam_damage = std::mem::replace(&mut self.fighters[a].slam_damage, Fighter::SLAM_DAMAGE);
             let d = 1 - a;
             let ax = self.fighters[a].x;
             let radius = Fighter::SLAM_RADIUS * PX;
@@ -401,10 +403,10 @@ impl GameState {
                 let blocked = self.can_block(d, inputs[d]);
                 let foe = &mut self.fighters[d];
                 if blocked {
-                    foe.health = (foe.health - Fighter::SLAM_DAMAGE / Self::CHIP_DIVISOR).max(1);
+                    foe.health = (foe.health - slam_damage / Self::CHIP_DIVISOR).max(1);
                     foe.start_stun(FighterState::Blockstun, 10, dir * 2 * PX);
                 } else {
-                    foe.health -= Fighter::SLAM_DAMAGE;
+                    foe.health -= slam_damage;
                     foe.combo = 0;
                     if foe.health <= 0 {
                         foe.start_stun(FighterState::Ko, 0, dir * 4 * PX);
@@ -413,7 +415,7 @@ impl GameState {
                     }
                 }
             }
-            self.hit_minion(d, [ax - radius, 0, ax + radius, 40 * PX], Fighter::SLAM_DAMAGE);
+            self.hit_minion(d, [ax - radius, 0, ax + radius, 40 * PX], slam_damage);
         }
     }
 
@@ -2617,7 +2619,55 @@ mod tests {
         }
         assert!(Fighter::MAX_HEALTH - s.fighters[1].health >= 55, "it hit");
         let gap = (s.fighters[1].x - s.fighters[0].x).abs() / PX;
-        assert!(gap < 40, "he was pulled in, gap {gap}");
+        // (the floor smash shoves them back a little, so the gap ends up a bit wider than the 24 px he was pulled to)
+        assert!(gap < 50, "he was pulled in, gap {gap}");
+    }
+
+    #[test]
+    fn the_air_whip_catches_for_half_then_pulls_him_all_the_way_and_smashes_the_floor_for_the_other_half() {
+        let j = junkhead();
+        let pull = j.moves.iter().find(|m| m.name == "Air Whip Pull").unwrap();
+        assert_eq!(pull.damage + pull.smash_damage, 55, "the same total as before, in two halves");
+        assert!(pull.damage.abs_diff(pull.smash_damage) <= 1, "{} and {}", pull.damage, pull.smash_damage);
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 110 * PX;
+        s.step([Input(Input::UP), Input(0)], [&j, &evilayz()]);
+        for _ in 0..4 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+        }
+        s.step([Input(Input::HEAVY), Input(0)], [&j, &evilayz()]);
+        let (mut after_catch, mut after_smash, mut landed_at_gap, mut smashed_frame) = (None, None, None, None);
+        for frame in 0..80 {
+            s.step([Input(0), Input(0)], [&j, &evilayz()]);
+            let lost = Fighter::MAX_HEALTH - s.fighters[1].health;
+            if after_catch.is_none() && lost > 0 {
+                after_catch = Some(lost);
+            }
+            if after_catch.is_some() && after_smash.is_none() && lost > after_catch.unwrap() {
+                after_smash = Some(lost);
+                smashed_frame = Some(frame);
+                landed_at_gap = Some((s.fighters[1].x - s.fighters[0].x).abs() / PX);
+            }
+        }
+        assert_eq!(after_catch, Some(pull.damage), "the catch deals the first half");
+        assert_eq!(after_smash, Some(55), "the landing deals the rest");
+        let gap = landed_at_gap.unwrap();
+        assert!(gap <= 40, "he arrived at the enemy before smashing, gap {gap}");
+        assert!(smashed_frame.is_some());
+        assert_eq!(s.fighters[0].y, 0, "and he is on the floor");
+    }
+
+    #[test]
+    fn a_floor_smash_hits_by_its_own_damage_and_the_plain_ground_pound_still_deals_its_usual_amount() {
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 20 * PX;
+        s.fighters[0].slam_landed = true;
+        s.fighters[0].slam_damage = 17;
+        s.step([Input(0), Input(0)], [&junkhead(), &evilayz()]);
+        assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 17);
+        assert_eq!(s.fighters[0].slam_damage, Fighter::SLAM_DAMAGE, "back to the usual for the next plunge");
     }
 
     #[test]
@@ -3163,7 +3213,8 @@ mod tests {
             s.step([Input(Input::SPECIAL), Input(0)], [&c, &e]);
             let mut starts = Vec::new();
             for frame in 0..170 {
-                if frame == 63 && walk_away {
+                // after Jesus has locked on (0.6 s), before the beam comes down
+                if frame == 40 && walk_away {
                     s.fighters[1].x += 120 * PX;
                 }
                 s.step([Input(0), Input(0)], [&c, &e]);
@@ -3209,9 +3260,12 @@ mod tests {
             s.apply_hit(0, &forced, -1, false, 100);
             (s.fighters[0].state, s.fighters[0].health)
         };
-        // while it is still being written, a hit knocks him out of it
-        assert_eq!(hit_at(false, 20).0, FighterState::Hitstun);
-        assert_eq!(hit_at(true, 20).0, FighterState::Hitstun);
+        // before the portal or Jesus shows, a hit knocks him out of it
+        assert_eq!(hit_at(false, 10).0, FighterState::Hitstun);
+        assert_eq!(hit_at(true, 30).0, FighterState::Hitstun);
+        // once they show, it doesn't
+        assert_eq!(hit_at(false, 20).0, FighterState::Attack);
+        assert_eq!(hit_at(true, 38).0, FighterState::Attack);
         // once the knives or the beam are going, the hit hurts but the move goes on
         let (state, health) = hit_at(false, 80);
         assert_eq!(state, FighterState::Attack, "the hail goes on");
@@ -3316,21 +3370,25 @@ mod tests {
     }
 
     #[test]
-    fn probe_grabbed_movement() {
-        let g = gray_persona();
+    fn a_grab_never_pins_someone_it_did_not_stun() {
+        let ayz = CharacterData::from_ron(include_str!("../../assets/characters/ayz.ron")).unwrap();
         let mut s = GameState::new();
         s.fighters[0].x = 0;
         s.fighters[1].x = 60 * PX;
-        s.fighters[0].meter = Fighter::METER_MAX;
-        s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
-        for frame in 1..120 {
-            let foe = if frame > 58 { Input::LEFT } else { 0 };
-            s.step([Input(0), Input(foe)], [&g, &evilayz()]);
-            let f = &s.fighters[1];
-            if frame > 50 && frame < 100 {
-                eprintln!("{frame}: foe {:?} x={} sf={} stun={} | gp {:?} sf={} grabbed={}", f.state, f.x / PX, f.state_frame, f.stun, s.fighters[0].state, s.fighters[0].state_frame, s.fighters[0].grabbed);
-            }
+        s.step([Input(Input::HEAVY), Input(0)], [&ayz, &evilayz()]);
+        // the opponent jumps and is mid-way through a move that can't be interrupted when the grab lands
+        s.fighters[1].y = 30 * PX;
+        s.fighters[1].vy = 400;
+        s.fighters[1].armored = true;
+        for _ in 0..200 {
+            s.fighters[1].armored = s.fighters[1].y > 0;
+            s.step([Input(0), Input(0)], [&ayz, &evilayz()]);
         }
+        assert!(!s.fighters[1].held);
+        assert_eq!(s.fighters[1].y, 0, "they came down");
+        s.step([Input(0), Input(Input::UP)], [&ayz, &evilayz()]);
+        s.step([Input(0), Input(0)], [&ayz, &evilayz()]);
+        assert!(s.fighters[1].y > 0, "and can jump again");
     }
 
     #[test]
@@ -3426,6 +3484,25 @@ mod tests {
     }
 
     #[test]
+    fn the_scribes_heavy_and_special_hold_once_the_portal_or_jesus_shows() {
+        let scribe = CharacterData::from_ron(include_str!("../../assets/characters/scribe.ron")).unwrap();
+        for button in [Button::Heavy, Button::Special] {
+            let index = scribe.find_move(button, false, false).unwrap();
+            let mv = &scribe.moves[index];
+            // the portal shows 0.3 s in, Jesus 0.6 s in, and from then on the move can't be stopped
+            assert_eq!(mv.commit_frame(), if button == Button::Heavy { 18 } else { 36 }, "{}", mv.name);
+            let mut f = Fighter::new(0, 1);
+            f.state = FighterState::Attack;
+            f.attack = index;
+            f.state_frame = mv.commit_frame();
+            f.step(Input(0), &scribe);
+            assert!(f.armored, "{}", mv.name);
+            f.start_stun(FighterState::Hitstun, 20, 0);
+            assert_eq!(f.state, FighterState::Attack, "a hit no longer stops {}", mv.name);
+        }
+    }
+
+    #[test]
     fn gray_personas_heavy_has_a_cooldown_and_sends_bats() {
         let g = gray_persona();
         let heavy = &g.moves[g.find_move(Button::Heavy, false, false).unwrap()];
@@ -3433,3 +3510,4 @@ mod tests {
         assert_eq!(heavy.projectile.as_ref().unwrap().image_name(), "bats");
     }
 }
+

@@ -5,6 +5,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use std::net::{IpAddr, SocketAddr};
+use t2f::net::code;
 use t2f::net::lobby::{build_id, Event, Lobby, Stage};
 use t2f::net::upnp::{lan_ip, Mapping};
 use t2f::net::{self, NetConfig, DEFAULT_PORT};
@@ -110,10 +111,10 @@ fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, r
     let gold = Color::srgb(1.0, 0.9, 0.4);
     let grey = Color::srgb(0.6, 0.6, 0.7);
     text(&mut commands, Label, "Online", 24.0, gold, 82.0);
-    text(&mut commands, Label, "Your address (send it to your friend)", 9.0, grey, 56.0);
+    text(&mut commands, Label, "Your code (send it to your friend)", 9.0, grey, 56.0);
     text(&mut commands, AddrText, "looking it up...", 16.0, Color::WHITE, 42.0);
     text(&mut commands, LanText, "", 8.0, grey, 28.0);
-    text(&mut commands, Label, "Your friend's address", 9.0, grey, 6.0);
+    text(&mut commands, Label, "Your friend's code", 9.0, grey, 6.0);
     text(&mut commands, InputText, "_", 16.0, Color::srgb(0.7, 0.95, 1.0), -8.0);
     text(&mut commands, StatusText, "", 9.0, Color::srgb(0.95, 0.8, 0.6), -34.0);
     text(&mut commands, PopupText, "", 12.0, Color::srgb(0.5, 1.0, 0.6), -54.0);
@@ -142,7 +143,7 @@ fn drive_lobby(
         match event {
             Event::Invited(from) => {
                 info.invite_from = Some(from);
-                info.message = format!("{from} wants to play!");
+                info.message = format!("{} wants to play!", code::show(from));
             }
             Event::Declined => info.message = "They declined.".into(),
             Event::BuildMismatch => info.message = "That player has a different version of the game.".into(),
@@ -204,7 +205,7 @@ fn online_screen(
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let invited = matches!(lobby.0.as_ref().map(|l| l.stage), Some(Stage::Invited(_)));
 
-    // typing: digits, '.' and ':' only
+    // typing: a code (letters, digits, dashes), or an address (digits, '.' and ':')
     for ev in typing.read() {
         if ev.state != ButtonState::Pressed || ctrl || invited {
             continue;
@@ -214,9 +215,9 @@ fn online_screen(
                 info.typed.pop();
             }
             (_, Some(t)) => {
-                for c in t.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == ':') {
+                for c in t.chars().filter(|c| typeable(*c)) {
                     if info.typed.len() < 21 {
-                        info.typed.push(c);
+                        info.typed.push(c.to_ascii_uppercase());
                     }
                 }
             }
@@ -226,7 +227,7 @@ fn online_screen(
     if ctrl && keys.just_pressed(KeyCode::KeyV) {
         if let Ok(mut clip) = arboard::Clipboard::new() {
             if let Ok(t) = clip.get_text() {
-                info.typed = t.trim().chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == ':').take(21).collect();
+                info.typed = t.trim().chars().filter(|c| typeable(*c)).map(|c| c.to_ascii_uppercase()).take(21).collect();
             }
         }
     }
@@ -239,8 +240,8 @@ fn online_screen(
     let mine = l.public;
     if ctrl && keys.just_pressed(KeyCode::KeyC) {
         if let (Some(addr), Ok(mut clip)) = (mine, arboard::Clipboard::new()) {
-            let _ = clip.set_text(addr.to_string());
-            info.message = "Copied your address.".into();
+            let _ = clip.set_text(code::show(addr));
+            info.message = "Copied your code.".into();
         }
     }
 
@@ -253,13 +254,15 @@ fn online_screen(
             info.message = "Declined.".into();
         }
     } else if keys.just_pressed(KeyCode::Enter) && !info.typed.is_empty() {
-        let parsed = info.typed.parse::<SocketAddr>().ok().or_else(|| info.typed.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, DEFAULT_PORT)));
+        let parsed = code::decode(&info.typed)
+            .or_else(|| info.typed.parse::<SocketAddr>().ok())
+            .or_else(|| info.typed.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, DEFAULT_PORT)));
         match parsed {
             Some(addr) => {
                 l.invite(addr);
-                info.message = format!("Invited {addr}. Waiting for them... (they can invite you back at the same time)");
+                info.message = format!("Invited {}. Waiting for them... (they can invite you back at the same time)", code::show(addr));
             }
-            None => info.message = "That is not an address (like 203.0.113.5:7777).".into(),
+            None => info.message = "That code doesn't work. Check it letter by letter.".into(),
         }
     }
     if keys.just_pressed(KeyCode::Escape) {
@@ -272,7 +275,7 @@ fn online_screen(
     }
 
     let new_addr = match mine {
-        Some(a) => a.to_string(),
+        Some(a) => code::show(a),
         None => "looking it up...".into(),
     };
     if addr_text.0 != new_addr {
@@ -282,7 +285,7 @@ fn online_screen(
     if lan_cache.is_none_or(|(at, _)| now - at > 3.0) {
         *lan_cache = Some((now, lan_ip()));
     }
-    let lan = lan_cache.and_then(|(_, ip)| ip).map(|ip| format!("{ip}:{}", l.port()));
+    let lan = lan_cache.and_then(|(_, ip)| ip).map(|ip| code::show(SocketAddr::new(IpAddr::V4(ip), l.port())));
     let router = match &l.mapping {
         Mapping::Working => "asking router...".to_string(),
         Mapping::Opened(_) => "router port opened".to_string(),
@@ -290,7 +293,7 @@ fn online_screen(
         Mapping::Unavailable(_) => "router: port not opened".to_string(),
     };
     let new_lan = match lan {
-        Some(a) => format!("same network: {a}   {router}"),
+        Some(a) => format!("on the same network: {a}   {router}"),
         None => router,
     };
     if lan_text.0 != new_lan {
@@ -305,12 +308,17 @@ fn online_screen(
         status_text.0 = info.message.clone();
     }
     let new_popup = match (l.stage, info.invite_from) {
-        (Stage::Invited(from), _) | (_, Some(from)) if invited => format!("{from} invites you!   F: accept    G: decline"),
+        (Stage::Invited(from), _) | (_, Some(from)) if invited => format!("{} invites you!   F: accept    G: decline", code::show(from)),
         _ => String::new(),
     };
     if popup_text.0 != new_popup {
         popup_text.0 = new_popup;
     }
+}
+
+/// What can be typed into the friend's code: a code's letters and dashes, or an address's digits, dots and colon.
+fn typeable(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == ':'
 }
 
 /// Test helper (see `DevOptions`): invite, accept and pick with no one at the keyboard.

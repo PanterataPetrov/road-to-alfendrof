@@ -53,10 +53,11 @@
          hover: true, hits: 2, hit_gap: 8,
          startup: 5, active: 5, recovery: 10, damage: 26, hitstun: 14, blockstun: 8, knockback: 0, hitstop: 3,
          hitbox: (x: -48, y: -6, w: 96, h: 72)),
-        // the whip pulls him through the air towards the opponent (sideways)
+        // the whip catches the opponent (28 damage) and pulls him through the air right up to them, then he plunges and
+        // smashes the floor where he arrives (27 more): the two halves make up the old 55
         (name: "Air Whip Pull", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
-         pull_self: true, pull_gap: 24, cooldown: 180, guard_hits: Some(2),
-         startup: 12, active: 4, recovery: 18, damage: 55, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
+         pull_self: true, pull_gap: 24, smash_damage: 27, cooldown: 180, guard_hits: Some(2),
+         startup: 12, active: 4, recovery: 18, damage: 28, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: -80, w: 125, h: 110), assist: 12),
         // the special works in the air too: he hangs there while he spins and the lash goes high or low at the ground (heights are measured from the floor), so it's crouched or jumped like the ground one
         (name: "Air Whip Storm", button: Special, crouching: false, air: true, anim: Summon, walk_pct: 0,

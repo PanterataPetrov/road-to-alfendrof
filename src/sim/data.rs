@@ -354,6 +354,10 @@ pub struct MoveData {
     pub leap: i32,
     #[serde(default)]
     pub leap_vx: i32,
+    /// A move that pulls him through the air ends in a floor smash: once the pull has brought him to the opponent he
+    /// plunges to the floor, and the landing deals this much (the catch itself deals `damage`).
+    #[serde(default)]
+    pub smash_damage: i32,
     /// Once the fighter starts to fall during this move, gravity is only this percent as strong
     /// (0 = normal), so he floats down slowly (the Cowboy's volley).
     #[serde(default)]
@@ -484,7 +488,7 @@ pub struct MoveData {
     /// A beam of light that sweeps across the opponent (see `BeamData`).
     #[serde(default)]
     pub beam: Option<BeamData>,
-    /// Once the startup is over (it is firing) being hit hurts but no longer interrupts the move.
+    /// Once it is under way (see `commit_frame`) being hit hurts but no longer interrupts the move.
     #[serde(default)]
     pub committed: bool,
 }
@@ -524,6 +528,13 @@ impl MoveData {
 
     pub fn guard_need(&self) -> u32 {
         self.guard_hits.unwrap_or(if self.button == Button::Light { 0 } else { 1 })
+    }
+
+    /// The frame from which a `committed` move can't be interrupted: as soon as what it calls up shows (the
+    /// portal over the enemy, Jesus in the sky), or else when the startup ends.
+    pub fn commit_frame(&self) -> u32 {
+        let shown = self.beam.map(|b| b.lock_frame).or_else(|| self.projectile.as_ref().filter(|p| p.lob && p.over_target).map(|p| p.lock_frame));
+        shown.filter(|&f| f > 0).unwrap_or(self.startup + 1).min(self.startup + 1)
     }
 
     pub fn total_frames(&self) -> u32 {

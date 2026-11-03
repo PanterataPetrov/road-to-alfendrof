@@ -212,12 +212,11 @@ class Pose:
         c = self.canvas
         ox, oy = OFF_X + self.up[0], OFF_Y + self.up[1]
         if kind in ("closed", "hurt"):
-            # eyes shut: a dark line where the lids meet
-            for x in (15, 16, 19, 20, 21):
-                put(c, x + ox, 9 + oy, SKIN)
+            # eyes shut: a short dark line where the lids meet, as wide as the open eye (two pixels)
             for x in (16, 17, 20, 21):
+                put(c, x + ox, 9 + oy, SKIN)
                 put(c, x + ox, 10 + oy, SKIN)
-            for x in (15, 16, 17, 19, 20, 21):
+            for x in (16, 17, 20, 21):
                 put(c, x + ox, 10 + oy, EYE_DARK)
         if kind in ("open", "hurt"):
             for x in (17, 18, 19):

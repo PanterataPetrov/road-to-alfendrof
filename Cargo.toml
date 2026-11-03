@@ -1,6 +1,6 @@
 [package]
 name = "t2f"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Road to Alfendrof"
 default-run = "t2f"
@@ -39,6 +39,7 @@ bevy = { version = "0.20", default-features = false, features = [
     "default_font",
     "2d_bevy_render",
     "bevy_audio",
+    "wav", # the sound effects in assets/sfx
 ] }
 ggrs = { version = "0.13", features = ["sync-send"] }
 serde = { version = "1", features = ["derive"] }

@@ -7,6 +7,7 @@ mod online;
 mod particles;
 mod render;
 mod settings;
+mod sfx;
 mod update;
 
 use std::path::PathBuf;
@@ -294,6 +295,7 @@ fn main() {
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
         .add_plugins(settings::SettingsPlugin)
+        .add_plugins(sfx::SfxPlugin)
         .add_plugins(menus::MenuPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(update::UpdatePlugin)
