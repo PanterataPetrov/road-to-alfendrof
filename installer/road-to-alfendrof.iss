@@ -1,8 +1,11 @@
 ; Builds the Windows installer: build the game first (`cargo build --release --bin t2f`), then
 ; `ISCC.exe installer\road-to-alfendrof.iss`. The installer is written to installer\Output.
+; CI passes /DAppVersion=<Cargo.toml version>; manual builds retain the default below.
 
 #define AppName "Road to Alfendrof"
-#define AppVersion "0.1.3"
+#ifndef AppVersion
+#define AppVersion "0.1.5"
+#endif
 #define AppExe "RoadToAlfendrof.exe"
 
 [Setup]

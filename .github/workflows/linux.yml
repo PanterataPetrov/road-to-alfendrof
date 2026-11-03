@@ -1,16 +1,14 @@
-# Actions > Linux build > Run workflow, or push a v* tag, to build downloadable x86-64 packages.
-# Download RoadToAlfendrof-Linux-x86_64 from the run's Artifacts section, extract the archive, and
-# manually attach the AppImage, DEB and RPM files when creating or editing a GitHub release.
+# Run manually for downloadable x86-64 packages, or let release.yml collect them on main.
+# This workflow never publishes a release itself.
 # Ubuntu 22.04 keeps the glibc baseline at 2.35 (Debian 12+ and current Fedora).
-# Package versions come from Cargo.toml; keep it in sync with the release tag.
+# Package versions come from Cargo.toml; see RELEASING.md for stable release instructions.
 # Install DEB/RPM with apt/dnf. AppImages need chmod +x and FUSE, or --appimage-extract-and-run.
 # All formats include the assets and desktop icon; a host Vulkan graphics driver is still required.
 name: Linux build
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
 
 permissions:
   contents: read
