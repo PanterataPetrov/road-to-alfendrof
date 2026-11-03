@@ -259,9 +259,12 @@ fn online_screen(
             .or_else(|| info.typed.parse::<SocketAddr>().ok())
             .or_else(|| info.typed.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, DEFAULT_PORT)));
         match parsed {
+            Some(addr) if l.is_own_address(addr) => {
+                info.message = "That is your own code. Send it to your friend and enter theirs here.".into();
+            }
             Some(addr) => {
                 l.invite(addr);
-                info.message = format!("Invited {}. Waiting for them... (they can invite you back at the same time)", code::show(addr));
+                info.message = format!("Invited {}. Waiting... your friend should enter YOUR code and invite you too.", code::show(addr));
             }
             None => info.message = "That code doesn't work. Check it letter by letter.".into(),
         }

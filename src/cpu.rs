@@ -23,6 +23,26 @@ fn reach(mv: &MoveData, boosted: bool) -> i32 {
     mv.hitbox.x + mv.hitbox.w + if boosted { mv.boost_reach } else { 0 } + Fighter::HALF_WIDTH / PX
 }
 
+/// Whether a heavy kills sub-agents (40 hit points) at distance `dist` without costing the fighter: it does at least
+/// that much damage, and covers them (a shockwave round the fighter, a wide grab, or a broad wave of shots). A heavy
+/// that leaps, pulls the fighter in, is held, or rains down on where the opponent stands is no use against them.
+fn kills_agents(h: &MoveData, dist: i32) -> bool {
+    const AGENT_HEALTH: i32 = 40;
+    if h.air || h.damage < AGENT_HEALTH || h.leap > 0 || h.pull_self || h.channel.is_some() || h.minions.is_some() {
+        return false;
+    }
+    if h.radial {
+        // a shockwave out to either side
+        return dist <= h.hitbox.w / 2 - 8;
+    }
+    if h.hitbox.w >= 100 {
+        // a wide grab or sweep reaching far in front
+        return (20..=reach(h, false) - 10).contains(&dist);
+    }
+    // a broad wave of shots flying straight ahead
+    h.projectile.as_ref().is_some_and(|p| !p.lob && !p.homing && p.size.0 >= 30) && (45..=170).contains(&dist)
+}
+
 /// How a character fights: from a distance (words, bullets, missiles, a raven) or up close.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Style {
@@ -66,18 +86,11 @@ fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &Charac
     // sub-agents are fought before anything else while any are alive; goblins nearer than the opponent are fought
     // first. Fighters always face the opponent, so only minions on that side can be hit
     let on_my_side = |g: &&crate::sim::Minion| (g.x - m.x) * (o.x - m.x) > 0;
+    // (a fighter turns to face an agent that is close, so they can be fought on either side)
     let agent_x = state
         .minions
         .iter()
         .filter(|g| g.owner != me && g.health > 0 && g.agent)
-        .filter(on_my_side)
-        .map(|g| g.x)
-        .min_by_key(|x| (x - m.x).abs());
-    // an agent that got behind me can't be hit (I face the opponent): roll through it to put it in front again
-    let agent_behind = state
-        .minions
-        .iter()
-        .filter(|g| g.owner != me && g.health > 0 && g.agent && !on_my_side(g) && (g.x - m.x).abs() < 70 * PX)
         .map(|g| g.x)
         .min_by_key(|x| (x - m.x).abs());
     let target_x = agent_x.unwrap_or_else(|| {
@@ -181,13 +194,16 @@ fn choose_input(state: &GameState, me: usize, data: &CharacterData, opp: &Charac
         }
     }
 
-    // agents come first: a light kills one outright, so it is all the CPU uses on them, and it doesn't back off from them
-    if agent_x.is_none() {
-        if let Some(bx) = agent_behind {
-            return button(if bx > m.x { Input::ROLL_RIGHT } else { Input::ROLL_LEFT });
+    // agents come first, and it doesn't back off from them. A heavy that wipes them out (Anaran's slam, the Professor's grab,
+    // Gray Persona's bats) is used when it covers them; otherwise a light, which kills one outright
+    if agent_x.is_some() {
+        let heavy = data.find_move(Button::Heavy, false, false).map(|i| &data.moves[i]);
+        if heavy.is_some_and(|h| kills_agents(h, dist)) && !heavy_cooling && roll < 80 {
+            return button(Input::HEAVY);
         }
-    } else if dist <= data.cpu_range.unwrap_or(ATTACK_RANGE) + 10 {
-        return if roll < 88 { button(Input::LIGHT) } else { Input::default() };
+        if dist <= data.cpu_range.unwrap_or(ATTACK_RANGE) + 10 {
+            return if roll < 88 { button(Input::LIGHT) } else { Input::default() };
+        }
     }
 
     // a zoner backs away when the opponent gets close (hopping over them against a wall), pokes when they're right on top of it, and shoots from a distance with the volley and the special
@@ -623,20 +639,56 @@ mod tests {
     }
 
     #[test]
-    fn the_cpu_rolls_through_a_sub_agent_that_got_behind_it() {
+    fn the_cpu_fights_a_sub_agent_that_is_behind_it_too() {
         let c = chars();
-        let mut rolled = false;
+        let mut seen_light = false;
         for window in 0..40u32 {
             let mut s = GameState::new();
             s.fighters[0].x = -200 * PX;
             s.fighters[1].x = 100 * PX;
-            // the agent is on the far side of the CPU from its opponent
+            // the agent is on the far side of the CPU from its opponent: the fighter turns to it, so it is attacked
             s.minions.push(agent_at(130));
             s.frame = window * DECISION_FRAMES;
             let i = cpu_input(&s, 1, &c[1]);
-            rolled |= i.has(Input::ROLL_RIGHT);
-            assert!(!i.has(Input::ROLL_LEFT));
+            assert!(!i.has(Input::LEFT) && !i.has(Input::HEAVY), "stays on the agent and uses lights, got {i:?}");
+            seen_light |= i.has(Input::LIGHT);
         }
-        assert!(rolled, "it rolls towards the agent to put it in front");
+        assert!(seen_light);
+    }
+
+    /// What each fighter's CPU presses against an agent `dist` pixels in front of it, over many decisions.
+    fn presses(name: &str, dist: i32) -> (bool, bool, bool) {
+        let text = std::fs::read_to_string(format!("assets/characters/{name}.ron")).unwrap();
+        let me = CharacterData::from_ron(&text).unwrap();
+        let (mut light, mut heavy, mut special) = (false, false, false);
+        for window in 0..60u32 {
+            let mut s = GameState::new();
+            s.fighters[0].x = -250 * PX;
+            s.fighters[1].x = 100 * PX;
+            s.fighters[1].meter = crate::sim::Fighter::METER_MAX;
+            s.minions.push(agent_at(100 - dist));
+            s.frame = window * DECISION_FRAMES;
+            let i = cpu_input_vs(&s, 1, &me, &me);
+            light |= i.has(Input::LIGHT);
+            heavy |= i.has(Input::HEAVY);
+            special |= i.has(Input::SPECIAL);
+        }
+        (light, heavy, special)
+    }
+
+    #[test]
+    fn each_cpu_fights_sub_agents_with_the_attack_that_suits_it() {
+        // Anaran's staff slam wipes out agents round him; his slow scroll is not for them
+        let (_, heavy, special) = presses("anaran", 40);
+        assert!(heavy && !special, "Anaran slams");
+        // the Professors' wide grab reaches far; Gray Persona's bats fly straight at them from a way off
+        assert!(presses("ayz", 100).1, "the Professor grabs from a distance");
+        assert!(presses("evilayz", 100).1, "so does the Negaprofessor");
+        assert!(presses("gray_persona", 110).1, "Gray Persona sends the bats");
+        // the rest use lights only, and never the special
+        for (name, dist) in [("cowboy", 25), ("junkhead", 25), ("scribe", 20), ("gray_persona", 20)] {
+            let (light, heavy, special) = presses(name, dist);
+            assert!(light && !heavy && !special, "{name} uses lights on an agent {dist} px away");
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "t2f"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Road to Alfendrof"
 default-run = "t2f"

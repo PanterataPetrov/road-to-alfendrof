@@ -1396,18 +1396,28 @@ impl GameState {
         }
     }
 
-    /// Free fighters turn to face the opponent; everyone else keeps their facing.
+    /// How close an enemy sub-agent has to be for a free fighter to turn to it instead of the opponent.
+    pub const AGENT_ATTENTION: i32 = 100 * PX;
+
+    /// Free fighters turn to face the opponent, or the nearest of the opponent's sub-agents when one is close (so
+    /// their attacks go at it); everyone else keeps their facing.
     fn face_each_other(&mut self) {
-        let (x0, x1) = (self.fighters[0].x, self.fighters[1].x);
-        if x0 == x1 {
-            return;
-        }
         let toward = |from: i32, to: i32| if to > from { 1 } else { -1 };
-        if self.fighters[0].is_neutral() {
-            self.fighters[0].facing = toward(x0, x1);
-        }
-        if self.fighters[1].is_neutral() {
-            self.fighters[1].facing = toward(x1, x0);
+        for i in 0..2 {
+            if !self.fighters[i].is_neutral() {
+                continue;
+            }
+            let x = self.fighters[i].x;
+            let agent = self
+                .minions
+                .iter()
+                .filter(|m| m.owner != i && m.agent && m.health > 0 && (m.x - x).abs() <= Self::AGENT_ATTENTION && m.x != x)
+                .min_by_key(|m| (m.x - x).abs())
+                .map(|m| m.x);
+            let target = agent.unwrap_or(self.fighters[1 - i].x);
+            if target != x {
+                self.fighters[i].facing = toward(x, target);
+            }
         }
     }
 }
@@ -3869,6 +3879,43 @@ mod tests {
             s.step([Input(0), Input(0)], [&k, &e]);
         }
         assert!(s.zones.is_empty());
+    }
+
+    #[test]
+    fn a_fighter_turns_to_a_sub_agent_that_is_close_so_their_attacks_go_at_it() {
+        let k = katmata();
+        let e = ayz();
+        let mut s = GameState::new();
+        s.fighters[0].x = -200 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&k, &e]);
+        for _ in 0..30 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert_eq!(s.fighters[1].facing, -1, "the enemy fights Katmata");
+        // an agent right behind them: they turn round to face it
+        for m in &mut s.minions {
+            m.x = s.fighters[1].x + 20 * PX;
+        }
+        s.fighters[1].state = FighterState::Idle;
+        s.step([Input(0), Input(0)], [&k, &e]);
+        assert_eq!(s.fighters[1].facing, 1, "turned to the agent");
+        // and a light now swings that way and kills it (the agents hold still, 20 px off)
+        for m in &mut s.minions {
+            m.x = s.fighters[1].x + 20 * PX;
+            m.mode = MinionMode::Punch;
+            m.timer = 0;
+        }
+        s.step([Input(0), Input(Input::LIGHT)], [&k, &e]);
+        for _ in 0..12 {
+            for m in &mut s.minions {
+                m.x = s.fighters[1].x + 20 * PX;
+                m.timer = 0;
+            }
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert!(s.minions.iter().all(|m| m.health <= 0), "the swing reached the agents behind");
     }
 
     #[test]

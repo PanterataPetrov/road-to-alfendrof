@@ -117,6 +117,15 @@ impl Lobby {
         self.transport.port()
     }
 
+    /// Whether `addr` is this very game: its public address, or its port on this machine (the loopback or the LAN address).
+    pub fn is_own_address(&self, addr: SocketAddr) -> bool {
+        if self.public == Some(addr) {
+            return true;
+        }
+        let here = addr.ip().is_loopback() || addr.ip().is_unspecified() || matches!((addr.ip(), upnp::lan_ip()), (std::net::IpAddr::V4(a), Some(b)) if a == b);
+        here && addr.port() == self.port()
+    }
+
     /// Invite a friend by the address they gave you.
     pub fn invite(&mut self, to: SocketAddr) {
         self.stage = Stage::Inviting(to);
@@ -236,7 +245,7 @@ impl Lobby {
                         events.push(Event::Invited(from));
                     }
                     // both invited each other: that counts as accepted; the higher number is player 0
-                    Stage::Inviting(to) if to == from => {
+                    Stage::Inviting(to) if same_peer(to, from) => {
                         self.player = if self.nonce > nonce { 0 } else { 1 };
                         self.stage = Stage::Picking(from);
                         self.theirs = None;
@@ -255,7 +264,7 @@ impl Lobby {
                 }
                 match self.stage {
                     // the answer to my invitation (their pick says which player they are, so crossed invitations can't disagree)
-                    Stage::Inviting(to) if to == from => {
+                    Stage::Inviting(to) if same_peer(to, from) => {
                         self.player = 1 - (player as usize).min(1);
                         self.stage = Stage::Picking(from);
                         self.theirs = Some((index, ready));
@@ -303,6 +312,20 @@ impl Lobby {
     }
 }
 
+/// Whether a packet from `from` is from the friend I invited at `to`. The address a friend's router shows me can
+/// differ from the one in their code by the port (it picks one per destination), so on the public internet the same
+/// address will do; on a local network and on this machine the port tells two games apart.
+fn same_peer(to: SocketAddr, from: SocketAddr) -> bool {
+    if to == from {
+        return true;
+    }
+    let local = |ip: std::net::IpAddr| match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+    };
+    to.ip() == from.ip() && !local(to.ip())
+}
+
 /// A fingerprint of everything both sides must share (version and character files).
 pub fn build_id(parts: &[&str]) -> u32 {
     let mut h: u32 = 2_166_136_261;
@@ -333,6 +356,26 @@ mod tests {
         let b = Lobby::new(0, 7, false).unwrap();
         let (pa, pb) = (a.port(), b.port());
         (a, b, format!("127.0.0.1:{pa}").parse().unwrap(), format!("127.0.0.1:{pb}").parse().unwrap())
+    }
+
+    #[test]
+    fn a_game_knows_its_own_address() {
+        let a = Lobby::new(0, 1, false).unwrap();
+        let own: SocketAddr = format!("127.0.0.1:{}", a.port()).parse().unwrap();
+        assert!(a.is_own_address(own));
+        let other: SocketAddr = format!("127.0.0.1:{}", a.port().wrapping_add(1)).parse().unwrap();
+        assert!(!a.is_own_address(other));
+        assert!(!a.is_own_address("203.0.113.5:7777".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_friend_on_the_internet_is_the_same_whatever_port_their_router_shows() {
+        let code: SocketAddr = "203.0.113.5:7777".parse().unwrap();
+        assert!(same_peer(code, "203.0.113.5:41000".parse().unwrap()));
+        assert!(!same_peer(code, "203.0.113.6:7777".parse().unwrap()));
+        // two games on one machine or one network are told apart by their ports
+        assert!(!same_peer("127.0.0.1:7777".parse().unwrap(), "127.0.0.1:7778".parse().unwrap()));
+        assert!(!same_peer("192.168.1.5:7777".parse().unwrap(), "192.168.1.5:7778".parse().unwrap()));
     }
 
     #[test]
