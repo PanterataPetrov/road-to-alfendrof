@@ -24,9 +24,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libasound2-dev libudev-dev \
-            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libvulkan1 mesa-vulkan-drivers \
-            imagemagick desktop-file-utils dpkg-dev rpm file
+            imagemagick desktop-file-utils dpkg-dev rpm file xvfb xauth
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -34,6 +34,11 @@ jobs:
 
       - name: Test (release profile)
         run: cargo test --locked --release --lib
+
+      - name: Test standalone updater
+        run: |
+          rustc --edition=2021 --test src/update_install.rs -o "$RUNNER_TEMP/update-tests"
+          "$RUNNER_TEMP/update-tests"
 
       - name: Build
         run: cargo build --locked --release --bin t2f
@@ -45,7 +50,7 @@ jobs:
           echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  '"$RUNNER_TEMP/linuxdeploy.AppImage" | sha256sum --check
           chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
 
-      - name: Package AppImage, DEB and RPM
+      - name: Package AppImage, DEB, RPM and portable archive
         env:
           LINUXDEPLOY: ${{ runner.temp }}/linuxdeploy.AppImage
         run: bash installer/linux/package.sh
@@ -64,6 +69,25 @@ jobs:
           test -x squashfs-root/usr/bin/road-to-alfendrof
           diff -qr "$GITHUB_WORKSPACE/assets" squashfs-root/usr/bin/assets
 
+      - name: Smoke-test packaged AppImage
+        env:
+          # Never let a packaging smoke run replace its artifact with a live release.
+          https_proxy: http://127.0.0.1:9
+          WGPU_BACKEND: vulkan
+        run: |
+          appimages=("$PWD"/dist/*.AppImage)
+          # The AppImage must supply its dlopen-loaded XKB/X11 library and dependencies.
+          sudo apt-get remove -y libxkbcommon-x11-0 libxcb-xkb1
+          timeout 60s xvfb-run -a "${appimages[0]}" --appimage-extract-and-run \
+            --title --screenshot "$RUNNER_TEMP/linux-smoke.png" --delay 3
+
+      - name: Upload Linux render smoke
+        uses: actions/upload-artifact@v7
+        with:
+          name: RoadToAlfendrof-Linux-render-smoke
+          if-no-files-found: error
+          path: ${{ runner.temp }}/linux-smoke.png
+
       - uses: actions/upload-artifact@v7
         with:
           name: RoadToAlfendrof-Linux-x86_64
@@ -72,3 +96,4 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.rpm
+            dist/RoadToAlfendrof-Linux-x86_64.tar.gz

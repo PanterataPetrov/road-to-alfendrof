@@ -3,3 +3,5 @@
 /tools/previews/
 /installer/Output/
 /installer/dxc/
+/dist/
+/.direnv/
