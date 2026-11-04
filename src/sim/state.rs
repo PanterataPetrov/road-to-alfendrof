@@ -1877,7 +1877,7 @@ mod tests {
         let c = cowboy();
         let boost = c.moves.iter().position(|m| m.name == "Gun Boost").unwrap();
         let mut s = GameState::new();
-        s.fighters[0].start_stun(FighterState::Hitstun, 40, 0);
+        s.fighters[0].start_stun(FighterState::Hitstun, 26, 0);
         s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
         assert_eq!(s.fighters[0].state, FighterState::Hitstun, "a light doesn't get out of it");
         s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
@@ -1886,9 +1886,51 @@ mod tests {
         // on cooldown it stays unusable
         let mut s = GameState::new();
         s.fighters[0].cooldowns[boost] = 100;
-        s.fighters[0].start_stun(FighterState::Hitstun, 40, 0);
+        s.fighters[0].start_stun(FighterState::Hitstun, 26, 0);
         s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
         assert_eq!(s.fighters[0].state, FighterState::Hitstun);
+    }
+
+    #[test]
+    fn the_gun_boost_cannot_get_him_out_of_a_long_stun_or_a_hold() {
+        let c = cowboy();
+        // a grab, a lash or a lasso stuns for 40 frames or more
+        for frames in [Fighter::ESCAPE_MAX_STUN, 48, 70, 100] {
+            let mut s = GameState::new();
+            s.fighters[0].start_stun(FighterState::Hitstun, frames, 0);
+            s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
+            assert_eq!(s.fighters[0].state, FighterState::Hitstun, "a {frames}-frame stun can't be escaped");
+        }
+        // nor a hold, however short
+        let mut s = GameState::new();
+        s.fighters[0].start_stun(FighterState::Hitstun, 26, 0);
+        s.fighters[0].held = true;
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
+        assert_eq!(s.fighters[0].state, FighterState::Hitstun, "held fighters stay held");
+        // an ordinary hit just under the limit can still be escaped
+        let mut s = GameState::new();
+        s.fighters[0].start_stun(FighterState::Hitstun, Fighter::ESCAPE_MAX_STUN - 1, 0);
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
+        assert_eq!(s.fighters[0].state, FighterState::Attack);
+    }
+
+    #[test]
+    fn the_cowboys_finger_shots_have_a_limited_range() {
+        let c = cowboy();
+        for name in ["Finger Shot", "Finger Shot 2"] {
+            let p = c.moves.iter().find(|m| m.name == name).unwrap().projectile.as_ref().unwrap();
+            let range = p.lifetime as i32 * p.speed;
+            assert!((200..=400).contains(&range), "{name} reaches {range} px");
+        }
+        // a target well past the range is never hit
+        let mut s = GameState::new();
+        s.fighters[0].x = -300 * PX;
+        s.fighters[1].x = 300 * PX;
+        s.step([Input(Input::LIGHT), Input(0)], [&c, &evilayz()]);
+        for _ in 0..120 {
+            s.step([Input(0), Input(0)], [&c, &evilayz()]);
+        }
+        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "the shot fell short");
     }
 
     #[test]
@@ -3344,7 +3386,12 @@ mod tests {
         let a = professor();
         let n = CharacterData::from_ron(include_str!("../../assets/characters/evilayz.ron")).unwrap();
         assert_ne!(a.name, n.name);
-        assert_eq!(format!("{:?}", a.moves), format!("{:?}", n.moves), "every move is the same");
+        // (his sounds are his own; everything that decides how a move plays is the same)
+        let silent = |c: &CharacterData| -> String {
+            let moves: Vec<_> = c.moves.iter().cloned().map(|mut m| { m.sfx = Default::default(); m }).collect();
+            format!("{moves:?}")
+        };
+        assert_eq!(silent(&a), silent(&n), "every move is the same");
         assert_eq!((a.walk_speed, a.jump_speed, a.health, a.meter_gain_pct), (n.walk_speed, n.jump_speed, n.health, n.meter_gain_pct));
         assert_eq!((a.keeps_distance, a.cpu_range, a.air_chain, a.light_after_heavy), (n.keeps_distance, n.cpu_range, n.air_chain, n.light_after_heavy));
         assert_eq!(format!("{:?}", a.raven), format!("{:?}", n.raven), "the raven too");

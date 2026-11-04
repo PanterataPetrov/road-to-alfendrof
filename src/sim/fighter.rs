@@ -238,6 +238,8 @@ impl Fighter {
     /// A blocked combo finisher stuns whoever threw it for 1.2 seconds.
     pub const FINISHER_STUN: u32 = 72;
     pub const GRAVITY: i32 = PX / 2;
+    /// A stun this long (frames) can't be escaped with an `escape` move.
+    pub const ESCAPE_MAX_STUN: u32 = 40;
     /// Half the body width, used to keep fighters apart and on the stage.
     pub const HALF_WIDTH: i32 = 17 * PX;
     pub const STAND_HEIGHT: i32 = 55;
@@ -780,8 +782,9 @@ impl Fighter {
                 }
             }
             FighterState::Hitstun | FighterState::Blockstun => {
-                // a move that can be used while being hit (the Cowboy's Gun Boost) gets him out of it
-                if self.state == FighterState::Hitstun && self.grounded() && self.silenced == 0 && pressed.has(Input::HEAVY) {
+                // a move that can be used while being hit (the Cowboy's Gun Boost) gets him out of it, but only out of
+                // an ordinary hit: not a long stun (a grab, a lash, a lasso) and not a hold
+                if self.state == FighterState::Hitstun && self.grounded() && self.silenced == 0 && !self.held && self.stun < Self::ESCAPE_MAX_STUN && pressed.has(Input::HEAVY) {
                     if let Some(index) = data.moves.iter().position(|m| m.escape && m.button == Button::Heavy && !m.air) {
                         if !self.on_cooldown(index, data) {
                             self.vx = 0;

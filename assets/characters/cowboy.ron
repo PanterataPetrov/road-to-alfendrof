@@ -1,11 +1,11 @@
 // Cowboy From Hell: completely bald under a cowboy hat, a dark brown ribbed tank top, silver chain and earrings, grey
 // jeans, big brown cowboy boots with spurs and a whale tattoo on his left arm.
 // Light: the Gunslinger's lights (a finger-gun shot, a low slap, an aimed shot in the air). The combo is two shots and
-//        then a lasso that pulls the opponent in a little and stuns them.
+//        then a lasso that pulls the opponent in a little and stuns them. His shots reach about 300 px (50 frames at 6 px).
 // Heavy: he fires both finger guns at the ground (the splash hurts anyone close), the recoil launches him up, and at the
 //        top (three times as high as before, then he floats down slowly) he shoots three bullets (half as strong as the
 //        Gunslinger's) at the floor where the enemy stands, never at the enemy's body, so the enemy can jump them. He can
-//        use it while being hit to get out of a combo.
+//        use it while being hit to get out of a combo, but not out of a long stun (40 frames or more) or a hold.
 // Special: he throws his hat. It sits on his head the whole fight and glows once the meter is full. It is gone while
 //        the throw itself recharges. Where it lands it puts the curse on the opponent: a glowing blue ring split into a
 //        left and a right half. Hitting them with any other attack from the left removes the left half, from the right
@@ -35,11 +35,11 @@
         (name: "Finger Shot", sfx: (cast: Some(""), launch: Some("shot_pistol")), button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(0),
          startup: 6, active: 2, recovery: 6, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
+         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 50, size: (8, 6), image: Some("bullet"), speed: 6))),
         (name: "Finger Shot 2", sfx: (cast: Some(""), launch: Some("shot_pistol")), button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(1),
          startup: 6, active: 2, recovery: 6, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
+         projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 50, size: (8, 6), image: Some("bullet"), speed: 6))),
         // third hit: the lasso drags the opponent in a little and leaves them stunned
         (name: "Lasso", sfx: (cast: Some("whip_crack")), button: Light, crouching: false, anim: Punch, walk_pct: 0, finisher_move: true,
          pull_foe: true, pull_gap: 38, assist: 8, rope: true,
