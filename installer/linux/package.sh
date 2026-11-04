@@ -68,3 +68,6 @@ export LDAI_OUTPUT="$ROOT/dist/RoadToAlfendrof-${VERSION}-x86_64.AppImage"
   --executable "$APPDIR/usr/bin/road-to-alfendrof" \
   --desktop-file installer/linux/road-to-alfendrof.desktop \
   --icon-file "$WORK/road-to-alfendrof.png" --output appimage
+
+# Portable user-owned installs use the updater's stable archive layout.
+sh installer/linux/portable.sh target/release/t2f dist x86_64

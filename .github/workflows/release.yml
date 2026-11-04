@@ -71,8 +71,10 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.rpm
+            dist/RoadToAlfendrof-${{ steps.version.outputs.version }}-x86_64.AppImage
+            dist/road-to-alfendrof_${{ steps.version.outputs.version }}_amd64.deb
+            dist/road-to-alfendrof-${{ steps.version.outputs.version }}-1.x86_64.rpm
             dist/RoadToAlfendrof-Setup.exe
             dist/RoadToAlfendrof-Mac.zip
+            dist/RoadToAlfendrof-Mac.dmg
+            dist/RoadToAlfendrof-Linux-x86_64.tar.gz

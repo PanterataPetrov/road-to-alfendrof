@@ -199,7 +199,7 @@ pub struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(load())
-            .add_systems(Update, (toggle_fullscreen, apply_settings, fit_fullscreen_scale).chain());
+            .add_systems(Update, (toggle_fullscreen, apply_settings, fit_window_scale).chain());
     }
 }
 
@@ -231,13 +231,15 @@ fn apply_settings(settings: Res<Settings>, mut window: Single<&mut Window, With<
             window.resolution.set(crate::WINDOW_W, crate::WINDOW_H);
         }
     }
+    if last.is_none() && mode == WindowMode::Windowed {
+        window.set_maximized(true);
+    }
     *last = Some(settings.clone());
 }
 
-/// Fullscreen, text is drawn at the screen's own scale (the pixel-art view times however much it is
-/// enlarged) instead of being made for the 3x window and stretched.
-fn fit_fullscreen_scale(mut resized: MessageReader<WindowResized>, mut window: Single<&mut Window, With<PrimaryWindow>>) {
-    if resized.read().last().is_none() || window.mode == WindowMode::Windowed {
+/// Draw text at the window's current pixel scale, including maximized windowed mode.
+fn fit_window_scale(mut resized: MessageReader<WindowResized>, mut window: Single<&mut Window, With<PrimaryWindow>>) {
+    if resized.read().last().is_none() {
         return;
     }
     let (w, h) = (window.physical_width() as f32, window.physical_height() as f32);

@@ -1,5 +1,5 @@
-# Builds the Mac version: one Apple Silicon app in a zip (Intel Macs are not supported).
-# Run it by hand for an artifact, or let release.yml collect it for a stable release on main.
+# Builds an Apple Silicon app as an updater ZIP and drag-to-install DMG; no Intel release.
+# Run manually for artifacts, or let release.yml collect them for a stable release on main.
 name: Mac build
 
 on:
@@ -22,30 +22,25 @@ jobs:
 
       # Tests and the app use the same release profile and ARM64 target to reuse dependencies.
       - name: Test (release profile)
-        run: cargo test --locked --release --lib --target aarch64-apple-darwin
+        run: |
+          cargo test --locked --release --lib --target aarch64-apple-darwin
+          rustc --edition=2021 --test src/update_install.rs -o "$RUNNER_TEMP/update-tests"
+          "$RUNNER_TEMP/update-tests"
 
       - name: Build (Apple Silicon)
         run: cargo build --locked --release --bin t2f --target aarch64-apple-darwin
 
-      - name: Make the app
+      - name: Package Apple Silicon app, update ZIP and installer DMG
         run: |
-          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
-          APP="dist/Road to Alfendrof.app"
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          install -m755 target/aarch64-apple-darwin/release/t2f "$APP/Contents/MacOS/t2f"
-          sed "s/__VERSION__/$VERSION/g" installer/mac/Info.plist > "$APP/Contents/Info.plist"
-          cp installer/mac/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-          cp -R assets "$APP/Contents/Resources/assets"
-          # a signature without an Apple account ("ad hoc"): Apple Silicon refuses to run unsigned programs
-          codesign --force --deep --sign - "$APP"
-          cp installer/mac/README.txt dist/README.txt
-          cd dist
-          mkdir pack && mv "Road to Alfendrof.app" README.txt pack/
-          (cd pack && ditto -c -k . ../RoadToAlfendrof-Mac.zip)
-          ls -la
+          VERSION=$(ruby -e 'puts File.read("Cargo.toml")[/^version\s*=\s*"([^"]+)"/, 1]')
+          bash installer/mac/package.sh \
+            --binary target/aarch64-apple-darwin/release/t2f \
+            --output dist --version "$VERSION"
 
       - uses: actions/upload-artifact@v7
         with:
           name: RoadToAlfendrof-Mac
           if-no-files-found: error
-          path: dist/RoadToAlfendrof-Mac.zip
+          path: |
+            dist/RoadToAlfendrof-Mac.zip
+            dist/RoadToAlfendrof-Mac.dmg
