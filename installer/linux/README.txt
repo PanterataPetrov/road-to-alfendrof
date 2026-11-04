@@ -30,7 +30,8 @@ Fedora:
     sudo dnf install ./road-to-alfendrof-VERSION-1.x86_64.rpm
 Launch Road to Alfendrof from the desktop menu or run road-to-alfendrof.
 DEB/RPM dependencies are installed by the package manager. AppImage bundles its
-linked libraries; the host still needs a working graphics/Vulkan driver.
+linked libraries and Winit's dynamically loaded XKB/X11 library (including its
+dependencies); the host still needs a working graphics/Vulkan driver.
 
 Requirements
 ------------
@@ -39,7 +40,7 @@ Debian 12+ and current Fedora). Install your distribution's graphics/Vulkan
 driver. Portable installs also need ALSA, udev and X11/Wayland runtime libraries.
 curl and tar must be available for automatic updates.
 On Ubuntu:
-    sudo apt install libasound2 libudev1 libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon0 libwayland-client0 libvulkan1 curl
+    sudo apt install libasound2 libudev1 libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libvulkan1 curl
 On Ubuntu 24.04+, use libasound2t64 instead of libasound2.
 
 Automatic updates

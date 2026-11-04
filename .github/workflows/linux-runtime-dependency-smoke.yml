@@ -1,0 +1,12 @@
+name: Linux runtime dependency validation
+
+on:
+  push:
+    branches: [fix/linux-xkbcommon-x11]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    uses: ./.github/workflows/linux.yml

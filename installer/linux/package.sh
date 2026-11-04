@@ -42,7 +42,7 @@ Maintainer: zerw0 <zerw0@users.noreply.github.com>
 Section: games
 Priority: optional
 Homepage: https://github.com/zerw0/road-to-alfendrof
-Depends: $DEPS, libx11-6, libxcursor1, libxi6, libxrandr2, libxkbcommon0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libvulkan1
+Depends: $DEPS, libx11-6, libxcursor1, libxi6, libxrandr2, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libvulkan1
 Description: Road to Alfendrof fighting game
  Includes character, stage, music and artwork assets.
  Requires a Vulkan-capable graphics driver.
@@ -64,8 +64,11 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export ARCH=x86_64
 export LINUXDEPLOY_OUTPUT_VERSION="$VERSION"
 export LDAI_OUTPUT="$ROOT/dist/RoadToAlfendrof-${VERSION}-x86_64.AppImage"
+# Winit dlopens this library, so linuxdeploy cannot discover it from the executable.
+XKB_X11_LIBDIR=$(pkg-config --variable=libdir xkbcommon-x11)
 "$LINUXDEPLOY" --appdir "$APPDIR" \
   --executable "$APPDIR/usr/bin/road-to-alfendrof" \
+  --library "$XKB_X11_LIBDIR/libxkbcommon-x11.so.0" \
   --desktop-file installer/linux/road-to-alfendrof.desktop \
   --icon-file "$WORK/road-to-alfendrof.png" --output appimage
 
