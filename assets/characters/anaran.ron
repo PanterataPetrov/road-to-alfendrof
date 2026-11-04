@@ -24,13 +24,16 @@
     // his missiles land so often that the goblins were coming every few seconds
     meter_gain_pct: Some(50),
     special_mark: Some(Scar(color: (0.75, 0.2, 0.25), glow: (1.0, 0.35, 0.4))),
+    // Anaran's own voice, on top of the game's generic sounds (assets/sfx/voice_anaran_*.wav, never the same one twice in a row)
+    voice: (dash: Some("voice_anaran_dash"), hurt: Some("voice_anaran_hurt"), ko: Some("voice_anaran_death"), block: Some("voice_anaran_block"),
+            guard_break: Some("voice_anaran_stunned"), smash: Some("voice_anaran_stomp"), win: Some("voice_anaran_victory")),
     moves: [
-        (name: "Read the Scroll", sfx: (cast: Some("paper"), launch: Some("arcane_launch"), hit: Some("arcane_hit")), button: Light, crouching: false, anim: Read, walk_pct: 100,
+        (name: "Read the Scroll", sfx: (cast: Some("paper"), launch: Some("arcane_launch"), hit: Some("arcane_hit"), sustain: Some("voice_anaran_fireball")), button: Light, crouching: false, anim: Read, walk_pct: 100,
          channel: Some((first: 45, every: 60)), blocked_stun: Some((shots: 3, stun: 72)),
          startup: 14, active: 1, recovery: 12, damage: 70, hitstun: 22, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 18, y: 30, aim_y: 30, travel_frames: 1, lifetime: 300, size: (10, 10), image: Some("missile"), summon_image: Some("none"), homing: true, homing_turn: 7, detonate: 22, speed_tenths: 36))),
-        (name: "Staff Slam", sfx: (cast: Some("staff_swing"), hit: Some("shockwave")), button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 210, guard_hits: Some(2),
+        (name: "Staff Slam", sfx: (cast: Some("staff_swing"), hit: Some("shockwave"), voice: Some("voice_anaran_staff")), button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 210, guard_hits: Some(2),
          startup: 7, active: 4, recovery: 24, damage: 80, hitstun: 16, blockstun: 14, knockback: 9, hitstop: 8,
          hitbox: (x: -84, y: 0, w: 168, h: 36)),
         (name: "Air Whip", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
@@ -39,7 +42,7 @@
         (name: "Plunging Verdict", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100, cooldown: 90,
          startup: 9, active: 7, recovery: 10, damage: 64, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
          hitbox: (x: 6, y: -4, w: 30, h: 34)),
-        (name: "Call the Goblins", sfx: (cast: Some("summon"), launch: Some("goblin_squeak"), hit: Some("bite")), button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),
+        (name: "Call the Goblins", sfx: (cast: Some("summon"), launch: Some("goblin_squeak"), hit: Some("bite"), voice: Some("voice_anaran_summon")), button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),
          startup: 24, active: 3, recovery: 24, damage: 16, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          minions: Some((count: 4, lifetime: 480, interval: 150, speed: 4, reach: 16, health: 56))),

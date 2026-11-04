@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use bevy::audio::Volume;
+use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
 use t2f::sim::data::{Button, MoveSfx};
 use t2f::sim::{FighterState, Phase};
@@ -27,8 +27,27 @@ impl Plugin for SfxPlugin {
             .add_message::<UiSound>()
             .add_systems(Startup, load_sounds)
             .add_systems(OnEnter(AppState::Fight), |mut memory: ResMut<Memory>| *memory = Memory::default())
-            .add_systems(FixedUpdate, play_fight_sounds.run_if(in_state(AppState::Fight)))
+            .add_systems(FixedUpdate, (play_fight_sounds, fade_sustained).chain().run_if(in_state(AppState::Fight)))
             .add_systems(PostUpdate, play_ui_sounds);
+    }
+}
+
+/// A sound that loops while a held move is held (`MoveSfx::sustain`): `on` until the move stops, then it fades out.
+#[derive(Component)]
+struct Sustained {
+    owner: usize,
+    on: bool,
+    level: f32,
+}
+
+/// Fade each sustained sound in or out, and remove it once it is silent.
+fn fade_sustained(mut commands: Commands, settings: Res<Settings>, mut sounds: Query<(Entity, &mut Sustained, &mut AudioSink)>) {
+    for (entity, mut s, mut sink) in &mut sounds {
+        s.level = if s.on { (s.level + 1.0 / FADE_IN).min(1.0) } else { (s.level - 1.0 / FADE_OUT).max(0.0) };
+        sink.set_volume(Volume::Linear(settings.sfx_gain() * s.level));
+        if !s.on && s.level <= 0.0 {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -80,26 +99,59 @@ fn load_sounds(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(Sounds { groups });
 }
 
+/// Which of `len` variants to play: picked from `hash`, but never the one played last time (when there is a choice).
+fn pick_variant(last: Option<usize>, len: usize, hash: u32) -> usize {
+    let pick = (hash >> 8) as usize % len;
+    match last {
+        Some(l) if len > 1 && l == pick => (pick + 1 + (hash >> 20) as usize % (len - 1)) % len,
+        _ => pick,
+    }
+}
+
+/// Groups named `voice_...` are a character's own sounds: played on top of the generic ones, at their natural
+/// pitch, never the same variant twice in a row, and not again within `VOICE_GAP` frames (a flurry of hits is
+/// one cry, not ten).
+const VOICE_PREFIX: &str = "voice_";
+const VOICE_GAP: u32 = 24;
+/// Frames a sustained sound takes to fade in, and to fade out when its move stops.
+const FADE_IN: f32 = 24.0;
+const FADE_OUT: f32 = 60.0;
+
 /// Starts sounds: picks a variant, varies the pitch a little and keeps the same sound from stacking up.
 #[derive(Default)]
 struct Voice {
     count: u32,
     last: HashMap<String, u32>,
+    /// The variant each `voice_` group played last.
+    last_variant: HashMap<String, usize>,
+    /// Who the next `voice_` sound belongs to, and until which frame each character's voice lines are protected
+    /// (a long cry started with `MoveSfx::voice_lock`): other lines from them stay quiet until then.
+    speaker: usize,
+    locks: [u32; 2],
 }
 
 impl Voice {
     /// `throttle`: not again within `SAME_SOUND_GAP` frames of the last time it was started.
     fn play(&mut self, commands: &mut Commands, sounds: &Sounds, volume: f32, frame: u32, name: &str, throttle: bool) {
         let Some(variants) = sounds.groups.get(name).filter(|v| !v.is_empty()) else { return };
-        if volume <= 0.0 || (throttle && self.last.get(name).is_some_and(|&at| frame.wrapping_sub(at) < SAME_SOUND_GAP)) {
+        let own = name.starts_with(VOICE_PREFIX);
+        let gap = if own { VOICE_GAP } else { SAME_SOUND_GAP };
+        if own && self.locks[self.speaker] > frame {
+            return;
+        }
+        if volume <= 0.0 || ((throttle || own) && self.last.get(name).is_some_and(|&at| frame.wrapping_sub(at) < gap)) {
             return;
         }
         self.last.insert(name.to_string(), frame);
         self.count = self.count.wrapping_add(1);
         let hash = self.count.wrapping_mul(2654435761);
-        let sound = &variants[(hash >> 8) as usize % variants.len()];
-        // a little pitch variation so repeated hits don't sound identical (not for the jingles and menus)
-        let jingle = ["round_", "match_", "ui_"].iter().any(|p| name.starts_with(p));
+        let pick = if own { pick_variant(self.last_variant.get(name).copied(), variants.len(), hash) } else { (hash >> 8) as usize % variants.len() };
+        if own {
+            self.last_variant.insert(name.to_string(), pick);
+        }
+        let sound = &variants[pick];
+        // a little pitch variation so repeated hits don't sound identical (not for the jingles, menus and voices)
+        let jingle = own || ["round_", "match_", "ui_"].iter().any(|p| name.starts_with(p));
         let speed = if jingle { 1.0 } else { 0.94 + (hash >> 24) as f32 / 255.0 * 0.12 };
         commands.spawn((AudioPlayer(sound.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)).with_speed(speed)));
     }
@@ -157,24 +209,36 @@ fn play_fight_sounds(
     settings: Res<Settings>,
     sounds: Res<Sounds>,
     mut memory: ResMut<Memory>,
+    mut sustained: Query<(Entity, &mut Sustained)>,
 ) {
     let volume = settings.sfx_gain();
+    let mut start_sustain: Vec<(usize, Handle<AudioSource>)> = Vec::new();
     let s = &sim.0;
     let frame = s.frame;
     let Memory { voice, fighters, shots, minions, started, round, round_over, match_over } = &mut *memory;
-    let mut play = |name: &str, throttle: bool| voice.play(&mut commands, &sounds, volume, frame, name, throttle);
+    macro_rules! play {
+        ($name:expr, $throttle:expr) => {
+            voice.play(&mut commands, &sounds, volume, frame, $name, $throttle)
+        };
+    }
+    let winner = s.match_winner();
 
     // the match and its rounds
     if !*started || s.round != *round {
-        play("round_start", false);
+        play!("round_start", false);
     }
     *started = true;
     *round = s.round;
     let over = matches!(s.phase, Phase::RoundEnd(_) | Phase::MatchOver);
-    if matches!(s.phase, Phase::MatchOver) && !*match_over {
-        play("match_win", false);
+    let match_just_ended = matches!(s.phase, Phase::MatchOver) && !*match_over;
+    // a character with a voice line of their own for winning gets that alone, without the generic jingle
+    let own_win = winner.is_some_and(|w| roster.0[sel.chars[w]].voice.win.is_some());
+    if match_just_ended {
+        if !own_win {
+            play!("match_win", false);
+        }
     } else if over && !*round_over && !matches!(s.phase, Phase::MatchOver) {
-        play("round_end", false);
+        play!("round_end", false);
     }
     *round_over = over;
     *match_over = matches!(s.phase, Phase::MatchOver);
@@ -192,6 +256,29 @@ fn play_fight_sounds(
     let before = *fighters;
     for i in 0..2 {
         let f = &s.fighters[i];
+        let own = &roster.0[sel.chars[i]].voice;
+        voice.speaker = i;
+        if match_just_ended && winner == Some(i) {
+            if let Some(name) = &own.win {
+                play!(name, false);
+            }
+        }
+        // a held move's looping sound (the scroll being read) runs from the start of the move until it stops
+        {
+            let data = &roster.0[sel.chars[i]];
+            let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+            let active = f.state == FighterState::Attack && f.state_frame + 1 <= mv.startup;
+            let live = sustained.iter_mut().find(|(_, s)| s.owner == i && s.on);
+            match (mv.sfx.sustain.as_deref().filter(|_| active), live) {
+                (Some(name), None) => {
+                    if let Some(handle) = sounds.groups.get(name).and_then(|v| v.first()) {
+                        start_sustain.push((i, handle.clone()));
+                    }
+                }
+                (None, Some((_, mut s))) => s.on = false,
+                _ => {}
+            }
+        }
         let now = Snap {
             health: f.health,
             state: f.state,
@@ -211,7 +298,10 @@ fn play_fight_sounds(
             // being hit or blocking: which move did it? a melee swing that connected, a shot that ended, a bite
             let hurt = entered(FighterState::Hitstun) || entered(FighterState::Blockstun) || lost > 0;
             if entered(FighterState::Ko) {
-                play("ko", false);
+                play!("ko", false);
+                if let Some(name) = &own.ko {
+                    play!(name, false);
+                }
             } else if hurt {
                 let attacker = &s.fighters[foe];
                 let melee = before[foe].is_some_and(|p| attacker.state == FighterState::Attack && attacker.hit_done && !p.hit_done);
@@ -230,15 +320,36 @@ fn play_fight_sounds(
                 let sfx = source.map(|index| move_sfx(&roster, &sel, foe, index));
                 if now.state == FighterState::Blockstun {
                     let generic = if lost >= LARGE_BLOCK { "block_large" } else { "block_small" };
-                    play(sfx.and_then(|s| s.block.as_deref()).unwrap_or(generic), false);
+                    play!(sfx.and_then(|s| s.block.as_deref()).unwrap_or(generic), false);
+                    if let Some(name) = &own.block {
+                        play!(name, false);
+                    }
                 } else {
-                    play(sfx.and_then(|s| s.hit.as_deref()).unwrap_or(hit_name(lost)), false);
+                    play!(sfx.and_then(|s| s.hit.as_deref()).unwrap_or(hit_name(lost)), false);
+                    if let Some(name) = &own.hurt {
+                        play!(name, false);
+                    }
+                    // the attacker's own cry for landing this move
+                    if let Some((name, lock)) = sfx.and_then(|s| s.hit_voice.as_deref().map(|n| (n, s.voice_lock))) {
+                        voice.speaker = foe;
+                        if lock > 0 {
+                            voice.locks[foe] = 0;
+                        }
+                        play!(name, false);
+                        if lock > 0 {
+                            voice.locks[foe] = frame + lock;
+                        }
+                        voice.speaker = i;
+                    }
                 }
             }
 
             // a plunge that has just hit the floor: the ground pound and Junkhead's whip smash
             if prev.slamming && !f.slamming && now.on_floor && now.state != FighterState::Ko {
-                play("smash", false);
+                play!("smash", false);
+                if let Some(name) = &own.smash {
+                    play!(name, false);
+                }
             }
 
             // a move starting: its own cast sound, or a whoosh for lights and heavies
@@ -246,10 +357,19 @@ fn play_fight_sounds(
             let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
             if entered(FighterState::Attack) {
                 match (&mv.sfx.cast, mv.button) {
-                    (Some(name), _) => play(name, false),
-                    (None, Button::Light) => play("whoosh_light", false),
-                    (None, Button::Heavy) => play("whoosh_heavy", false),
+                    (Some(name), _) => play!(name, false),
+                    (None, Button::Light) => play!("whoosh_light", false),
+                    (None, Button::Heavy) => play!("whoosh_heavy", false),
                     (None, Button::Special) => {}
+                }
+                if let Some(name) = &mv.sfx.voice {
+                    if mv.sfx.voice_lock > 0 {
+                        voice.locks[i] = 0;
+                    }
+                    play!(name, false);
+                    if mv.sfx.voice_lock > 0 {
+                        voice.locks[i] = frame + mv.sfx.voice_lock;
+                    }
                 }
             }
             // a shot leaving or minions arriving: the move's launch sound. This follows the thrower's own
@@ -257,40 +377,56 @@ fn play_fight_sounds(
             let summoning = mv.minions.is_some() && now.state == FighterState::Attack && f.state_frame == mv.startup + 1;
             if (f.shots > prev.shots && now.state == FighterState::Attack) || summoning {
                 if let Some(name) = &mv.sfx.launch {
-                    play(name, true);
+                    play!(name, true);
                 }
             }
 
             // movement
             if prev.on_floor && !now.on_floor && now.state == FighterState::Jump {
-                play("jump", false);
+                play!("jump", false);
             }
             if !prev.double_jumped && now.double_jumped {
-                play("jump_double", false);
+                play!("jump_double", false);
             }
             if !prev.on_floor && now.on_floor && now.state != FighterState::Ko && !prev.slamming {
-                play("land", false);
+                play!("land", false);
             }
             if entered(FighterState::Dash) {
-                play("dash", false);
+                play!("dash", false);
+                if let Some(name) = &own.dash {
+                    play!(name, false);
+                }
             }
             if entered(FighterState::Roll) {
-                play("roll", false);
+                play!("roll", false);
             }
             if entered(FighterState::Guard) {
-                play("guard", false);
+                play!("guard", false);
             }
             if !prev.block_disabled && now.block_disabled {
-                play("guard_break", false);
+                play!("guard_break", false);
+                if let Some(name) = &own.guard_break {
+                    play!(name, false);
+                }
             }
             if now.state == FighterState::Walk && now.on_floor && now.state_frame % STEP_EVERY == 0 {
-                play("step", false);
+                play!("step", false);
             }
         }
         fighters[i] = Some(now);
     }
     *shots = now_shots;
     *minions = now_minions;
+    if volume > 0.0 {
+        for (owner, handle) in start_sustain {
+            commands.spawn((
+                AudioPlayer(handle),
+                PlaybackSettings::LOOP.with_volume(Volume::Linear(0.0)),
+                Sustained { owner, on: true, level: 0.0 },
+                DespawnOnExit(AppState::Fight),
+            ));
+        }
+    }
 }
 
 fn play_ui_sounds(mut commands: Commands, mut messages: MessageReader<UiSound>, sounds: Res<Sounds>, settings: Res<Settings>, mut voice: Local<Voice>, time: Res<Time>) {
@@ -304,5 +440,28 @@ fn play_ui_sounds(mut commands: Commands, mut messages: MessageReader<UiSound>, 
             UiSound::Preview => "hit_small",
         };
         voice.play(&mut commands, &sounds, settings.sfx_gain(), frame, name, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_character_voice_is_never_the_same_variant_twice_in_a_row() {
+        for len in [2usize, 3, 4] {
+            let mut last = None;
+            let mut seen = vec![false; len];
+            for count in 1u32..2000 {
+                let pick = pick_variant(last, len, count.wrapping_mul(2654435761));
+                assert!(pick < len);
+                assert_ne!(Some(pick), last, "{len} variants: repeated {pick} at {count}");
+                seen[pick] = true;
+                last = Some(pick);
+            }
+            assert!(seen.iter().all(|&s| s), "{len} variants: every one gets picked sometimes");
+        }
+        // with a single sound there is nothing else to pick
+        assert_eq!(pick_variant(Some(0), 1, 12345), 0);
     }
 }

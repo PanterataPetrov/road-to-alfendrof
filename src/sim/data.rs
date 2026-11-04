@@ -71,6 +71,9 @@ pub struct CharacterData {
     #[serde(default)]
     pub air_shot_tilt: bool,
     pub moves: Vec<MoveData>,
+    /// The character's own voice and body sounds, played alongside the game's generic ones.
+    #[serde(default)]
+    pub voice: CharacterVoice,
     /// How the special being ready is shown.
     #[serde(default)]
     pub special_mark: Option<MarkKind>,
@@ -382,6 +385,28 @@ pub struct CurseData {
     pub squeeze: u32,
 }
 
+/// A character's own sounds for what happens to them, as names of groups in `assets/sfx` (`name_0.wav`,
+/// `name_1.wav`... to pick from, never the same one twice in a row). They play on top of the generic sounds,
+/// not instead of them.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct CharacterVoice {
+    /// Starting a dash.
+    pub dash: Option<String>,
+    /// Taking a hit (not a block).
+    pub hurt: Option<String>,
+    /// Being knocked out.
+    pub ko: Option<String>,
+    /// Blocking a hit.
+    pub block: Option<String>,
+    /// Having their guard broken.
+    pub guard_break: Option<String>,
+    /// Plunging to the floor (the ground pound).
+    pub smash: Option<String>,
+    /// Winning the match.
+    pub win: Option<String>,
+}
+
 /// The sounds of a move: names of the groups in `assets/sfx` (`name.wav`, or `name_0.wav`, `name_1.wav`... to pick from).
 /// What is left out falls back to a generic sound for the move's button, so a move works without any.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -395,6 +420,17 @@ pub struct MoveSfx {
     pub hit: Option<String>,
     /// When it is blocked.
     pub block: Option<String>,
+    /// The character's own sound as the move starts, on top of `cast` (`voice_` groups: never the same variant twice
+    /// in a row).
+    pub voice: Option<String>,
+    /// Frames after `voice` or `hit_voice` starts in which the character's other voice lines stay quiet, so this
+    /// one (a long cry) is heard through and not talked over (0: no protection).
+    pub voice_lock: u32,
+    /// The character's own sound when the move hits (not when it is blocked), on top of `hit`.
+    pub hit_voice: Option<String>,
+    /// A sound that loops for as long as a held move is held (the scroll being read): it fades in as the move
+    /// loads and fades out over a second when the move stops or is interrupted.
+    pub sustain: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

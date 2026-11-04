@@ -5,3 +5,4 @@
 /installer/dxc/
 /dist/
 /.direnv/
+__pycache__/

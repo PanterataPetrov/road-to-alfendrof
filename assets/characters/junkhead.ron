@@ -35,6 +35,9 @@
     // the special meter fills at 43% of the normal rate
     meter_gain_pct: Some(43),
     special_mark: Some(Scar(color: (0.78, 0.16, 0.16), glow: (1.0, 0.36, 0.3))),
+    // Junkhead's own voice, on top of the game's generic sounds (assets/sfx/voice_junkhead_*.wav, never the same one twice in a row)
+    voice: (dash: Some("voice_junkhead_dash"), hurt: Some("voice_junkhead_hurt"), ko: Some("voice_junkhead_died"), block: Some("voice_junkhead_successful_block"),
+            guard_break: Some("voice_junkhead_gettingstunned"), smash: Some("voice_junkhead_stomp"), win: Some("voice_junkhead_victory")),
     moves: [
         (name: "Whip", sfx: (cast: Some("whip_crack"), hit: Some("slap")), button: Light, crouching: false, anim: Punch, walk_pct: 60, boost_reach: 45,
          startup: 4, active: 3, recovery: 8, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
@@ -43,11 +46,11 @@
          startup: 5, active: 3, recovery: 8, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 10, y: 0, w: 62, h: 10)),
         // finisher of a light combo; must come after the normal Whip
-        (name: "Jump Kick", button: Light, crouching: false, anim: Kicks, walk_pct: 0, finisher_move: true,
+        (name: "Jump Kick", sfx: (hit_voice: Some("voice_junkhead_combo_landed")), button: Light, crouching: false, anim: Kicks, walk_pct: 0, finisher_move: true,
          leap: 700, leap_vx: 130,
          startup: 6, active: 8, recovery: 12, damage: 40, hitstun: 16, blockstun: 10, knockback: 3, hitstop: 5,
          hitbox: (x: 6, y: -4, w: 30, h: 30)),
-        (name: "Whip Pull", sfx: (cast: Some("whip_crack")), button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
+        (name: "Whip Pull", sfx: (cast: Some("whip_crack"), hit_voice: Some("voice_junkhead_heavy_landed"), voice_lock: 54), button: Heavy, crouching: false, anim: Hard, walk_pct: 0,
          pull_self: true, pull_gap: 24, cooldown: 180, guard_hits: Some(2),
          startup: 14, active: 4, recovery: 26, damage: 60, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: 22, w: 125, h: 16), assist: 12),
@@ -57,17 +60,17 @@
          hitbox: (x: -48, y: -6, w: 96, h: 72)),
         // the whip catches the opponent (28 damage) and pulls him through the air right up to them, then he plunges and
         // smashes the floor where he arrives (27 more): the two halves make up the old 55
-        (name: "Air Whip Pull", sfx: (cast: Some("whip_crack")), button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
+        (name: "Air Whip Pull", sfx: (cast: Some("whip_crack"), hit_voice: Some("voice_junkhead_heavy_landed"), voice_lock: 54), button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100,
          pull_self: true, pull_gap: 24, smash_damage: 27, cooldown: 180, guard_hits: Some(2),
          startup: 12, active: 4, recovery: 18, damage: 28, hitstun: 18, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 10, y: -80, w: 125, h: 110), assist: 12),
         // the special works in the air too: he hangs there while he spins and the lash goes high or low at the ground (heights are measured from the floor), so it's crouched or jumped like the ground one
-        (name: "Air Whip Storm", sfx: (cast: Some("whip_crack"), hit: Some("slap")), button: Special, crouching: false, air: true, anim: Summon, walk_pct: 0,
+        (name: "Air Whip Storm", sfx: (cast: Some("whip_crack"), hit: Some("slap"), voice: Some("voice_junkhead_specialcast"), voice_lock: 84), button: Special, crouching: false, air: true, anim: Summon, walk_pct: 0,
          hover: true, world_y: true, pull_foe: true, pull_gap: 22, committed: true, commit_at: Some(2),
          startup: 32, active: 8, recovery: 24, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
          hitbox: (x: 8, y: 42, w: 190, h: 12), assist: 30,
          low_hitbox: Some((x: 8, y: 0, w: 190, h: 12))),
-        (name: "Whip Storm", sfx: (cast: Some("whip_crack"), hit: Some("slap")), button: Special, crouching: false, anim: Summon, walk_pct: 0,
+        (name: "Whip Storm", sfx: (cast: Some("whip_crack"), hit: Some("slap"), voice: Some("voice_junkhead_specialcast"), voice_lock: 84), button: Special, crouching: false, anim: Summon, walk_pct: 0,
          pull_foe: true, pull_gap: 22, committed: true, commit_at: Some(2),
          startup: 32, active: 8, recovery: 24, damage: 150, hitstun: 70, blockstun: 12, knockback: 0, hitstop: 6,
          // high: head and chest (a crouching fighter, 40 px tall, is under it)
