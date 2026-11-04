@@ -1,0 +1,16 @@
+// Fit the photo to the visible arena without changing fighter or camera scale.
+// Pixel-art river-and-mountain backdrop; grey paving and concrete parapet follow real bridge reference photos.
+// The sightseeing viewer is decorative and stays behind the fighters.
+// Regenerate bridge art with Python 3 + Pillow: python tools/gen_assgrad.py [original-photo.jpg].
+(
+    name: "Assgrad",
+    sky: (0.57, 0.68, 0.72),
+    pillar: (0.48, 0.50, 0.43),
+    floor_a: (0.49, 0.47, 0.40),
+    floor_b: (0.43, 0.42, 0.36),
+    layers: [
+        (image: "backgrounds/assgrad/near.png", parallax: 0.0, z: -8.0, y: 145.0, fit_view: true),
+        (image: "backgrounds/assgrad/bridge.png", parallax: 0.0, z: -0.5, y: -46.0),
+    ],
+    floor_tile: Some("backgrounds/assgrad/floor.png"),
+)

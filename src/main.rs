@@ -15,6 +15,7 @@ mod update;
 use std::path::PathBuf;
 
 use bevy::camera::ScalingMode;
+use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
@@ -88,7 +89,7 @@ struct DebugView(bool);
 
 /// Background layer; trails the camera by `1 - parallax`.
 #[derive(Component)]
-struct ParallaxLayer(f32);
+struct ParallaxLayer(f32, bool);
 /// Pulses slowly (the portal).
 #[derive(Component)]
 struct Glow;
@@ -475,10 +476,17 @@ fn spawn_fight(
 
     // background layers, or plain pillars if the stage has none
     for layer in &stage.layers {
+        let image = if layer.smooth {
+            asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
+                settings.sampler = ImageSampler::linear();
+            }).load(layer.image.clone())
+        } else {
+            asset_server.load(layer.image.clone())
+        };
         let mut e = commands.spawn((
             scoped.clone(),
-            ParallaxLayer(layer.parallax),
-            Sprite::from_image(asset_server.load(layer.image.clone())),
+            ParallaxLayer(layer.parallax, layer.fit_view),
+            Sprite::from_image(image),
             Transform::from_xyz(0.0, layer.y, layer.z),
         ));
         if layer.glow {
@@ -639,7 +647,8 @@ fn follow_camera(
     window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut hud: Single<&mut Transform, (With<HudRoot>, Without<Camera2d>)>,
-    mut layers: Query<(&ParallaxLayer, &mut Transform), (Without<Camera2d>, Without<HudRoot>)>,
+    images: Res<Assets<Image>>,
+    mut layers: Query<(&ParallaxLayer, &mut Transform, &mut Sprite), (Without<Camera2d>, Without<HudRoot>)>,
 ) {
     let (a, b) = (sim.0.fighters[0].x as f32 / PX as f32, sim.0.fighters[1].x as f32 / PX as f32);
     let map_w = (GameState::STAGE_HALF_WIDTH * 2 / PX) as f32;
@@ -675,9 +684,19 @@ fn follow_camera(
     hud.translation.x = cam.0.translation.x;
     hud.translation.y = cam.0.translation.y;
     hud.scale = Vec3::new(zoom, zoom, 1.0);
-    for (ParallaxLayer(parallax), mut tf) in &mut layers {
-        // whole pixels only, so the background doesn't shimmer
-        tf.translation.x = (base * parallax).round();
+    for (ParallaxLayer(parallax, fit_view), mut tf, mut sprite) in &mut layers {
+        if *fit_view {
+            if let Some(image) = images.get(&sprite.image) {
+                let aspect = image.width() as f32 / image.height() as f32;
+                let height = (view_h * (1.0 - FLOOR_FRACTION)).max(*width * stretch / aspect);
+                sprite.custom_size = Some(Vec2::new(height * aspect, height));
+                tf.translation.x = cam.0.translation.x;
+                tf.translation.y = GROUND_Y + height * 0.5;
+            }
+        } else {
+            // whole pixels only, so the background doesn't shimmer
+            tf.translation.x = (base * parallax).round();
+        }
     }
 }
 

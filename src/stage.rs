@@ -33,6 +33,12 @@ pub struct LayerData {
     /// Pulses slowly (portals, fires).
     #[serde(default)]
     pub glow: bool,
+    /// Fit the scenery above the floor to the camera, preserving its aspect ratio.
+    #[serde(default)]
+    pub fit_view: bool,
+    /// Smooth photographic scenery without changing pixel-art sprite filtering.
+    #[serde(default)]
+    pub smooth: bool,
 }
 
 impl StageData {
