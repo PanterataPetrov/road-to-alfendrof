@@ -790,8 +790,22 @@ fn spec(frame: Frame) -> Spec {
         Frame::Punch(1) => s((Keep, pose((44.0, 22.0), (55.0, 21.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
         Frame::Punch(2) => s((pose((5.0, 27.0), (11.0, 23.0)), Keep), 1.0, 0, stand(), 0),
         Frame::Punch(_) => s((pose((24.0, 23.0), (46.0, 21.0)), Keep), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
-        // The kicks are the Cowboy's own (see cb_spec).
-        Frame::Kick(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        // The Professor's kicks (the Cowboy's own are in cb_spec): the front knee comes up, the leg shoots out with the
+        // body leaning back, the leg comes back down.
+        Frame::Kick(0) => s((Keep, pose((38.0, 28.0), (34.0, 31.0))), -1.0, 0, legs((8.0, 45.0), (5.0, 48.0), (37.0, 38.0), (34.0, 43.0)), 0),
+        Frame::Kick(1) => s((Keep, pose((39.0, 28.0), (35.0, 31.0))), 0.0, 0, legs((8.0, 45.0), (5.0, 48.0), (36.0, 42.0), (36.0, 46.0)), 0),
+        Frame::Kick(2) => s((pose((2.0, 26.0), (-2.0, 21.0)), pose((38.0, 27.0), (34.0, 31.0))), -3.0, 0, legs((8.0, 45.0), (5.0, 48.0), (40.0, 40.0), (52.0, 38.0)), 0),
+        Frame::Kick(_) => s((pose((2.0, 26.0), (-2.0, 21.0)), pose((38.0, 27.0), (34.0, 31.0))), -4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (41.0, 38.0), (53.0, 35.0)), 0),
+        // The slam dunk: reaching with both hands; the hands on the enemy's shoulders; pushing himself up on them, legs
+        // swinging off the ground, talking; the jump (arms up); the ball cocked overhead; the dunk, the arm down in front
+        // with the ball; the landing, a finger up.
+        Frame::Dunk(0) => s((pose((20.0, 24.0), (34.0, 22.0)), pose((38.0, 22.0), (49.0, 21.0))), 3.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (37.0, 48.0)), 0),
+        Frame::Dunk(1) => s((pose((22.0, 26.0), (44.0, 25.0)), pose((40.0, 23.0), (47.0, 21.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (37.0, 48.0)), 0),
+        Frame::Dunk(2) => s((pose((30.0, 28.0), (43.0, 33.0)), pose((40.0, 27.0), (46.0, 31.0))), 5.0, -2, legs((9.0, 43.0), (5.0, 44.0), (31.0, 44.0), (27.0, 45.0)), 1),
+        Frame::Dunk(3) => s((pose((1.0, 15.0), (5.0, 6.0)), pose((42.0, 14.0), (38.0, 5.0))), 0.0, 0, legs((6.0, 43.0), (9.0, 46.0), (36.0, 43.0), (33.0, 46.0)), 2),
+        Frame::Dunk(4) => s((pose((2.0, 24.0), (-2.0, 18.0)), pose((40.0, 12.0), (35.0, 1.0))), -3.0, 0, legs((4.0, 44.0), (9.0, 45.0), (37.0, 44.0), (32.0, 45.0)), 2),
+        Frame::Dunk(5) => s((pose((3.0, 28.0), (0.0, 34.0)), pose((45.0, 15.0), (54.0, 27.0))), 6.0, 0, legs((6.0, 45.0), (3.0, 48.0), (38.0, 45.0), (41.0, 48.0)), 1),
+        Frame::Dunk(_) => Spec { arms: (Keep, pose((43.0, 15.0), (41.0, 9.0))), lean: 1.0, dy: 0, legs: stand(), mouth: 2, finger: Some((41.0, 9.0)) },
         // Commanding the raven: a finger up, the arm thrown out at the enemy, then back.
         Frame::Point(0) => Spec { arms: (Keep, pose((42.0, 17.0), (44.0, 10.0))), lean: 0.0, dy: 0, legs: stand(), mouth: 1, finger: Some((44.0, 10.0)) },
         Frame::Point(1) => s((Keep, pose((44.0, 22.0), (57.0, 20.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 1),
@@ -810,7 +824,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) | Frame::Throw(_) | Frame::Toss(_) | Frame::Craft(_) | Frame::Latte(_) | Frame::Cover(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -902,10 +916,48 @@ fn leg_layer(parts: &Parts, legs: &Legs) -> Grid {
 }
 
 /// A whole-body drawing (upright, even for the KO), legs first, then the torso leaned and dropped over them.
+/// Where the basketball is in the dunk drawings (its centre, in the default pose's coordinates): above the raised
+/// hand as he jumps, cocked overhead, and in front of him as it is slammed down.
+fn dunk_ball(frame: Frame) -> Option<(i32, i32)> {
+    match frame {
+        Frame::Dunk(3) => Some((38, -1)),
+        Frame::Dunk(4) => Some((36, -1)),
+        Frame::Dunk(5) => Some((57, 31)),
+        _ => None,
+    }
+}
+
+/// A basketball, 11 x 11: orange with a black outline and seams, a shaded edge and a highlight.
+fn stamp_ball(canvas: &mut Grid, cx: i32, cy: i32) {
+    for dy in -5i32..=5 {
+        for dx in -5i32..=5 {
+            let d = dx * dx + dy * dy;
+            if d > 28 {
+                continue;
+            }
+            let ch = if d >= 23 {
+                'g'
+            } else if dx == 0 || dy == 0 || (dx.abs() == 3 && dy.abs() <= 2) {
+                'g'
+            } else if dx <= -2 && dy <= -2 && d <= 13 {
+                'r'
+            } else if d >= 17 && dx + dy > 0 {
+                'q'
+            } else {
+                'o'
+            };
+            canvas.set(cx + dx, cy + dy, ch);
+        }
+    }
+}
+
 fn drawing_upright(parts: &Parts, frame: Frame, raven: bool) -> Grid {
     let spec = spec(frame);
     let mut canvas = leg_layer(parts, &spec.legs);
     let mut upper = torso(parts, spec.arms, spec.mouth, spec.finger);
+    if let Some((bx, by)) = dunk_ball(frame) {
+        stamp_ball(&mut upper, bx + OX, by + OY);
+    }
     if raven {
         // The raven perches on his front shoulder and leans with the torso.
         stamp_raven(&mut upper, &raven_perched(), RAVEN_PERCH.0, RAVEN_PERCH.1);
@@ -1189,13 +1241,21 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
         // The Professor's new moves (the negative twin keeps his old drawings).
         every.extend((0..t2f::anim::POINT_FRAMES).map(Frame::Point));
         every.extend((0..t2f::anim::GRAB_FRAMES).map(Frame::Grab));
+        every.extend((0..t2f::anim::KICK_FRAMES).map(Frame::Kick));
+        every.extend((0..t2f::anim::DUNK_FRAMES).map(Frame::Dunk));
     }
     for f in every {
         let (body, mark) = drawing_and_mark_with(&parts, f, raven);
-        frames.push((f.file_stem(), body.to_png()));
+        let mut img = body.to_png();
+        if raven {
+            professor_flair(f, &mut img);
+        }
+        frames.push((f.file_stem(), img));
         if raven {
             // The same pose with the raven gone from the shoulder (while it is out flying).
-            frames.push((format!("{}_nr", f.file_stem()), drawing_and_mark_with(&parts, f, false).0.to_png()));
+            let mut bare = drawing_and_mark_with(&parts, f, false).0.to_png();
+            professor_flair(f, &mut bare);
+            frames.push((format!("{}_nr", f.file_stem()), bare));
         }
         frames.push((format!("{}_mark", f.file_stem()), mark.to_png()));
     }
@@ -1210,6 +1270,133 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
     frames
 }
 
+
+/// Drawn touches on the Professor's frames: sound waves rolling out of his mouth as he says "uh" and "meh" (and
+/// as he lectures the enemy he holds), a glint of command on the raised finger and a thrust of lines as he
+/// points, impact lines on the shove and the jab, and black feathers whirling round his hands as he calls the
+/// raven storm. Nothing is drawn over the drawing itself (or the raven on his shoulder), only round it.
+fn professor_flair(frame: Frame, img: &mut image::RgbaImage) {
+    fn put(img: &mut image::RgbaImage, x: i32, y: i32, c: [u8; 3]) {
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() && img.get_pixel(x as u32, y as u32)[3] == 0 {
+            img.put_pixel(x as u32, y as u32, image::Rgba([c[0], c[1], c[2], 255]));
+        }
+    }
+    const WAVE: [u8; 3] = [236, 240, 255];
+    const WAVE_FAINT: [u8; 3] = [160, 176, 214];
+    const GLINT: [u8; 3] = [255, 255, 255];
+    const GOLD: [u8; 3] = [255, 222, 120];
+    const FEATHER: [u8; 3] = [22, 22, 36];
+    const SHEEN: [u8; 3] = [70, 90, 150];
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let opaque = |img: &image::RgbaImage, x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && img.get_pixel(x as u32, y as u32)[3] > 0;
+    let skin = |img: &image::RgbaImage, x: i32, y: i32| {
+        if !opaque(img, x, y) {
+            return false;
+        }
+        let p = img.get_pixel(x as u32, y as u32);
+        p[0] > 180 && p[1] > 120 && p[2] < 170
+    };
+    // the furthest-forward skin pixel between two rows (a hand)
+    let front_hand = |img: &image::RgbaImage, top: i32, bottom: i32| -> Option<(i32, i32)> {
+        (0..w).rev().find_map(|x| (top..bottom.min(h)).find(|&y| skin(img, x, y)).map(|y| (x, y)))
+    };
+    // the mouth: the head is the topmost thing in the middle columns, the mouth a dozen rows below its crown at
+    // the front of the face
+    let mouth = |img: &image::RgbaImage| -> Option<(i32, i32)> {
+        let crown = (0..h).find(|&y| (24..44).any(|x| opaque(img, x, y)))?;
+        let y = crown + 13;
+        let x = (24..46).rev().find(|&x| skin(img, x, y) || skin(img, x, y - 2))?;
+        Some((x, y))
+    };
+    // sound rolling out: arcs opening forwards, each further one wider and fainter
+    let waves = |img: &mut image::RgbaImage, (mx, my): (i32, i32), rings: &[i32]| {
+        for (n, &r) in rings.iter().enumerate() {
+            for t in -10i32..=10 {
+                let a = t as f32 / 10.0 * 0.9;
+                let x = mx + 1 + (a.cos() * r as f32).round() as i32;
+                let y = my + (a.sin() * r as f32).round() as i32;
+                if t.abs() <= 8 - n as i32 * 2 || t.abs() <= 3 {
+                    put(img, x, y, if n == 0 { WAVE } else { WAVE_FAINT });
+                }
+            }
+        }
+    };
+    let impact = |img: &mut image::RgbaImage, (x, y): (i32, i32)| {
+        for (dx, dy) in [(2, 0), (2, -2), (2, 2), (1, -3), (1, 3)] {
+            for k in 1..3 {
+                put(img, x + 1 + dx * k, y + dy * k / 2, if k == 1 { GLINT } else { GOLD });
+            }
+        }
+    };
+    // a black feather: a short slanted quill with a blue sheen down its middle
+    let feather = |img: &mut image::RgbaImage, (x, y): (i32, i32), slant: i32| {
+        for k in -2..=2 {
+            put(img, x + k, y + k * slant / 2, FEATHER);
+            put(img, x + k, y + k * slant / 2 + 1, FEATHER);
+        }
+        put(img, x, y, SHEEN);
+        put(img, x + 1, y + slant / 2, SHEEN);
+    };
+    match frame {
+        Frame::Speak(k) => {
+            if let Some(m) = mouth(img) {
+                waves(img, m, if k == 0 { &[12, 16] } else { &[13, 17, 21] });
+            }
+        }
+        Frame::Grab(2) | Frame::Grab(3) => {
+            if let Some(m) = mouth(img) {
+                waves(img, m, if frame == Frame::Grab(2) { &[12, 16, 20] } else { &[13, 17] });
+            }
+        }
+        Frame::Point(0) => {
+            // the finger raised: a glint of command on its tip
+            if let Some((x, y)) = (0..h).find_map(|y| (40..w).find(|&x| skin(img, x, y)).map(|x| (x, y))) {
+                for (dx, dy) in [(0, -2), (0, -3), (-2, 0), (-3, 0), (2, 0), (3, 0), (-1, -1), (1, -1)] {
+                    put(img, x + dx, y + dy, if dx.abs() + dy.abs() > 2 { GOLD } else { GLINT });
+                }
+            }
+        }
+        Frame::Point(1) => {
+            // the arm thrust out: lines along it and a glint off the fingertip
+            if let Some((x, y)) = front_hand(img, 12, 40) {
+                for (dy, len) in [(-3, 9), (3, 8), (-5, 5)] {
+                    for k in 0..len {
+                        if k % 4 != 3 {
+                            put(img, x - 3 - k, y + dy, if k < len / 2 { WAVE } else { WAVE_FAINT });
+                        }
+                    }
+                }
+                impact(img, (x, y));
+            }
+        }
+        Frame::Grab(4) | Frame::Soft(1) => {
+            if let Some(hand) = front_hand(img, 12, 44) {
+                impact(img, hand);
+            }
+        }
+        Frame::Summon(k @ (2 | 3)) => {
+            // feathers whirling round both raised hands
+            // (the hands are out to the sides of his bald head, which is the same colour)
+            for (x0, x1, side) in [(0, 25, -1), (43, w, 1)] {
+                if let Some((hx, hy)) = (0..h).find_map(|y| (x0..x1).find(|&x| skin(img, x, y)).map(|x| (x, y))) {
+                    let spots: &[(i32, i32, i32)] = if k == 2 { &[(-5, 3, 1), (5, 2, -1), (side * 7, 8, 2)] } else { &[(side * 6, 4, 1), (side * 8, 9, -1), (side * 5, 14, 2)] };
+                    for &(dx, dy, slant) in spots {
+                        feather(img, (hx + dx, hy + dy), slant);
+                    }
+                }
+            }
+        }
+        Frame::Summon(4) => {
+            // the throw: feathers bursting off the forward hand
+            if let Some((x, y)) = front_hand(img, 8, 40) {
+                for (dx, dy, slant) in [(0, -6, -2), (2, 6, 2), (-5, -8, -1), (-4, 8, 1), (-9, -4, 0)] {
+                    feather(img, (x + dx, y + dy), slant);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 // The Professor's raven (black with a blue sheen, like his hair), the rose it drops, and the
 // words ("uh", "meh") he speaks at the enemy. The shapes are drawn from ellipses and polygons so
@@ -2223,6 +2410,9 @@ fn gs_spec(frame: Frame) -> GsSpec {
         Frame::Write(1) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((24.0, 27.0), (18.0, 25.0))), 1.0, 0, Legs::Stand),
         Frame::Write(2) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((25.0, 26.0), (21.0, 24.0))), 1.0, 0, Legs::Stand),
         Frame::Write(_) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((29.0, 16.0), (31.0, 7.0))), 2.0, 0, Legs::Stand),
+        // Dashing behind the book: both arms out in front holding it up, leaning in (a small shuffle between the two).
+        Frame::Cover(0) => own((pose((17.0, 27.0), (28.0, 25.0)), pose((24.0, 22.0), (30.0, 17.0))), 3.0, 0, stance()),
+        Frame::Cover(_) => own((pose((17.0, 27.0), (28.0, 26.0)), pose((24.0, 22.0), (30.0, 18.0))), 3.0, 1, legs((10.0, 45.0), (6.0, 48.0), (31.0, 46.0), (33.0, 47.0))),
         // Everything else is the Professor's pose moved over to his proportions.
         other => {
             let mut sp = spec(other);
@@ -2243,6 +2433,31 @@ fn gs_belt_book(c: &mut Grid) {
     for (dy, row) in rows.iter().enumerate() {
         for (dx, ch) in row.chars().enumerate() {
             c.set(5 + dx as i32 + GOX, 34 + dy as i32 + GOY, ch);
+        }
+    }
+}
+
+/// The book held up in front of him as a shield while he dashes at the enemy: its brown cover towards them, a gold band and
+/// a corner guard, the pages' edge showing along the top.
+fn gs_cover_book(c: &mut Grid) {
+    let (x0, y0, w, h) = (27, 9, 12, 25);
+    for dy in 0..h {
+        for dx in 0..w {
+            let edge = dx == 0 || dy == h - 1 || dx == w - 1;
+            let ch = if dy == 0 {
+                't'
+            } else if dy == 1 {
+                'U'
+            } else if edge || dx == 1 {
+                'ä'
+            } else if (7..=9).contains(&dy) && (3..=w - 3).contains(&dx) {
+                'Y'
+            } else if dy >= h - 3 && dx >= w - 4 {
+                'm'
+            } else {
+                'ö'
+            };
+            c.set(x0 + dx + GOX, y0 + dy + GOY, ch);
         }
     }
 }
@@ -2328,6 +2543,8 @@ fn gs_torso(parts: &Parts, frame: Frame, gs: &GsSpec) -> (Grid, Grid) {
     }
     if let Frame::Write(k) = frame {
         gs_open_book(&mut c, k);
+    } else if let Frame::Cover(_) = frame {
+        gs_cover_book(&mut c);
     } else {
         gs_belt_book(&mut c);
     }
@@ -2432,6 +2649,7 @@ fn gs_frame_list() -> Vec<Frame> {
     let mut v = Frame::all();
     v.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
     v.extend((0..t2f::anim::WRITE_FRAMES).map(Frame::Write));
+    v.extend((0..t2f::anim::COVER_FRAMES).map(Frame::Cover));
     v
 }
 
@@ -4477,9 +4695,7 @@ fn an_frames(default: &Grid) -> Vec<(String, image::RgbaImage)> {
         frames.push((format!("runes_{v}"), runes(v).to_png()));
         frames.push((format!("missile_{v}"), missile(v).to_png()));
     }
-    for (i, g) in goblin_frames().into_iter().enumerate() {
-        frames.push((format!("goblin_{i}"), g.to_png()));
-    }
+    // (the goblins are drawn by tools/gen_goblins.py)
     frames
 }
 
@@ -4504,7 +4720,6 @@ fn an_contact_sheet(default: &Grid, scale: u32) -> image::RgbaImage {
     let mut x = 8;
     let y = rows * (ch + 8) + 8;
     let mut effects = vec![runes(0).to_png(), runes(1).to_png()];
-    effects.extend(goblin_frames().into_iter().map(|g| g.to_png()));
     for img in effects {
         for yy in 0..img.height() * scale {
             for xx in 0..img.width() * scale {
@@ -4550,76 +4765,6 @@ fn runes(variant: usize) -> Grid {
     }
     g
 }
-
-/// One goblin drawing (15 x 16) from a template, facing right.
-fn goblin_base() -> Vec<Vec<char>> {
-    [
-        "...............",
-        "..ì.........ì..",
-        "..àà..àààà..àà.",
-        "...àààààààààà..",
-        "...àYVàààYVàà..",
-        "....àààààààà...",
-        "....àà.WW.àà...",
-        ".....èèèèèè....",
-        "....òòòòòòòò...",
-        "...àòòòòòòòòà..",
-        "...àòòòòòòòòà..",
-        "....òòòòòòòò...",
-        "....èè....èè...",
-        "....àà....àà...",
-        "...VVV....VVV..",
-        "...............",
-    ]
-    .iter()
-    .map(|r| r.chars().collect())
-    .collect()
-}
-
-/// The goblin's drawings: 0-1 waiting (a little bob), 2-3 running, 4 biting.
-fn goblin_frames() -> Vec<Grid> {
-    let base = goblin_base();
-    let to_grid = |rows: Vec<Vec<char>>| Grid::from_rows(rows);
-    let mut frames = Vec::new();
-    // Waiting: the second drawing is a step down (the body bobs) with the eyes shut.
-    frames.push(to_grid(base.clone()));
-    let mut bob = base.clone();
-    bob.remove(0);
-    bob.insert(14, vec!['.'; 15]);
-    for row in bob.iter_mut().skip(3).take(2) {
-        for c in row.iter_mut() {
-            if *c == 'Y' {
-                *c = 'è';
-            }
-        }
-    }
-    frames.push(to_grid(bob));
-    // Running: one leg forward and one back, then the other way, body leaning forward.
-    for (a, b) in [(2usize, 8usize), (8, 2)] {
-        let mut r = base.clone();
-        for y in 12..=14 {
-            r[y] = vec!['.'; 15];
-        }
-        for (x0, rows) in [(a, [("èè", 'è'), ("àà", 'à'), ("VVV", 'V')]), (b, [("èè", 'è'), ("àà", 'à'), ("VVV", 'V')])] {
-            for (k, (s, _)) in rows.iter().enumerate() {
-                for (i, c) in s.chars().enumerate() {
-                    if x0 + i < 15 {
-                        r[12 + k][x0 + i] = c;
-                    }
-                }
-            }
-        }
-        frames.push(to_grid(r));
-    }
-    // Biting: the mouth wide open with teeth, arms up.
-    let mut bite = base.clone();
-    for (x, y, c) in [(6, 6, 'V'), (7, 6, 'W'), (8, 6, 'W'), (9, 6, 'V'), (7, 7, 'V'), (8, 7, 'V'), (2, 8, 'à'), (2, 7, 'à'), (12, 8, 'à'), (12, 7, 'à')] {
-        bite[y][x] = c;
-    }
-    frames.push(to_grid(bite));
-    frames
-}
-
 
 // Junkhead's whip. Each pose that uses it has a layer drawn over the body: the same left edge as
 // the body drawing, but WHIP_W wide so the whip can reach far in front of him. The game puts the
@@ -5543,6 +5688,15 @@ fn main() {
                 }
                 // The scar overlay stays white: the game tints it.
                 let img = if negative && !frame.ends_with("_mark") { invert(&img) } else { img };
+                img.save(folder.join(format!("{frame}.png"))).unwrap();
+            }
+        }
+        // The Negaprofessor has the new kicks and the dunk too: the same drawings, inverted.
+        let folder = assets.join("sprites").join("evilayz");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (frame, img) in all_frames(&default, true) {
+            if frame.starts_with("kick_") || frame.starts_with("dunk_") {
+                let img = if frame.ends_with("_mark") { img } else { invert(&img) };
                 img.save(folder.join(format!("{frame}.png"))).unwrap();
             }
         }

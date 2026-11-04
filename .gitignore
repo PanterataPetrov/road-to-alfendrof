@@ -1,4 +1,5 @@
 /target
+/dist
 /tools/previews/
 /installer/Output/
 /installer/dxc/

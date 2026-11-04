@@ -1,7 +1,7 @@
 // Gray Persona: a pale vampire in a black gothic dress with teal cuffs, long dark hair and a ruby brooch.
 // Light: a nail scratch that switches arms while you spam it. The third hit of a combo (the eyeless face) rakes with
 //        both hands and bites with two fangs; if it lands, blood flies out of the enemy and heals her 3%, but her lights rest for a second.
-// Heavy: she hops back, lifts her arms and sends a wave of bats from her outstretched hands. If they land, heavy again (until its cooldown is over) turns her
+// Heavy: she hops back, lifts her arms and sprays a short burst of bats forward from her outstretched hands. If they land, heavy again (until its cooldown is over) turns her
 //        into a bat: faster, but no lights or specials. Heavy once more (or 3 seconds later by itself) she turns back
 //        in a puff of grey smoke that stuns anyone close for a second. The heavy then rests 4 seconds, or 6 if the
 //        smoke stunned. Being hit as a bat turns her back without the smoke.
@@ -13,6 +13,8 @@
 (
     name: "Gray Persona",
     subtitle: Some("gaypersona"),
+    // what Light, Heavy and Special do, shown in the character select
+    blurbs: ["Nail scratches, then a rake and a bite that heals her 3%. Her lights rest for a second after.", "A wave of bats. If they land, press again to turn into a bat; a smoke puff stuns anyone close.", "Leaps into a portal, comes out behind the enemy and grabs them to bite, healing 10%."],
     sprites: Some("gray_persona"),
     color: (0.55, 0.55, 0.62),
     walk_speed: 205,
@@ -24,7 +26,7 @@
          startup: 3, active: 3, recovery: 5, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 10, y: 24, w: 30, h: 16)),
         // third hit of the combo: both hands and the fangs; a landed bite heals her, and her lights rest for a second
-        (name: "Fang Frenzy", button: Light, crouching: false, anim: Hard, walk_pct: 0, finisher_move: true, heal_pct: 3, light_lock: 60,
+        (name: "Fang Frenzy", sfx: (hit: Some("bite")), button: Light, crouching: false, anim: Hard, walk_pct: 0, finisher_move: true, heal_pct: 3, light_lock: 60,
          startup: 7, active: 5, recovery: 14, damage: 38, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 7,
          hitbox: (x: 8, y: 20, w: 34, h: 28)),
         (name: "Low Scratch", button: Light, crouching: true, anim: Soft, walk_pct: 0,
@@ -34,14 +36,15 @@
          startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 8, y: 0, w: 30, h: 26)),
         // she hops back and the bats fly straight ahead as one wide wave, bobbing
-        (name: "Bat Wave", button: Heavy, crouching: false, anim: Summon, walk_pct: 0, cooldown: 180, guard_hits: Some(2),
+        (name: "Bat Wave", sfx: (cast: Some("bats")), button: Heavy, crouching: false, anim: Summon, walk_pct: 0, cooldown: 180, guard_hits: Some(6),
+         volley: 8, volley_gap: 1, shot_damage: Some(11),
          startup: 18, active: 3, recovery: 20, damage: 60, hitstun: 20, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          hop: Some((400, 180)),
          bat_form: Some((duration: 180, speed_pct: 170, radius: 44, stun: 60, miss_cooldown: 240, hit_cooldown: 360)),
-         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 80, size: (54, 40), image: Some("bats"), drawings: 6, summon_image: Some("none"), speed: 4))),
+         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 30, size: (14, 10), image: Some("batspray"), summon_image: Some("none"), speed: 6, fan: 14))),
         // the portal: gone at frame 24; the grab (window 1) holds them for the bite (window 2)
-        (name: "Blood Portal", button: Special, crouching: false, anim: Portal, walk_pct: 0,
+        (name: "Blood Portal", sfx: (cast: Some("portal_open"), hit: Some("bite")), button: Special, crouching: false, anim: Portal, walk_pct: 0,
          portal: Some((vanish: 24, gap: 26)), heal_pct: 10, hits: 2, hit_gap: 32, guard_hits: Some(0),
          hit_overrides: [(damage: 0, hitstun: 60, knockback: 0), (damage: 130, hitstun: 26, knockback: 5)],
          startup: 54, active: 6, recovery: 30, damage: 130, hitstun: 26, blockstun: 0, knockback: 5, hitstop: 8,

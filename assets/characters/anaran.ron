@@ -1,8 +1,9 @@
 // Anaran, Arch-Historian: a pompous high elf in red and copper robes with a black cape and dark crimson hair. A ranged fighter.
 // Light: he opens a scroll and reads for as long as you hold the button (no combos). While he reads, a heat-seeking
 //        missile leaves the scroll after 0.75 seconds of reading and then one every second; it curves after the enemy and detonates
-//        when it is close. He can walk or crouch while he reads (on the ground only), and being hit stops it.
-// Heavy: he slams his staff on the ground (a quick cast, a 2.5 second cooldown that shows as a bar under him, and the screen shakes): a magical shockwave around him (both sides) damages and shoves the enemy
+//        when it is close. He can walk or crouch while he reads (on the ground only), and being hit stops it. If three of
+//        his missiles are blocked (without one getting through in between) he is stunned for 1.2 seconds.
+// Heavy: he slams his staff on the ground (a quick cast, a 3.5 second cooldown that shows as a bar under him, and the screen shakes): a magical shockwave around him (both sides) damages and shoves the enemy
 //        away and leaves them unable to attack for 1.5 seconds (unless they block it). Jump over it. It also destroys the
 //        enemy's projectiles in its reach (except melee ones).
 // Special (the ruby at his throat glows when the meter is full): four goblins that swarm the enemy and bite until they're killed or time out.
@@ -12,20 +13,24 @@
     name: "Anaran",
     // shown under his name in the character select only
     subtitle: Some("Arch-Historian"),
+    // what Light, Heavy and Special do, shown in the character select
+    blurbs: ["Hold to read the scroll: heat-seeking missiles fly at the enemy. Three blocked ones stun him.", "Staff slam: a shockwave all round him that shoves the enemy back, stops their attacks and breaks shots.", "Calls four goblins that swarm the enemy and bite until they are killed or time out."],
     sprites: Some("anaran"),
     color: (0.95, 0.52, 0.38),
     walk_speed: 195,
     jump_speed: 1050,
     // the CPU plays him as a ranged fighter: it keeps its distance, reads and slams when you get close
     keeps_distance: true,
+    // his missiles land so often that the goblins were coming every few seconds
+    meter_gain_pct: Some(50),
     special_mark: Some(Scar(color: (0.75, 0.2, 0.25), glow: (1.0, 0.35, 0.4))),
     moves: [
-        (name: "Read the Scroll", button: Light, crouching: false, anim: Read, walk_pct: 100,
-         channel: Some((first: 45, every: 60)),
+        (name: "Read the Scroll", sfx: (cast: Some("paper"), launch: Some("arcane_launch"), hit: Some("arcane_hit")), button: Light, crouching: false, anim: Read, walk_pct: 100,
+         channel: Some((first: 45, every: 60)), blocked_stun: Some((shots: 3, stun: 72)),
          startup: 14, active: 1, recovery: 12, damage: 70, hitstun: 22, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 18, y: 30, aim_y: 30, travel_frames: 1, lifetime: 300, size: (10, 10), image: Some("missile"), summon_image: Some("none"), homing: true, homing_turn: 7, detonate: 22, speed_tenths: 36))),
-        (name: "Staff Slam", button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 150, guard_hits: Some(2),
+        (name: "Staff Slam", sfx: (cast: Some("staff_swing"), hit: Some("shockwave")), button: Heavy, crouching: false, anim: Staff, walk_pct: 0, radial: true, silence: 90, clears_projectiles: true, cooldown: 210, guard_hits: Some(2),
          startup: 7, active: 4, recovery: 24, damage: 80, hitstun: 16, blockstun: 14, knockback: 9, hitstop: 8,
          hitbox: (x: -84, y: 0, w: 168, h: 36)),
         (name: "Air Whip", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
@@ -34,7 +39,7 @@
         (name: "Plunging Verdict", button: Heavy, crouching: false, air: true, anim: Hard, walk_pct: 100, cooldown: 90,
          startup: 9, active: 7, recovery: 10, damage: 64, hitstun: 20, blockstun: 12, knockback: 3, hitstop: 7,
          hitbox: (x: 6, y: -4, w: 30, h: 34)),
-        (name: "Call the Goblins", button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),
+        (name: "Call the Goblins", sfx: (cast: Some("summon"), launch: Some("goblin_squeak"), hit: Some("bite")), button: Special, crouching: false, anim: Summon, walk_pct: 0, guard_hits: Some(0),
          startup: 24, active: 3, recovery: 24, damage: 16, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          minions: Some((count: 4, lifetime: 480, interval: 150, speed: 4, reach: 16, health: 56))),

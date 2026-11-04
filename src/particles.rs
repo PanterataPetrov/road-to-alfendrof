@@ -18,6 +18,8 @@ pub struct Particle {
     shrink: bool,
     /// How much bigger it is when it has faded out (a puff of smoke spreads), 1 for no change.
     grow: f32,
+    /// How many times wider than tall it is (a streak of wind), 1 for a square.
+    stretch: f32,
 }
 
 /// What a fighter looked like on the previous tick.
@@ -71,7 +73,7 @@ impl Seen {
 
 fn spawn(commands: &mut Commands, at: Vec2, vel: Vec2, color: Color, size: f32, life: f32, gravity: f32, shrink: bool) {
     commands.spawn((
-        Particle { vel, life, max: life, gravity, size, shrink, grow: 1.0 },
+        Particle { vel, life, max: life, gravity, size, shrink, grow: 1.0, stretch: 1.0 },
         DespawnOnExit(AppState::Fight),
         Sprite::from_color(color, Vec2::splat(size)),
         Transform::from_xyz(at.x.round(), at.y.round(), 5.0),
@@ -81,7 +83,7 @@ fn spawn(commands: &mut Commands, at: Vec2, vel: Vec2, color: Color, size: f32, 
 /// A round puff of smoke (the `smoke_puff` drawing, tinted) that drifts, spreads and fades.
 fn puff(commands: &mut Commands, image: &Handle<Image>, at: Vec2, vel: Vec2, color: Color, size: f32, life: f32) {
     commands.spawn((
-        Particle { vel, life, max: life, gravity: 0.0, size, shrink: false, grow: 1.8 },
+        Particle { vel, life, max: life, gravity: 0.0, size, shrink: false, grow: 1.8, stretch: 1.0 },
         DespawnOnExit(AppState::Fight),
         Sprite { image: image.clone(), color, custom_size: Some(Vec2::splat(size)), ..default() },
         Transform::from_xyz(at.x.round(), at.y.round(), 5.1),
@@ -96,6 +98,16 @@ fn smoke_cloud(commands: &mut Commands, seen: &mut Seen, image: &Handle<Image>, 
         let v = Vec2::new(angle.cos(), angle.sin() * 0.6 + 0.25) * seen.range(speed * 0.3, speed);
         puff(commands, image, from, v, colours[k % colours.len()], seen.range(7.0, 12.0), seen.range(0.45, 0.8));
     }
+}
+
+/// A thin streak of wind, `length` pixels long, blowing along `vel`.
+fn gust(commands: &mut Commands, at: Vec2, vel: Vec2, color: Color, length: f32, life: f32) {
+    commands.spawn((
+        Particle { vel, life, max: life, gravity: 0.0, size: 1.0, shrink: false, grow: 1.0, stretch: length },
+        DespawnOnExit(AppState::Fight),
+        Sprite::from_color(color, Vec2::new(length, 1.0)),
+        Transform::from_xyz(at.x.round(), at.y.round(), 5.0),
+    ));
 }
 
 /// A floating word or symbol that drifts and fades.
@@ -227,7 +239,7 @@ pub fn emit(
                     let dir = if k % 2 == 0 { 1.0 } else { -1.0 };
                     spawn(&mut commands, feet + Vec2::new(0.0, 2.0), Vec2::new(dir * 150.0, 0.0), Color::srgb(1.0, 0.95, 0.8), 3.0, 0.25, 0.0, true);
                 }
-                shake.0 = shake.0.max(5.0);
+                shake.0 = shake.0.max(7.0);
             }
             if prev.y > 0 && f.y == 0 && f.state != FighterState::Ko {
                 for k in 0..8 {
@@ -509,6 +521,21 @@ pub fn emit(
                     }
                 }
             }
+            // a grab that pulls: wind blows in towards him over its whole reach while he winds it up, so you can
+            // see how far it goes
+            if mv.anim == AnimKind::Grab && mv.pull_foe && f.state_frame <= mv.startup + mv.active {
+                let dir = f.facing as f32;
+                let (near, far) = (mv.hitbox.x as f32, (mv.hitbox.x + mv.hitbox.w) as f32);
+                let air = [Color::srgba(0.9, 0.94, 1.0, 0.7), Color::srgba(0.75, 0.82, 0.95, 0.55)];
+                for k in 0..2 {
+                    let along = seen.range(near + 8.0, far);
+                    let at = Vec2::new((f.x / PX) as f32 + dir * along, GROUND_Y + (f.y / PX) as f32 + mv.hitbox.y as f32 + seen.range(4.0, mv.hitbox.h as f32 - 4.0));
+                    let speed = seen.range(220.0, 320.0);
+                    // short enough to reach him before it fades, never further than he is
+                    let life = ((along - near) / speed).clamp(0.08, 0.35);
+                    gust(&mut commands, at, Vec2::new(-dir * speed, 0.0), air[k], seen.range(5.0, 10.0), life);
+                }
+            }
             // the bat wave: crimson wisps spiral in to her hands while she gathers the swarm, then burst as it flies
             if mv.bat_form.is_some() {
                 let hands = feet + Vec2::new(towards * 22.0, 34.0);
@@ -530,7 +557,7 @@ pub fn emit(
                 }
             }
             // the beam of light: sparks and a shake where it lands as it sweeps
-            if let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) {
+            if let (Some(b), Some(lock)) = (mv.beam.filter(|b| !b.whale), f.beam_lock) {
                 if f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.active {
                     let progress = (f.state_frame - mv.startup) as f32 / mv.active.max(1) as f32;
                     let lock_x = (lock / PX) as f32;
@@ -711,7 +738,7 @@ pub fn update_particles(
         tf.translation.y += p.vel.y * dt;
         let t = p.life / p.max;
         let size = if p.shrink { (p.size * t.sqrt()).max(1.0) } else { p.size * (1.0 + (p.grow - 1.0) * (1.0 - t)) };
-        let side = Some(Vec2::splat(size.round().max(1.0)));
+        let side = Some(Vec2::new((size * p.stretch).round().max(1.0), size.round().max(1.0)));
         if sprite.custom_size != side {
             sprite.custom_size = side;
         }

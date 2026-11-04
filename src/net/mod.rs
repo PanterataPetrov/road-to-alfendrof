@@ -16,6 +16,7 @@ use ggrs::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod code;
 pub mod lobby;
 pub mod stun;
 pub mod transport;

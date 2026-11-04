@@ -1,6 +1,9 @@
 Road to Alfendrof for Mac
 ========================
 
+Requires an Apple Silicon Mac (M1 or later). Intel Macs are not supported by
+official releases.
+
 INSTALL
 1. Open RoadToAlfendrof-Mac.dmg and drag "Road to Alfendrof" onto Applications.
    Alternatively, unzip RoadToAlfendrof-Mac.zip and copy its app to Applications.
@@ -17,9 +20,8 @@ INSTALL
    reports malware or a damaged app, stop and download a fresh official release;
    do not bypass that warning.
 
-The official release supports Apple Silicon and Intel Macs. Controls are in
-Options > Controls. A locally built package supports the supplied binary's CPU
-architecture only.
+Controls are in Options > Controls. A locally built package supports the supplied
+binary's CPU architecture only.
 Windowed launches start maximized, with text scaled to the available window size.
 Saved borderless/fullscreen preferences still apply; F11 toggles display mode.
 
@@ -66,8 +68,9 @@ run from the repository root (replace VERSION with the Cargo.toml version):
 
   bash installer/mac/package.sh --binary target/release/t2f --output dist --version VERSION
 
-This accepts a local arm64 executable. For a universal release, first build
---target aarch64-apple-darwin and --target x86_64-apple-darwin, then combine:
+The script accepts a local arm64 executable or a universal executable. To build
+a universal package locally, first build --target aarch64-apple-darwin and
+--target x86_64-apple-darwin, then combine:
 
   lipo -create -output /tmp/t2f-universal target/aarch64-apple-darwin/release/t2f target/x86_64-apple-darwin/release/t2f
   bash installer/mac/package.sh --binary /tmp/t2f-universal --output dist --version VERSION
@@ -75,5 +78,7 @@ This accepts a local arm64 executable. For a universal release, first build
 The same script creates RoadToAlfendrof-Mac.zip and RoadToAlfendrof-Mac.dmg.
 The ZIP has the app at its root and this README inside Contents/Resources;
 the DMG also exposes README.txt beside the app and Applications link. Both carry
-the same ad hoc signed app. The Mac build workflow packages the universal binary
-and uploads both artifacts; only a v* tag attaches them to a GitHub release.
+the same ad hoc signed app. The Mac build workflow packages Apple Silicon only
+and uploads both artifacts. Stable release publishes them together with the
+other platform packages only after all builds succeed on main; platform workflows
+and tag pushes do not publish independently. See RELEASING.md in the repository.

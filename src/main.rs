@@ -1,12 +1,14 @@
 // no console window in release builds on Windows
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
+mod briefing;
 mod menus;
 mod music;
 mod online;
 mod particles;
 mod render;
 mod settings;
+mod sfx;
 mod update;
 
 use std::path::PathBuf;
@@ -15,7 +17,7 @@ use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
-use t2f::cpu::cpu_input_vs;
+use t2f::brain::Brain;
 use t2f::sim::{CharacterData, Fighter, GameState, Input, Phase, PX};
 use t2f::stage::StageData;
 
@@ -293,13 +295,15 @@ fn main() {
         .init_resource::<Sim>()
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
+        .init_resource::<briefing::ReadyPress>()
         .add_plugins(settings::SettingsPlugin)
+        .add_plugins(sfx::SfxPlugin)
         .add_plugins(menus::MenuPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(update::UpdatePlugin)
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
-        .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar).chain())
+        .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar, render::spawn_cigarette_hud, render::spawn_zone_sprites, briefing::spawn).chain())
         .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>, mut handles: ResMut<render::FrameHandles>| {
             clear.0 = MENU_BACKGROUND;
             fixed.set_timestep_hz(60.0);
@@ -333,8 +337,13 @@ fn main() {
             )
                 .run_if(in_state(AppState::Fight)),
         )
+        .add_systems(Update, (briefing::press_ready, briefing::update).run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_scribe_effects.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_whale.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_shield.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_portals.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_cigarettes.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_zones.run_if(in_state(AppState::Fight)))
         .add_systems(Update, (toggle_debug, dev_screenshot));
 
     if dev.fight {
@@ -382,7 +391,8 @@ fn spawn_fight(
     asset_server: Res<AssetServer>,
     dev: Res<DevOptions>,
 ) {
-    *sim = fresh_sim(&roster, &selection);
+    // (the fighters' skills are shown in the character select now, so the match starts at once)
+    *sim = fresh_sim(&roster, &selection, false);
     if dev.spread {
         sim.0.fighters[0].x = -380 * PX;
         sim.0.fighters[1].x = 380 * PX;
@@ -516,11 +526,30 @@ fn spawn_fight(
         if c.moves.iter().filter_map(|m| m.projectile.as_ref()).any(|p| p.lob && !p.over_target) && !effects.iter().any(|e| e == "moon_star") {
             effects.push("moon_star".to_string());
         }
-        if c.moves.iter().any(|m| m.beam.is_some()) && !effects.iter().any(|e| e == "jesus") {
+        if c.moves.iter().any(|m| m.beam.is_some_and(|b| !b.whale)) && !effects.iter().any(|e| e == "jesus") {
             effects.push("jesus".to_string());
         }
-        if c.moves.iter().any(|m| m.minions.is_some()) && !effects.iter().any(|e| e == "goblin") {
+        if c.moves.iter().any(|m| m.plot_armour > 0) && !effects.iter().any(|e| e == "shield") {
+            effects.push("shield".to_string());
+        }
+        if c.moves.iter().any(|m| m.beam.is_some_and(|b| b.whale)) && !effects.iter().any(|e| e == "whale") {
+            effects.push("pool".to_string());
+            effects.push("whale".to_string());
+        }
+        if c.moves.iter().any(|m| m.minions.is_some_and(|md| !md.agent)) && !effects.iter().any(|e| e == "goblin") {
             effects.push("goblin".to_string());
+        }
+        if c.moves.iter().any(|m| m.minions.is_some_and(|md| md.agent)) && !effects.iter().any(|e| e == "agent") {
+            effects.push("agent".to_string());
+        }
+        for zone in c.moves.iter().filter_map(|m| m.zone) {
+            let name = match zone.kind {
+                t2f::sim::ZoneKind::Glitch => "glitch",
+                t2f::sim::ZoneKind::Spill => "spill",
+            };
+            if !effects.iter().any(|e| e == name) {
+                effects.push(name.to_string());
+            }
         }
         // and how many drawings each has, when a shot says (0 for the usual)
         let shots: Vec<_> = c.moves.iter().filter_map(|m| m.projectile.as_ref()).collect();
@@ -558,11 +587,18 @@ fn step_sim(
     mut fixed: ResMut<Time<Fixed>>,
     mut next: ResMut<NextState<AppState>>,
     mut info: ResMut<online::OnlineInfo>,
+    ready_press: ResMut<briefing::ReadyPress>,
+    mut brain: Local<Brain>,
     mut commands: Commands,
 ) {
     // the keys set in Options > Controls; player 2 is the CPU
     let mut player = settings.read_input(&keys);
     player.0 |= dev.hold;
+    let briefing = matches!(sim.0.phase, Phase::Briefing(_));
+    // (kept until the match starts: online, an input only counts on a frame the session actually advances)
+    if briefing && ready_press.0 {
+        player.0 |= Input::READY;
+    }
     // online: the other player's buttons come from the network
     if *mode == Mode::Online {
         if let Some(mut net) = net {
@@ -574,7 +610,11 @@ fn step_sim(
         }
         return;
     }
-    let inputs = [player, cpu_input_vs(&sim.0, 1, &roster.0[sel.chars[1]], &roster.0[sel.chars[0]])];
+    let mut cpu = brain.input(&sim.0, 1, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
+    if briefing {
+        cpu.0 |= Input::READY;
+    }
+    let inputs = [player, cpu];
     sim.0.step(inputs, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
 }
 
@@ -604,7 +644,8 @@ fn follow_camera(
     // across; `stretch` is how much, and the zoom is held back so the view never outgrows the map
     let aspect = if window.height() > 0.0 { window.width() / window.height() } else { VIEW_W / VIEW_H };
     let stretch = (aspect * VIEW_H / VIEW_W).max(1.0);
-    let target = ((a - b).abs() + ZOOM_MARGIN).max(MIN_VIEW_W).min(map_w / stretch);
+    let briefing = matches!(sim.0.phase, Phase::Briefing(_));
+    let target = if briefing { VIEW_W } else { ((a - b).abs() + ZOOM_MARGIN).max(MIN_VIEW_W).min(map_w / stretch) };
     if *width == 0.0 {
         *width = target;
     }
@@ -619,6 +660,12 @@ fn follow_camera(
     let (shake_x, shake_y) = ((t * 97.0).sin() * shake.0, (t * 131.0).cos() * shake.0);
     cam.0.translation.x = base + shake_x.round();
     cam.0.translation.y = GROUND_Y + view_h * (0.5 - FLOOR_FRACTION) + shake_y.round();
+    if briefing {
+        // the briefing is drawn on the pixel grid: centred, at the normal zoom
+        *width = VIEW_W;
+        cam.0.translation.x = 0.0;
+        cam.0.translation.y = 0.0;
+    }
     if let Projection::Orthographic(ortho) = &mut *cam.1 {
         ortho.scale = zoom;
     }
@@ -681,7 +728,7 @@ fn sync_hud(
         Phase::Fighting if s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60) => {
             format!("Round {}", s.round)
         }
-        Phase::Fighting => String::new(),
+        Phase::Fighting | Phase::Briefing(_) => String::new(),
         Phase::RoundEnd(_) => {
             if s.fighters.iter().any(|f| f.health <= 0) { "K.O.".into() } else { "Time!".into() }
         }
@@ -738,14 +785,17 @@ fn restart_match(
             commands.remove_resource::<online::NetSession>();
             next.set(AppState::Online);
         } else {
-            *sim = fresh_sim(&roster, &sel);
+            *sim = fresh_sim(&roster, &sel, false);
         }
     }
 }
 
 /// New match; each fighter starts with their character's health.
-fn fresh_sim(roster: &Roster, sel: &Selection) -> Sim {
+fn fresh_sim(roster: &Roster, sel: &Selection, briefing: bool) -> Sim {
     let mut sim = Sim::default();
+    if briefing {
+        sim.0.phase = Phase::Briefing(0);
+    }
     sim.0.set_health([0, 1].map(|i| roster.0[sel.chars[i]].health.unwrap_or(Fighter::MAX_HEALTH)));
     sim
 }

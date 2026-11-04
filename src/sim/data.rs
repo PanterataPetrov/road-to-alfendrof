@@ -39,9 +39,21 @@ pub struct CharacterData {
     /// A raven on the shoulder that `raven_move` moves can send out.
     #[serde(default)]
     pub raven: Option<RavenData>,
+    /// A supply of cigarettes that moves with `cig_cost` use up and that is rolled again while not fighting.
+    #[serde(default)]
+    pub cigarettes: Option<CigData>,
     /// The CPU plays this one as a zoner: it backs away to keep its distance and shoots.
     #[serde(default)]
     pub keeps_distance: bool,
+    /// What Light, Heavy and Special do, in that order, for the character select.
+    #[serde(default)]
+    pub blurbs: Vec<String>,
+    /// Not in the character select's carousel: it is found by pressing Up on the character with this name.
+    #[serde(default)]
+    pub secret_behind: Option<String>,
+    /// A dash towards the enemy is made behind a book held up in front: hits are blocked while it lasts (the Scribe).
+    #[serde(default)]
+    pub dash_shield: bool,
     /// Goes after everyone else in the character select.
     #[serde(default)]
     pub menu_last: bool,
@@ -124,9 +136,61 @@ pub enum AnimKind {
     Boost,
     /// Writing in a book: it opens, he writes (two drawings alternate), then a flourish (4 drawings).
     Write,
+    /// Throwing a cigarette: the arm back, the throw, taking a new one from the pack, lighting it (8 drawings).
+    Throw,
+    /// A quick cigarette toss: the arm back, the throw, the arm returning (3 drawings).
+    Toss,
+    /// The Professor's slam dunk: the reach, the hold on the shoulders, pushing himself up, the jump, the ball cocked, the
+    /// dunk, the landing (7 drawings).
+    Dunk,
+    /// Throwing an iced latte: the cup held back, the throw, the follow-through (3 drawings).
+    Latte,
     /// Crouching, arms up, leaping back into a portal, gone, lunging out behind the enemy, fangs bared, the bite,
     /// recovering (8 drawings).
     Portal,
+}
+
+/// A move whose shots, once `shots` of them have been blocked (without a hit in between, and not too long apart),
+/// stun the one who threw them for `stun` frames.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct BlockedStun {
+    pub shots: u8,
+    pub stun: u32,
+}
+
+/// A patch of the map a move leaves behind (see `MoveData::zone`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Deserialize)]
+pub enum ZoneKind {
+    /// A glitched area: whoever stands in it (except its owner) moves at a third of their speed, can't block, and
+    /// does half damage.
+    Glitch,
+    /// A spill on the ground: whoever stands on it (except its owner) has their controls reversed.
+    Spill,
+}
+
+/// Where and for how long a move leaves a zone: `half_width` pixels either side of its middle, for `life` frames.
+/// With `at_frame` it appears on the opponent when the move reaches that frame; without, where the move's
+/// projectile lands.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct ZoneData {
+    pub kind: ZoneKind,
+    pub half_width: i32,
+    pub life: u32,
+    #[serde(default)]
+    pub at_frame: u32,
+    /// Whoever is in the zone (but its owner) loses `tick_damage` health every `tick_every` frames.
+    #[serde(default)]
+    pub tick_damage: i32,
+    #[serde(default)]
+    pub tick_every: u32,
+}
+
+/// The cigarettes a character carries: `max` of them (one lit in the mouth, the rest in a pack), and how many
+/// frames he needs to roll a new one while he is not fighting.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct CigData {
+    pub max: u8,
+    pub roll_frames: u32,
 }
 
 /// Turning into a bat (see `MoveData::bat_form`).
@@ -216,6 +280,14 @@ pub struct ProjectileData {
     pub homing: bool,
     #[serde(default)]
     pub homing_turn: i32,
+    /// A spray: each shot of a volley of straight shots flies off up or down at a different slope, up to this many tenths
+    /// of a pixel a frame either way (the same pattern every time).
+    #[serde(default)]
+    pub fan: i32,
+    /// A shot that flies straight out but steers a little towards the opponent as it goes (each frame its velocity moves
+    /// `homing_turn` percent of the way to pointing at them): not a missile, it doesn't start by flying up or detonate.
+    #[serde(default)]
+    pub steer: bool,
     #[serde(default)]
     pub detonate: i32,
     /// A lob: flies from a spot in the sky (the moon) down to where the opponent stood at launch
@@ -236,7 +308,8 @@ pub struct ProjectileData {
     #[serde(default)]
     pub over_target: bool,
     /// Each shot of a lobbing volley lands somewhere within this many pixels either side of the locked
-    /// spot (the same pattern every time).
+    /// spot (the same pattern every time). Shots aimed at the floor (`aim_ground`) do the same round where the
+    /// target will be, over the whole range while they are moving and a third of it while they stand still.
     #[serde(default)]
     pub spread: i32,
     /// The projectile ignores blocking.
@@ -261,6 +334,9 @@ impl ProjectileData {
 /// every `interval` frames.
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct MinionData {
+    /// Fights like a little fighter (walks, dashes, punches in a pair, rolls away) instead of swarming and biting.
+    #[serde(default)]
+    pub agent: bool,
     pub count: u32,
     pub lifetime: u32,
     pub interval: u32,
@@ -306,6 +382,21 @@ pub struct CurseData {
     pub squeeze: u32,
 }
 
+/// The sounds of a move: names of the groups in `assets/sfx` (`name.wav`, or `name_0.wav`, `name_1.wav`... to pick from).
+/// What is left out falls back to a generic sound for the move's button, so a move works without any.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct MoveSfx {
+    /// As the move starts: the swing, the wind-up, the incantation.
+    pub cast: Option<String>,
+    /// When the move's shot, volley, summon or portal actually appears.
+    pub launch: Option<String>,
+    /// When it hits.
+    pub hit: Option<String>,
+    /// When it is blocked.
+    pub block: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct MoveData {
     pub name: String,
@@ -341,7 +432,7 @@ pub struct MoveData {
     #[serde(default)]
     pub guard_hits: Option<u32>,
     /// Steps in during the startup and the active frames at this forward speed (subpixels per frame), instead of
-    /// walking.
+    /// walking (a negative one steps back).
     #[serde(default)]
     pub lunge: i32,
     /// A hop backwards as the move starts: (upward, backward) speed in subpixels per frame. Unlike a leap,
@@ -354,6 +445,10 @@ pub struct MoveData {
     pub leap: i32,
     #[serde(default)]
     pub leap_vx: i32,
+    /// A move that pulls him through the air ends in a floor smash: once the pull has brought him to the opponent he
+    /// plunges to the floor, and the landing deals this much (the catch itself deals `damage`).
+    #[serde(default)]
+    pub smash_damage: i32,
     /// Once the fighter starts to fall during this move, gravity is only this percent as strong
     /// (0 = normal), so he floats down slowly (the Cowboy's volley).
     #[serde(default)]
@@ -463,9 +558,24 @@ pub struct MoveData {
     /// specials. Casting it once more, or waiting it out, turns her back in a puff of smoke that stuns.
     #[serde(default)]
     pub bat_form: Option<BatFormData>,
+    /// What happens to the thrower when the move's shots get blocked (see `BlockedStun`).
+    #[serde(default)]
+    pub blocked_stun: Option<BlockedStun>,
+    /// A zone this move leaves on the map (see `ZoneData`).
+    #[serde(default)]
+    pub zone: Option<ZoneData>,
+    /// Cigarettes this move uses up (see `CharacterData::cigarettes`); it can't be used with fewer left.
+    #[serde(default)]
+    pub cig_cost: u32,
+    /// Used in place of this button's other move when there aren't enough cigarettes for it.
+    #[serde(default)]
+    pub out_of_cigs: bool,
     /// After this move starts it can't be started again for this many frames (the staff slam).
     #[serde(default)]
     pub cooldown: u32,
+    /// This move's sounds (see `MoveSfx`).
+    #[serde(default)]
+    pub sfx: MoveSfx,
     /// While the hitbox is active, every enemy projectile within the hitbox's horizontal range (at any
     /// height up to a little above the head) is destroyed, except `melee` ones (the staff's shockwave).
     #[serde(default)]
@@ -484,9 +594,54 @@ pub struct MoveData {
     /// A beam of light that sweeps across the opponent (see `BeamData`).
     #[serde(default)]
     pub beam: Option<BeamData>,
-    /// Once the startup is over (it is firing) being hit hurts but no longer interrupts the move.
+    /// Once it is under way (see `commit_frame`) being hit hurts but no longer interrupts the move.
     #[serde(default)]
     pub committed: bool,
+    /// Used instead of the same button's cigarette move when it is the last cigarette: he puts a new one in his mouth and
+    /// lights it, and then fights with the lighter until the pack is rolled again.
+    #[serde(default)]
+    pub last_cig: bool,
+    /// When this move lands (unblocked) the attacker gets plot armour for this many frames: a blue bubble that nothing gets
+    /// through.
+    #[serde(default)]
+    pub plot_armour: u32,
+    /// Used instead of a dash away from the enemy (a double tap backwards): it moves him back as it throws (the Scribe's
+    /// pencil).
+    #[serde(default)]
+    pub dash_throw: bool,
+    /// A move thrown in bursts: after this many throws in a row (each within `Fighter::BURST_WINDOW` frames of the last) it
+    /// is reloading for `burst_reload` frames (the Scribe's quills).
+    #[serde(default)]
+    pub burst_shots: u32,
+    #[serde(default)]
+    pub burst_reload: u32,
+    /// What he says once a move with a line (`say`) has done its last hit.
+    #[serde(default)]
+    pub say_after: Option<String>,
+    /// The frame at which `hop` happens (1 if 0).
+    #[serde(default)]
+    pub hop_at: u32,
+    /// The frame from which a `committed` move can't be interrupted, instead of the default of `commit_frame`.
+    #[serde(default)]
+    pub commit_at: Option<u32>,
+    /// A version of another move for when the foe is this close (pixels): it is used instead of the standing, crouching
+    /// or air move of the same button (Katmata's lighter instead of a cigarette).
+    #[serde(default)]
+    pub within: Option<i32>,
+    /// The same for when the foe is further than this (the Scribe's thrown quill). Combo finishers keep their place.
+    #[serde(default)]
+    pub beyond: Option<i32>,
+    /// Whoever this move hits loses health over a short time (see `BleedData`).
+    #[serde(default)]
+    pub bleed: Option<BleedData>,
+}
+
+/// Bleeding: `damage` health lost every `every` frames, `ticks` times.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct BleedData {
+    pub damage: i32,
+    pub every: u32,
+    pub ticks: u32,
 }
 
 /// A beam of light that sweeps across the opponent. At frame `lock_frame` of the move the spot where
@@ -500,6 +655,10 @@ pub struct BeamData {
     pub sweep: i32,
     pub width: i32,
     pub height: i32,
+    /// Not light from the sky but a pool of water at the locked spot with a whale's head coming up out of it (with no
+    /// `lead` and no `sweep` the column stays where it is).
+    #[serde(default)]
+    pub whale: bool,
 }
 
 /// When a held move fires: at held frame `first`, then every `every` frames.
@@ -524,6 +683,16 @@ impl MoveData {
 
     pub fn guard_need(&self) -> u32 {
         self.guard_hits.unwrap_or(if self.button == Button::Light { 0 } else { 1 })
+    }
+
+    /// The frame from which a `committed` move can't be interrupted: as soon as what it calls up shows (the
+    /// portal over the enemy, Jesus in the sky), or else when the startup ends.
+    pub fn commit_frame(&self) -> u32 {
+        if let Some(at) = self.commit_at {
+            return at;
+        }
+        let shown = self.beam.map(|b| b.lock_frame).or_else(|| self.projectile.as_ref().filter(|p| p.lob && p.over_target).map(|p| p.lock_frame));
+        shown.filter(|&f| f > 0).unwrap_or(self.startup + 1).min(self.startup + 1)
     }
 
     pub fn total_frames(&self) -> u32 {
@@ -587,9 +756,36 @@ impl CharacterData {
         self.moves.iter().find_map(|m| m.bat_form)
     }
 
+    /// The Light that takes the place of the usual one when the cigarettes have run out.
+    pub fn out_of_cigs_move(&self, button: Button) -> Option<usize> {
+        self.moves.iter().position(|m| m.out_of_cigs && m.button == button)
+    }
+
     /// The move that grants the bat form.
     pub fn bat_move(&self) -> Option<usize> {
         self.moves.iter().position(|m| m.bat_form.is_some())
+    }
+
+    /// The move to start in place of `index` when the foe is `dist` pixels away: a move of the same kind with `within` or
+    /// `beyond` that fits the gap, or `index` itself.
+    pub fn ranged_variant(&self, index: usize, dist: i32) -> usize {
+        let base = &self.moves[index];
+        let fits = |m: &MoveData| m.within.is_some_and(|d| dist <= d) || (m.beyond.is_some_and(|d| dist > d) && !base.finisher_move);
+        let same_kind = |m: &MoveData| m.button == base.button && m.air == base.air && m.crouching == base.crouching;
+        // a variant for the very same step of the combo first (the Professor's kicks), then one for any step (the lighter)
+        let step = |i: usize, m: &MoveData| i != index && same_kind(m) && fits(m) && m.combo_step == base.combo_step && m.finisher_move == base.finisher_move;
+        let any = |i: usize, m: &MoveData| i != index && same_kind(m) && fits(m) && m.combo_step.is_none() && !m.finisher_move;
+        self.moves.iter().enumerate().find(|(i, m)| step(*i, m)).or_else(|| self.moves.iter().enumerate().find(|(i, m)| any(*i, m))).map_or(index, |(i, _)| i)
+    }
+
+    /// The move that replaces a dash away from the enemy, if there is one.
+    pub fn dash_throw_move(&self) -> Option<usize> {
+        self.moves.iter().position(|m| m.dash_throw)
+    }
+
+    /// The move for the last cigarette of a button, if there is one.
+    pub fn last_cig_move(&self, button: Button) -> Option<usize> {
+        self.moves.iter().position(|m| m.last_cig && m.button == button)
     }
 
     pub fn find_move(&self, button: Button, crouching: bool, air: bool) -> Option<usize> {

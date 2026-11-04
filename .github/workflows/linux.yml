@@ -1,58 +1,97 @@
+# Run manually for downloadable x86-64 packages, or let release.yml collect them on main.
+# This workflow never publishes a release itself.
+# Ubuntu 22.04 keeps the glibc baseline at 2.35 (Debian 12+ and current Fedora).
+# Package versions come from Cargo.toml; see RELEASING.md for stable release instructions.
+# Install DEB/RPM with apt/dnf. AppImages need chmod +x and FUSE, or --appimage-extract-and-run.
+# All formats include the assets and desktop icon; a host Vulkan graphics driver is still required.
 name: Linux build
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Install native dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers xvfb
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Test
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
         run: |
-          cargo test --lib
-          rustc --edition=2021 --test src/update_install.rs -o /tmp/update-tests
-          /tmp/update-tests
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxkbcommon-dev \
+            libwayland-dev libvulkan1 mesa-vulkan-drivers \
+            imagemagick desktop-file-utils dpkg-dev rpm file xvfb xauth
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test (release profile)
+        run: cargo test --locked --release --lib
+
+      - name: Test standalone updater
+        run: |
+          rustc --edition=2021 --test src/update_install.rs -o "$RUNNER_TEMP/update-tests"
+          "$RUNNER_TEMP/update-tests"
+
       - name: Build
         run: cargo build --locked --release --bin t2f
-      - name: Package
-        run: sh installer/linux/package.sh target/release/t2f dist x86_64
-      - name: Build AppImage
+
+      - name: Install AppImage packaging tool
         run: |
-          curl --fail --location --proto '=https' --proto-redir '=https' \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
-            -o /tmp/appimagetool
-          echo 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool' | sha256sum --check
-          chmod +x /tmp/appimagetool
-          sh installer/linux/appimage.sh target/release/t2f /tmp/appimagetool dist
+          curl --fail --location --output "$RUNNER_TEMP/linuxdeploy.AppImage" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  '"$RUNNER_TEMP/linuxdeploy.AppImage" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
+
+      - name: Package AppImage, DEB, RPM and portable archive
+        env:
+          LINUXDEPLOY: ${{ runner.temp }}/linuxdeploy.AppImage
+        run: bash installer/linux/package.sh
+
+      - name: Inspect packages
+        run: |
+          desktop-file-validate installer/linux/road-to-alfendrof.desktop
+          dpkg-deb --info dist/*.deb
+          rpm --query --package --info dist/*.rpm
+          file dist/*.AppImage
+          # Extraction also checks the AppImage's embedded filesystem without needing FUSE.
+          cd "$RUNNER_TEMP"
+          appimages=("$GITHUB_WORKSPACE"/dist/*.AppImage)
+          "${appimages[0]}" --appimage-extract >/dev/null
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/usr/bin/road-to-alfendrof
+          diff -qr "$GITHUB_WORKSPACE/assets" squashfs-root/usr/bin/assets
+
       - name: Smoke-test packaged AppImage
         env:
           # Never let a packaging smoke run replace its artifact with a live release.
           https_proxy: http://127.0.0.1:9
           WGPU_BACKEND: vulkan
         run: |
-          APPIMAGE=$(find dist -maxdepth 1 -name 'RoadToAlfendrof-*-x86_64.AppImage' -print -quit)
-          timeout 60s xvfb-run -a "$APPIMAGE" --appimage-extract-and-run \
-            --title --screenshot "$PWD/dist/linux-smoke.png" --delay 3
-      - uses: actions/upload-artifact@v4
+          appimages=("$PWD"/dist/*.AppImage)
+          timeout 60s xvfb-run -a "${appimages[0]}" --appimage-extract-and-run \
+            --title --screenshot "$RUNNER_TEMP/linux-smoke.png" --delay 3
+
+      - name: Upload Linux render smoke
+        uses: actions/upload-artifact@v7
+        with:
+          name: RoadToAlfendrof-Linux-render-smoke
+          if-no-files-found: error
+          path: ${{ runner.temp }}/linux-smoke.png
+
+      - uses: actions/upload-artifact@v7
         with:
           name: RoadToAlfendrof-Linux-x86_64
+          if-no-files-found: error
           path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
             dist/RoadToAlfendrof-Linux-x86_64.tar.gz
-            dist/RoadToAlfendrof-*-x86_64.AppImage
-            dist/linux-smoke.png
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/RoadToAlfendrof-Linux-x86_64.tar.gz
-            dist/RoadToAlfendrof-*-x86_64.AppImage

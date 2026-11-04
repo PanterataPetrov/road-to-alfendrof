@@ -1,60 +1,46 @@
-# One universal app for Apple Silicon and Intel; ZIP updater payload and drag-to-install DMG.
-# Run manually to download artifacts without publishing, or tag vX.Y.Z to attach to a release.
+# Builds an Apple Silicon app as an updater ZIP and drag-to-install DMG; no Intel release.
+# Run manually for artifacts, or let release.yml collect them for a stable release on main.
 name: Mac build
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test
+      # Tests and the app use the same release profile and ARM64 target to reuse dependencies.
+      - name: Test (release profile)
         run: |
-          cargo test --lib
-          rustc --edition=2021 --test src/update_install.rs -o /tmp/update-tests
-          /tmp/update-tests
+          cargo test --locked --release --lib --target aarch64-apple-darwin
+          rustc --edition=2021 --test src/update_install.rs -o "$RUNNER_TEMP/update-tests"
+          "$RUNNER_TEMP/update-tests"
 
-      - name: Build (Apple Silicon and Intel)
-        run: |
-          cargo build --release --bin t2f --target aarch64-apple-darwin
-          cargo build --release --bin t2f --target x86_64-apple-darwin
+      - name: Build (Apple Silicon)
+        run: cargo build --locked --release --bin t2f --target aarch64-apple-darwin
 
-      - name: Package universal app, update ZIP and installer DMG
+      - name: Package Apple Silicon app, update ZIP and installer DMG
         run: |
-          mkdir -p dist
-          lipo -create -output dist/t2f-universal \
-            target/aarch64-apple-darwin/release/t2f \
-            target/x86_64-apple-darwin/release/t2f
-          lipo dist/t2f-universal -verify_arch arm64 x86_64
           VERSION=$(ruby -e 'puts File.read("Cargo.toml")[/^version\s*=\s*"([^"]+)"/, 1]')
-          bash installer/mac/package.sh --binary dist/t2f-universal --output dist --version "$VERSION"
+          bash installer/mac/package.sh \
+            --binary target/aarch64-apple-darwin/release/t2f \
+            --output dist --version "$VERSION"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RoadToAlfendrof-Mac
+          if-no-files-found: error
           path: |
             dist/RoadToAlfendrof-Mac.zip
             dist/RoadToAlfendrof-Mac.dmg
-          if-no-files-found: error
-
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/RoadToAlfendrof-Mac.zip
-            dist/RoadToAlfendrof-Mac.dmg
-          fail_on_unmatched_files: true

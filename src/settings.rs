@@ -73,6 +73,8 @@ impl Display {
 pub struct Settings {
     /// 0 to 10.
     pub music_volume: u8,
+    /// 0 to 10: hits, blocks and whooshes in a fight.
+    pub sfx_volume: u8,
     pub display: Display,
     /// One key per entry of `ACTIONS`.
     pub keys: [KeyCode; ACTIONS.len()],
@@ -80,7 +82,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { music_volume: 7, display: Display::Windowed, keys: ACTIONS.map(|(_, _, key)| key) }
+        Settings { music_volume: 7, sfx_volume: 8, display: Display::Windowed, keys: ACTIONS.map(|(_, _, key)| key) }
     }
 }
 
@@ -90,6 +92,10 @@ impl Settings {
     /// The volume to play music at (squared, so the steps sound even).
     pub fn music_gain(&self) -> f32 {
         (self.music_volume as f32 / Self::MAX_VOLUME as f32).powi(2)
+    }
+
+    pub fn sfx_gain(&self) -> f32 {
+        (self.sfx_volume as f32 / Self::MAX_VOLUME as f32).powi(2)
     }
 
     pub fn key(&self, flag: u16) -> KeyCode {
@@ -121,8 +127,15 @@ impl Settings {
 #[derive(Serialize, Deserialize)]
 struct Saved {
     music_volume: u8,
+    /// Missing in files saved before sound effects existed.
+    #[serde(default = "default_sfx_volume")]
+    sfx_volume: u8,
     display: Display,
     keys: Vec<(String, String)>,
+}
+
+fn default_sfx_volume() -> u8 {
+    Settings::default().sfx_volume
 }
 
 fn settings_path() -> PathBuf {
@@ -148,6 +161,7 @@ pub fn load() -> Settings {
         }
     };
     settings.music_volume = saved.music_volume.min(Settings::MAX_VOLUME);
+    settings.sfx_volume = saved.sfx_volume.min(Settings::MAX_VOLUME);
     settings.display = saved.display;
     for (action, key) in saved.keys {
         let i = ACTIONS.iter().position(|a| a.0 == action);
@@ -162,6 +176,7 @@ pub fn load() -> Settings {
 fn save(settings: &Settings) {
     let saved = Saved {
         music_volume: settings.music_volume,
+        sfx_volume: settings.sfx_volume,
         display: settings.display,
         keys: ACTIONS.iter().zip(settings.keys).map(|(a, k)| (a.0.to_string(), format!("{k:?}"))).collect(),
     };

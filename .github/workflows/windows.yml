@@ -1,0 +1,67 @@
+name: Windows build
+
+# Run manually for an installer artifact, or let release.yml collect it for publication.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x86_64 installer
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test library (release profile)
+        run: |
+          cargo test --locked --release --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The MSVC runner's host target is x86_64-pc-windows-msvc; keeping the default
+      # target directory matches the existing Inno Setup script's target/release input.
+      - name: Build game
+        run: |
+          cargo build --locked --release --bin t2f
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Download DirectX shader compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./installer/get_dxc.ps1
+
+      - name: Build installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadataJson = cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metadata = $metadataJson | ConvertFrom-Json
+          $package = @($metadata.packages | Where-Object { $_.name -eq 't2f' })
+          if ($package.Count -ne 1) { throw 'Expected exactly one t2f package.' }
+          $version = $package[0].version
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & $iscc "/DAppVersion=$version" installer/road-to-alfendrof.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: RoadToAlfendrof-Windows-x86_64
+          path: installer/Output/RoadToAlfendrof-Setup.exe
+          if-no-files-found: error

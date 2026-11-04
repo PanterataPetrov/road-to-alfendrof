@@ -16,6 +16,8 @@
 (
     name: "Cowboy From Hell",
     subtitle: Some("Proud owner of real cattle"),
+    // what Light, Heavy and Special do, shown in the character select
+    blurbs: ["Two finger-gun shots, then a lasso that pulls the enemy in and stuns them.", "Fires at the ground and launches himself up, then shoots three bullets at the floor below.", "Throws his hat to curse the enemy: hit them from both sides to break the ring before it squeezes."],
     sprites: Some("cowboy"),
     color: (0.85, 0.58, 0.32),
     walk_speed: 210,
@@ -30,16 +32,16 @@
     air_shot_tilt: true,
     moves: [
         // the combo: shot, shot, lasso
-        (name: "Finger Shot", button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(0),
-         startup: 9, active: 2, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+        (name: "Finger Shot", sfx: (cast: Some(""), launch: Some("shot_pistol")), button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(0),
+         startup: 6, active: 2, recovery: 6, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
-        (name: "Finger Shot 2", button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(1),
-         startup: 9, active: 2, recovery: 8, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+        (name: "Finger Shot 2", sfx: (cast: Some(""), launch: Some("shot_pistol")), button: Light, crouching: false, anim: Punch, walk_pct: 60, combo_step: Some(1),
+         startup: 6, active: 2, recovery: 6, damage: 26, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 30, y: 44, aim_y: 44, travel_frames: 1, lifetime: 200, size: (8, 6), image: Some("bullet"), speed: 6))),
         // third hit: the lasso drags the opponent in a little and leaves them stunned
-        (name: "Lasso", button: Light, crouching: false, anim: Punch, walk_pct: 0, finisher_move: true,
+        (name: "Lasso", sfx: (cast: Some("whip_crack")), button: Light, crouching: false, anim: Punch, walk_pct: 0, finisher_move: true,
          pull_foe: true, pull_gap: 38, assist: 8, rope: true,
          startup: 11, active: 4, recovery: 16, damage: 30, hitstun: 48, blockstun: 10, knockback: 0, hitstop: 5,
          hitbox: (x: 10, y: 26, w: 120, h: 18)),
@@ -47,19 +49,20 @@
          startup: 10, active: 3, recovery: 9, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 12, y: 0, w: 26, h: 12)),
         // the one aimed shot, from the air
-        (name: "Air Shot", button: Light, crouching: false, air: true, anim: Hard, walk_pct: 100,
+        (name: "Air Shot", sfx: (cast: Some(""), launch: Some("shot_pistol")), button: Light, crouching: false, air: true, anim: Hard, walk_pct: 100,
          startup: 15, active: 2, recovery: 14, damage: 45, hitstun: 18, blockstun: 12, knockback: 3, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          projectile: Some((x: 26, y: 26, aim_y: 28, travel_frames: 12, lifetime: 40, size: (10, 6), image: Some("bullet"), aimed: true))),
         // both guns at the ground (the splash), up he goes, then the volley at the enemy; needs the ground
-        (name: "Gun Boost", button: Heavy, crouching: false, anim: Boost, walk_pct: 0,
+        (name: "Gun Boost", sfx: (cast: Some("shot_shotgun"), launch: Some("shot_pistol")), button: Heavy, crouching: false, anim: Boost, walk_pct: 0,
          leap: 1296, leap_vx: 40, slow_fall: 20, escape: true, radial: true, guard_hits: Some(2), cooldown: 150,
-         volley: 3, volley_gap: 8, volley_delay: 24, shot_damage: Some(11),
+         committed: true, commit_at: Some(3),
+         volley: 4, volley_gap: 8, volley_delay: 24, shot_damage: Some(11),
          startup: 14, active: 5, recovery: 55, damage: 44, hitstun: 22, blockstun: 12, knockback: 5, hitstop: 7,
          hitbox: (x: -48, y: 0, w: 96, h: 30),
-         projectile: Some((x: 30, y: 30, aim_y: 30, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet"), aimed: true, aim_ground: true))),
+         projectile: Some((x: 30, y: 30, aim_y: 30, travel_frames: 10, lifetime: 45, size: (10, 6), image: Some("bullet"), aimed: true, aim_ground: true, spread: 48))),
         // the hat: it flies at the enemy and the curse starts where it lands (the damage comes when the ring closes)
-        (name: "Hell's Hat", button: Special, crouching: false, anim: Summon, walk_pct: 0, cooldown: 420,
+        (name: "Hell's Hat", sfx: (cast: Some("fire_cast"), launch: Some("fire_burst"), hit: Some("fire_hit")), button: Special, crouching: false, anim: Summon, walk_pct: 0, cooldown: 420,
          curse: Some((duration: 420, squeeze: 24)),
          startup: 22, active: 3, recovery: 22, damage: 200, hitstun: 24, blockstun: 16, knockback: 0, hitstop: 8,
          hitbox: (x: 0, y: 0, w: 0, h: 0),

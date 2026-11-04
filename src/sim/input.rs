@@ -16,6 +16,8 @@ impl Input {
     /// Q and E: roll left or right (on the ground or in the air).
     pub const ROLL_LEFT: u16 = 1 << 8;
     pub const ROLL_RIGHT: u16 = 1 << 9;
+    /// Ready to start, on the screen before a match; the fight itself ignores it.
+    pub const READY: u16 = 1 << 10;
 
     pub fn has(self, flag: u16) -> bool {
         self.0 & flag != 0

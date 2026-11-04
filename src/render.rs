@@ -82,6 +82,16 @@ pub struct WorryLine(pub usize, pub usize);
 pub struct JesusOf(pub usize);
 #[derive(Component)]
 pub struct BeamPart(pub usize, pub bool);
+/// The blue bubble of plot armour round a fighter, and its label.
+#[derive(Component)]
+pub struct ShieldOf(pub usize);
+#[derive(Component)]
+pub struct ShieldLabel(pub usize);
+/// The pool and the whale's head of a fighter whose beam is a whale.
+#[derive(Component)]
+pub struct PoolOf(pub usize);
+#[derive(Component)]
+pub struct WhaleOf(pub usize);
 #[derive(Component)]
 pub struct BubbleText(pub usize);
 
@@ -115,7 +125,7 @@ fn all_stems(frames: &[Frame], effects: &[(String, usize)], mark: bool, whip: bo
         stems.extend(frames.iter().map(|f| format!("{}_mark", f.file_stem())));
     }
     for (base, drawings) in effects {
-        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 5 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
+        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 8 } else if base == "agent" { 9 } else if base == "glitch" { 4 } else if base == "whale" { 6 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
         stems.extend((0..count).map(|i| format!("{base}_{i}")));
     }
     stems
@@ -256,6 +266,43 @@ pub fn spawn_fighter(
                 .id();
             commands.entity(root).add_child(line);
         }
+        // the bubble of plot armour, and the words on its top left
+        if effects.iter().any(|e| e.0 == "shield") {
+            commands.spawn((
+                ShieldOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("shield_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 2.0),
+                Visibility::Hidden,
+            ));
+            commands.spawn((
+                ShieldLabel(fighter),
+                DespawnOnExit(AppState::Fight),
+                Text2d::new("Plot Armour"),
+                crate::pixel_font(8.0),
+                TextColor(Color::srgb(0.7, 0.9, 1.0)),
+                bevy::sprite::Anchor::BOTTOM_LEFT,
+                Transform::from_xyz(0.0, 0.0, 2.2),
+                Visibility::Hidden,
+            ));
+        }
+        // the pool and the whale that comes up out of it
+        if effects.iter().any(|e| e.0 == "whale") {
+            commands.spawn((
+                PoolOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("pool_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 1.0),
+                Visibility::Hidden,
+            ));
+            commands.spawn((
+                WhaleOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("whale_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 1.2),
+                Visibility::Hidden,
+            ));
+        }
         // Jesus and his beam, in the sky
         if effects.iter().any(|e| e.0 == "jesus") {
             commands.spawn((
@@ -310,6 +357,7 @@ pub fn spawn_fighter(
 /// Whether a fighter is speaking: both at the start of a round, the winner at the end.
 fn speaking(s: &GameState, fighter: usize) -> bool {
     match s.phase {
+        Phase::Briefing(_) => false,
         Phase::Fighting => s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60),
         Phase::RoundEnd(_) => false,
         Phase::MatchOver => s.match_winner() == Some(fighter),
@@ -373,6 +421,11 @@ pub fn animate_body(
         }
         if f.futile > 0 {
             set_ne!(sprite.color, futile_tint(sprite.color));
+        }
+        // bleeding: washed over with red
+        if f.bleed_ticks > 0 {
+            let c = sprite.color.to_srgba();
+            set_ne!(sprite.color, Color::srgba(c.red, c.green * 0.65, c.blue * 0.65, c.alpha));
         }
         // inside a portal there is nothing to see
         if f.hidden {
@@ -714,7 +767,7 @@ pub fn animate_moons(
                 set_ne!(tf.translation.y, GROUND_Y + (y / PX) as f32);
                 let grow = (age as f32 / 12.0).min(1.0).max(0.1);
                 // a portal over the opponent is wide
-                tf.scale = if base == "portal" { Vec3::new(grow * 1.9, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
+                tf.scale = if base == "portal" { Vec3::new(grow * 5.6, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
                 let fade = ((Fighter::MOON_LIFE - age.min(Fighter::MOON_LIFE)) as f32 / 25.0).min(1.0);
                 set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, fade));
                 let twinkle = (sim.0.frame / 8 % CRESCENT_FRAMES as u32) as usize;
@@ -769,7 +822,10 @@ pub fn animate_bubbles(
         let index = lingering.unwrap_or(f.attack.min(data.moves.len() - 1));
         let mv = &data.moves[index];
         // a writing move says its line (with the enemy's name in it) while it plays
-        let line = mv.say.as_ref().map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
+        // (a move can have a second line, said once its last hit has landed)
+        let last_hit = mv.startup + (mv.hits.max(1) - 1) * mv.hit_gap;
+        let said_after = attacking && mv.say_after.is_some() && f.state_frame > last_hit;
+        let line = if said_after { mv.say_after.as_ref() } else { mv.say.as_ref() }.map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
         spoken[*i] = if attacking && line.is_some() { Some(index) } else { lingering };
         // a grab says it while he holds the enemy (after the pull); the others while they wind up
         let grabbing = mv.hits > 1;
@@ -786,6 +842,10 @@ pub fn animate_bubbles(
             let full = wrap_words(&line.clone().unwrap_or_else(|| LECTURE_LINE.to_string()), BUBBLE_LINE);
             let progress = if lingering.is_some() {
                 1.0
+            } else if line.is_some() {
+                // a written line types at its own pace (30 letters a second), whatever the move is doing
+                let typed_for = if said_after { f.state_frame - last_hit } else { f.state_frame };
+                (typed_for as f32 * if said_after { 1.5 } else { 0.5 } / full.chars().count().max(1) as f32).min(1.0)
             } else if grabbing {
                 (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
             } else {
@@ -949,6 +1009,81 @@ pub fn animate_skill_bar(
         if text.0 != shown {
             text.0 = shown;
         }
+    }
+}
+
+/// One of the zones on the map (glitched areas and spills), shown by the first four.
+#[derive(Component)]
+pub struct ZoneSprite(pub usize);
+
+pub fn spawn_zone_sprites(mut commands: Commands) {
+    for i in 0..4 {
+        commands.spawn((ZoneSprite(i), DespawnOnExit(AppState::Fight), Sprite::default(), Transform::from_xyz(0.0, 0.0, 0.3), Visibility::Hidden));
+    }
+}
+
+/// Draw each zone: its drawings cycle, and it fades in as it appears and out as it ends.
+pub fn animate_zones(sim: Res<Sim>, handles: Res<FrameHandles>, mut sprites: Query<(&ZoneSprite, &mut Sprite, &mut Transform, &mut Visibility)>) {
+    use t2f::sim::ZoneKind;
+    for (ZoneSprite(i), mut sprite, mut tf, mut visibility) in &mut sprites {
+        let Some(z) = sim.0.zones.get(*i) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        set_ne!(*visibility, Visibility::Inherited);
+        let (name, count, y, depth) = match z.kind {
+            ZoneKind::Glitch => ("glitch", 4, 39.0, 0.3),
+            ZoneKind::Spill => ("spill", 2, 3.0, 0.2),
+        };
+        let frame = (sim.0.frame / if z.kind == ZoneKind::Glitch { 3 } else { 14 }) as usize % count;
+        if let Some(image) = handles.0.get(z.owner).and_then(|m| m.get(&format!("{name}_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+        set_ne!(tf.translation.x, (z.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + y);
+        set_ne!(tf.translation.z, depth);
+        let alpha = (z.age as f32 / 12.0).min(1.0) * (z.life.saturating_sub(z.age) as f32 / 20.0).min(1.0);
+        sprite.color = Color::srgba(1.0, 1.0, 1.0, alpha);
+    }
+}
+
+/// One cigarette in a fighter's row under the special bar (the first is the lit one in his mouth).
+#[derive(Component)]
+pub struct CigaretteIcon(pub usize, pub usize);
+
+/// The row of cigarettes under each health bar, for a character who carries them.
+pub fn spawn_cigarette_hud(mut commands: Commands, hud: Single<Entity, With<crate::HudRoot>>) {
+    commands.entity(*hud).with_children(|h| {
+        for side in 0..2usize {
+            let dir = if side == 0 { -1.0 } else { 1.0 };
+            let left = dir * (crate::BAR_EDGE - crate::BAR_W / 2.0) - crate::BAR_W / 2.0;
+            let y = crate::BAR_Y - crate::BAR_H / 2.0 - 12.0;
+            for k in 0..7usize {
+                let x = left + 5.0 + k as f32 * 9.0;
+                h.spawn((CigaretteIcon(side, k), Sprite::from_color(Color::srgb(0.96, 0.95, 0.9), Vec2::new(7.0, 2.0)), Transform::from_xyz(x, y, 10.1), Visibility::Hidden));
+                // the filter end, and an ember on the lit one
+                h.spawn((CigaretteIcon(side, k + 10), Sprite::from_color(if k == 0 { Color::srgb(1.0, 0.45, 0.1) } else { Color::srgb(0.85, 0.55, 0.25) }, Vec2::new(2.0, 2.0)), Transform::from_xyz(x + 4.5, y, 10.2), Visibility::Hidden));
+            }
+        }
+    });
+}
+
+/// Show as many of the row as the fighter has cigarettes left; hidden for a character who has none.
+pub fn animate_cigarettes(sim: Res<Sim>, roster: Res<Roster>, sel: Res<Selection>, mut icons: Query<(&CigaretteIcon, &mut Sprite, &mut Visibility)>) {
+    for (CigaretteIcon(side, k), mut sprite, mut visibility) in &mut icons {
+        let data = &roster.0[sel.chars[*side]];
+        let Some(c) = data.cigarettes else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        let index = *k % 10;
+        set_ne!(*visibility, if index < c.max as usize { Visibility::Inherited } else { Visibility::Hidden });
+        let left = sim.0.fighters[*side].cigs(data) as usize;
+        let alpha = if index < left { 1.0 } else { 0.18 };
+        let c = sprite.color.to_srgba();
+        sprite.color = Color::srgba(c.red, c.green, c.blue, alpha);
     }
 }
 
@@ -1209,19 +1344,34 @@ pub fn animate_minions(
         };
         set_ne!(*visibility, Visibility::Inherited);
         let frame = match m.mode {
+            _ if m.agent => {
+                // 0, 1 walking; 2 winding up a punch; 3 punching; 4 dashing; 5 rolling
+                use t2f::sim::MinionMode;
+                match m.mode {
+                    MinionMode::Dash => 4,
+                    MinionMode::Roll => 5 + ((m.timer / 3) % 4) as usize,
+                    MinionMode::Punch if (4..9).contains(&m.timer) || (14..19).contains(&m.timer) => 3,
+                    MinionMode::Punch => 2,
+                    _ => ((sim.0.frame / 7) % 2) as usize,
+                }
+            }
             _ => {
+                // 0, 1 waiting; 2 to 5 running; 6 jaws wide; 7 snapping shut as it lunges
                 let foe_x = sim.0.fighters[1 - *owner].x;
                 if m.bit && m.timer < 8 {
-                    4
+                    7
                 } else if (foe_x - m.x).abs() < 30 * PX {
-                    // on top of the enemy and snapping at them
-                    ((sim.0.frame / 8) % 2) as usize * 4
+                    // on top of the enemy and working its jaws
+                    6 + ((sim.0.frame / 6) % 2) as usize
+                } else if m.mode == t2f::sim::MinionMode::Wait {
+                    ((sim.0.frame / 12) % 2) as usize
                 } else {
-                    2 + ((sim.0.frame / 5) % 2) as usize
+                    2 + ((sim.0.frame / 4) % 4) as usize
                 }
             }
         };
-        if let Some(image) = handles.0.get(*owner).and_then(|h| h.get(&format!("goblin_{frame}"))) {
+        let name = if m.agent { "agent" } else { "goblin" };
+        if let Some(image) = handles.0.get(*owner).and_then(|h| h.get(&format!("{name}_{frame}"))) {
             if sprite.image != *image {
                 if sprite.image != *image {
                     sprite.image = image.clone();
@@ -1229,8 +1379,12 @@ pub fn animate_minions(
             }
         }
         sprite.flip_x = m.facing < 0;
-        set_ne!(tf.translation.x, (m.x / PX) as f32);
-        set_ne!(tf.translation.y, GROUND_Y + 12.0);
+        // a goblin is drawn at 1x (32 x 24, feet on the bottom row); an agent like a fighter (84 x 63, body centre left of
+        // the middle, feet on the bottom row)
+        let shift = if m.agent { (FRAME_W as f32 / 2.0 - t2f::anim::CENTRE_X as f32) * m.facing as f32 } else { 0.0 };
+        set_ne!(tf.translation.x, (m.x / PX) as f32 + shift);
+        set_ne!(tf.translation.y, GROUND_Y + if m.agent { FULL_H as f32 / 2.0 } else { 12.0 });
+        set_ne!(tf.scale, Vec3::splat(1.0));
         // fades out in its last half second
         let left = 480u32.saturating_sub(m.age);
         let alpha = if left < 30 { left as f32 / 30.0 } else { 1.0 };
@@ -1289,14 +1443,14 @@ pub fn animate_scribe_effects(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        match (f.state == FighterState::Attack, mv.beam, f.beam_lock) {
+        match (f.state == FighterState::Attack, mv.beam.filter(|b| !b.whale), f.beam_lock) {
             (true, Some(b), Some(lock)) => {
                 set_ne!(*visibility, Visibility::Inherited);
                 let age = f.state_frame.saturating_sub(b.lock_frame);
                 let rise = (age as f32 / 14.0).min(1.0);
                 let leave = if f.state_frame > mv.startup + mv.active { ((mv.total_frames() - f.state_frame.min(mv.total_frames())) as f32 / 12.0).min(1.0) } else { 1.0 };
                 set_ne!(tf.translation.x, (lock / PX) as f32 - f.facing as f32 * b.lead as f32);
-                set_ne!(tf.translation.y, GROUND_Y + 128.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5);
+                set_ne!(tf.translation.y, GROUND_Y + 170.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5);
                 set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, rise * leave));
                 let frame = (sim.0.frame / 8 % 2) as usize;
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("jesus_{frame}"))) {
@@ -1312,7 +1466,7 @@ pub fn animate_scribe_effects(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) else {
+        let (Some(b), Some(lock)) = (mv.beam.filter(|b| !b.whale), f.beam_lock) else {
             set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
@@ -1326,7 +1480,7 @@ pub fn animate_scribe_effects(
         let progress = (f.state_frame.saturating_sub(mv.startup) as f32).min(mv.active as f32) / mv.active.max(1) as f32;
         let lock_x = (lock / PX) as f32;
         let (start, end) = (lock_x - f.facing as f32 * b.lead as f32, lock_x + f.facing as f32 * b.sweep as f32);
-        let from = Vec2::new(lock_x - f.facing as f32 * b.lead as f32, GROUND_Y + 118.0);
+        let from = Vec2::new(lock_x - f.facing as f32 * b.lead as f32, GROUND_Y + 160.0);
         let to = Vec2::new(start + (end - start) * progress, GROUND_Y + 4.0);
         let (dx, dy) = (to.x - from.x, to.y - from.y);
         let length = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -1337,8 +1491,130 @@ pub fn animate_scribe_effects(
         let mid = (from + to) / 2.0;
         set_ne!(tf.translation.x, mid.x);
         set_ne!(tf.translation.y, mid.y);
-        // a rectangle is tall by default: turn it to lie along the beam
-        tf.rotation = Quat::from_rotation_z(-(dx.atan2(-dy)) + std::f32::consts::PI);
+        // a rectangle is tall by default: turn it to lie along the beam, so its top stays at Jesus and only the
+        // bottom sweeps
+        tf.rotation = Quat::from_rotation_z(dx.atan2(-dy));
         sprite.color = if *core { Color::srgba(1.0, 1.0, 0.95, fade) } else { Color::srgba(1.0, 0.88, 0.45, 0.55 * fade) };
+    }
+}
+
+/// The Scribe's whale: a pool opens in the ground where the enemy stood, the whale's head rises out of it, opens wide, snaps
+/// shut on the spot, and sinks again. Every stage is its own drawing (`whale_0..5`), so nothing here moves it.
+pub fn animate_whale(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    handles: Res<FrameHandles>,
+    mut pools: Query<(&PoolOf, &mut Sprite, &mut Transform, &mut Visibility), Without<WhaleOf>>,
+    mut whales: Query<(&WhaleOf, &mut Sprite, &mut Transform, &mut Visibility), Without<PoolOf>>,
+) {
+    // which drawing of the whale at which frame of the move: rising until the bite, the bite, then sinking
+    let drawing = |mv: &t2f::sim::MoveData, frame: u32, lock_frame: u32| -> Option<usize> {
+        let bite_end = mv.startup + mv.active;
+        if frame < lock_frame + 4 {
+            None
+        } else if frame < mv.startup.saturating_sub(10) {
+            Some(0)
+        } else if frame < mv.startup.saturating_sub(6) {
+            Some(1)
+        } else if frame < mv.startup.saturating_sub(2) {
+            Some(2)
+        } else if frame <= mv.startup {
+            Some(3)
+        } else if frame <= bite_end + 4 {
+            Some(4)
+        } else if frame <= bite_end + 12 {
+            Some(5)
+        } else {
+            None
+        }
+    };
+    for (PoolOf(i), mut sprite, mut tf, mut visibility) in &mut pools {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(b), Some(lock), true) = (mv.beam.filter(|b| b.whale), f.beam_lock, f.state == FighterState::Attack) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        // the pool is there from the lock until the whale has gone down again
+        if f.state_frame > mv.startup + mv.active + 16 {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        }
+        let _ = b;
+        set_ne!(*visibility, Visibility::Inherited);
+        set_ne!(tf.translation.x, (lock / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y - 2.0);
+        let frame = (sim.0.frame / 6 % 2) as usize;
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("pool_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+    for (WhaleOf(i), mut sprite, mut tf, mut visibility) in &mut whales {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(b), Some(lock), true) = (mv.beam.filter(|b| b.whale), f.beam_lock, f.state == FighterState::Attack) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        let Some(which) = drawing(mv, f.state_frame, b.lock_frame) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        set_ne!(*visibility, Visibility::Inherited);
+        // the drawings stand on the water line, 4 px up from the bottom of the picture
+        set_ne!(tf.translation.x, (lock / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + 28.0);
+        // it faces the one who called it
+        set_ne!(tf.scale.x, f.facing as f32);
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("whale_{which}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+}
+
+/// The bubble of plot armour round a fighter who has it (it flickers in its last half second), with its label above the top
+/// left of it.
+pub fn animate_shield(
+    sim: Res<Sim>,
+    handles: Res<FrameHandles>,
+    mut bubbles: Query<(&ShieldOf, &mut Sprite, &mut Transform, &mut Visibility), Without<ShieldLabel>>,
+    mut labels: Query<(&ShieldLabel, &mut Transform, &mut Visibility, &mut TextColor), Without<ShieldOf>>,
+) {
+    for (ShieldOf(i), mut sprite, mut tf, mut visibility) in &mut bubbles {
+        let f = &sim.0.fighters[*i];
+        if f.plot_armour == 0 {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        }
+        // blinking as it runs out
+        let shown = f.plot_armour > 30 || (f.plot_armour / 3) % 2 == 0;
+        set_ne!(*visibility, if shown { Visibility::Inherited } else { Visibility::Hidden });
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 33.0);
+        let frame = (sim.0.frame / 10 % 2) as usize;
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("shield_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+    for (ShieldLabel(i), mut tf, mut visibility, mut color) in &mut labels {
+        let f = &sim.0.fighters[*i];
+        let shown = f.plot_armour > 30 || (f.plot_armour / 3) % 2 == 0;
+        set_ne!(*visibility, if f.plot_armour > 0 && shown { Visibility::Inherited } else { Visibility::Hidden });
+        // on the top left of the bubble, just outside it
+        set_ne!(tf.translation.x, (f.x / PX) as f32 - 36.0);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 68.0);
+        let tone = Color::srgb(0.7, 0.9, 1.0);
+        if color.0 != tone {
+            color.0 = tone;
+        }
     }
 }

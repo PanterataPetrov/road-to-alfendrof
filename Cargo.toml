@@ -33,9 +33,13 @@ bevy = { version = "0.20", default-features = false, features = [
     "std",
     "multi_threaded",
     "bevy_winit",
+    # Linux window backends are opt-in when Bevy's defaults are disabled.
+    "x11",
+    "wayland",
     "default_font",
     "2d_bevy_render",
     "bevy_audio",
+    "wav", # the sound effects in assets/sfx
 ] }
 ggrs = { version = "0.13", features = ["sync-send"] }
 serde = { version = "1", features = ["derive"] }
@@ -45,9 +49,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 bincode = "1"
 igd-next = "0.18.0"
 arboard = "3"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-bevy = { version = "0.20", default-features = false, features = ["x11", "wayland"] }
 
 [features]
 # Faster incremental builds during development: `cargo run --features dev`

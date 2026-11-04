@@ -2,7 +2,7 @@
 Type=Application
 Name=Road to Alfendrof
 Comment=Road to Alfendrof fighting game
-Exec=t2f
+Exec=road-to-alfendrof
 Icon=road-to-alfendrof
-Categories=Game;
 Terminal=false
+Categories=Game;ActionGame;
