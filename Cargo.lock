@@ -4649,7 +4649,7 @@ dependencies = [
 
 [[package]]
 name = "t2f"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "arboard",
  "bevy",
@@ -4659,6 +4659,7 @@ dependencies = [
  "image",
  "ron",
  "serde",
+ "wgpu",
 ]
 
 [[package]]
@@ -5334,12 +5335,16 @@ dependencies = [
  "cfg_aliases",
  "document-features",
  "hashbrown 0.17.1",
+ "js-sys",
  "log",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu-core",
  "wgpu-hal",
  "wgpu-types",

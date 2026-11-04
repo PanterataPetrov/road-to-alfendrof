@@ -2,6 +2,7 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod briefing;
+mod vulkan;
 mod menus;
 mod music;
 mod online;
@@ -244,6 +245,8 @@ fn dev_screenshot(
 }
 
 fn main() {
+    // on a PC where Vulkan only fails because of optional driver layers, start again with them off (see `vulkan.rs`)
+    vulkan::sort_out();
     // `--backend dx12|vulkan|gl` picks the graphics API, for PCs whose default one draws wrongly
     let args: Vec<String> = std::env::args().collect();
     if let Some(backend) = args.iter().position(|a| a == "--backend").and_then(|i| args.get(i + 1)) {
