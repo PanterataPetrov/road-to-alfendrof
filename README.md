@@ -6,6 +6,14 @@ Windowed launches start maximized; saved borderless/fullscreen choices still app
 Version 0.1.10 adds rollback-capable Mac/Linux automatic updates and an artwork-backed
 Mac DMG installer; the updater uses the companion ZIP.
 
+Stages: Galata Tower and Assgrad. Select a stage after choosing both fighters.
+Assgrad combines a 640px, 96-color pixel-art river landscape with grey paving,
+a concrete bridge parapet, metal handrail and a decorative sightseeing viewer.
+Its backdrop fits the visible arena without changing gameplay zoom; foreground
+colors share the backdrop palette. All Assgrad art uses nearest-neighbor filtering.
+Regenerate bridge art in the dev shell with `python tools/gen_assgrad.py`; pass
+the original photograph as an optional argument to also regenerate the backdrop.
+
 ## Development
 
 The pinned Rust environment lives in `nix/` so Nix does not copy build outputs
