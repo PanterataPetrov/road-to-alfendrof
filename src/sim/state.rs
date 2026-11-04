@@ -4006,15 +4006,17 @@ mod tests {
     /// Gray Persona (P1) opens her portal with the opponent 60 px away; `dodge` makes them walk away from the far portal.
     fn portal_run(dodge: bool) -> GameState {
         let g = gray_persona();
+        // (the real Negaprofessor, who walks at the usual speed)
+        let e = CharacterData::from_ron(include_str!("../../assets/characters/evilayz.ron")).unwrap();
         let mut s = GameState::new();
         s.fighters[0].x = 0;
         s.fighters[1].x = 60 * PX;
         s.fighters[0].health = 700;
         s.fighters[0].meter = Fighter::METER_MAX;
-        s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
+        s.step([Input(Input::SPECIAL), Input(0)], [&g, &e]);
         for frame in 1..140 {
-            let foe = if dodge && (25..70).contains(&frame) { Input::LEFT } else { 0 };
-            s.step([Input(0), Input(foe)], [&g, &evilayz()]);
+            let foe = if dodge && (5..95).contains(&frame) { Input::LEFT } else { 0 };
+            s.step([Input(0), Input(foe)], [&g, &e]);
             if frame == 30 {
                 assert!(s.fighters[0].hidden && s.fighters[0].invulnerable(), "inside the portal she is gone and can't be hit");
                 assert_eq!(s.fighters[0].meter, 0, "the portal spends the meter");
@@ -4143,6 +4145,54 @@ mod tests {
         quiet(&mut s3, 6);
         assert_eq!(s3.fighters[1].state, FighterState::Idle);
         assert!((230..=240).contains(&s3.fighters[0].cooldown_left(heavy)), "4 seconds after a missed puff");
+    }
+
+    #[test]
+    fn gray_personas_bats_cannot_be_blocked_and_her_heavy_cannot_be_interrupted() {
+        let g = gray_persona();
+        // the bats go through a guard
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 80 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        for _ in 0..60 {
+            s.step([Input(0), Input(Input::BLOCK)], [&g, &evilayz()]);
+        }
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH - 20, "a guarding enemy still takes the bats, health {}", s.fighters[1].health);
+        // and a hit in the very first frames doesn't stop her
+        let heavy = g.moves.iter().position(|m| m.name == "Bat Wave").unwrap();
+        let mut t = GameState::new();
+        t.fighters[0].x = 0;
+        t.fighters[1].x = 200 * PX;
+        t.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        t.step([Input(0), Input(0)], [&g, &evilayz()]);
+        let hit = evilayz().moves[0].clone();
+        t.apply_hit(0, &hit, -1, false, 100);
+        assert_eq!(t.fighters[0].state, FighterState::Attack, "still casting");
+        assert_eq!(t.fighters[0].attack, heavy);
+    }
+
+    #[test]
+    fn gray_personas_special_cannot_be_interrupted_once_a_third_of_it_has_played() {
+        let g = gray_persona();
+        let special = g.moves.iter().position(|m| m.name == "Blood Portal").unwrap();
+        let mv = &g.moves[special];
+        assert!(mv.committed && mv.commit_frame() <= mv.total_frames() / 3 + 1, "committed from about a third in, frame {}", mv.commit_frame());
+        let hit_at = |frame: u32| {
+            let mut s = GameState::new();
+            s.fighters[0].x = 0;
+            s.fighters[1].x = 300 * PX;
+            s.fighters[0].meter = Fighter::METER_MAX;
+            s.step([Input(Input::SPECIAL), Input(0)], [&g, &evilayz()]);
+            for _ in 0..frame {
+                s.step([Input(0), Input(0)], [&g, &evilayz()]);
+            }
+            let hit = evilayz().moves[0].clone();
+            s.apply_hit(0, &hit, -1, false, 100);
+            s.fighters[0].state
+        };
+        assert_eq!(hit_at(10), FighterState::Hitstun, "before that a hit still stops it");
+        assert_eq!(hit_at(45), FighterState::Attack, "after it nothing does");
     }
 
     #[test]

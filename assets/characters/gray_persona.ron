@@ -1,7 +1,7 @@
 // Gray Persona: a pale vampire in a black gothic dress with teal cuffs, long dark hair and a ruby brooch.
 // Light: a nail scratch that switches arms while you spam it. The third hit of a combo (the eyeless face) rakes with
 //        both hands and bites with two fangs; if it lands, blood flies out of the enemy and heals her 3%, but her lights rest for a second.
-// Heavy: she hops back, lifts her arms and sprays a short burst of bats forward from her outstretched hands. If they land, heavy again (until its cooldown is over) turns her
+// Heavy: she hops back, lifts her arms and sprays a short burst of bats forward from her outstretched hands (they can't be blocked, and once she has pressed it nothing interrupts it). If they land, heavy again (until its cooldown is over) turns her
 //        into a bat: faster, but no lights or specials. Heavy once more (or 3 seconds later by itself) she turns back
 //        in a puff of grey smoke that stuns anyone close for a second. The heavy then rests 4 seconds, or 6 if the
 //        smoke stunned. Being hit as a bat turns her back without the smoke.
@@ -36,18 +36,18 @@
          startup: 4, active: 8, recovery: 8, damage: 30, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 8, y: 0, w: 30, h: 26)),
         // she hops back and the bats fly straight ahead as one wide wave, bobbing
-        (name: "Bat Wave", sfx: (cast: Some("bats")), button: Heavy, crouching: false, anim: Summon, walk_pct: 0, cooldown: 180, guard_hits: Some(6),
+        (name: "Bat Wave", sfx: (cast: Some("bats")), button: Heavy, crouching: false, anim: Summon, walk_pct: 0, cooldown: 180, guard_hits: Some(6), committed: true, commit_at: Some(0),
          volley: 8, volley_gap: 1, shot_damage: Some(11),
          startup: 18, active: 3, recovery: 20, damage: 60, hitstun: 20, blockstun: 12, knockback: 4, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          hop: Some((400, 180)),
          bat_form: Some((duration: 180, speed_pct: 170, radius: 44, stun: 60, miss_cooldown: 240, hit_cooldown: 360)),
-         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 30, size: (14, 10), image: Some("batspray"), summon_image: Some("none"), speed: 6, fan: 14))),
+         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 30, size: (14, 10), image: Some("batspray"), summon_image: Some("none"), speed: 6, fan: 14, unblockable: true))),
         // the portal: gone at frame 24; the grab (window 1) holds them for the bite (window 2)
         (name: "Blood Portal", sfx: (cast: Some("portal_open"), hit: Some("bite")), button: Special, crouching: false, anim: Portal, walk_pct: 0,
-         portal: Some((vanish: 24, gap: 26)), heal_pct: 10, hits: 2, hit_gap: 32, guard_hits: Some(0),
+         portal: Some((vanish: 24, gap: 26)), heal_pct: 10, hits: 2, hit_gap: 32, guard_hits: Some(0), committed: true, commit_at: Some(40),
          hit_overrides: [(damage: 0, hitstun: 60, knockback: 0), (damage: 130, hitstun: 26, knockback: 5)],
          startup: 54, active: 6, recovery: 30, damage: 130, hitstun: 26, blockstun: 0, knockback: 5, hitstop: 8,
-         hitbox: (x: 0, y: 8, w: 40, h: 46)),
+         hitbox: (x: 0, y: 8, w: 55, h: 46)),
     ],
 )
