@@ -557,7 +557,7 @@ pub fn emit(
                 }
             }
             // the beam of light: sparks and a shake where it lands as it sweeps
-            if let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) {
+            if let (Some(b), Some(lock)) = (mv.beam.filter(|b| !b.whale), f.beam_lock) {
                 if f.state_frame > mv.startup && f.state_frame <= mv.startup + mv.active {
                     let progress = (f.state_frame - mv.startup) as f32 / mv.active.max(1) as f32;
                     let lock_x = (lock / PX) as f32;

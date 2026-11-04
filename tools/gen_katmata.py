@@ -457,6 +457,11 @@ def build():
     p = pose("throw_1", up=(2, 1)); p.arms("rest", (44, 24), upper=10, fore=10); p.cig(mouth=False)
     for dx in range(3, 9):
         put(p.canvas, p.at(44, 24)[0] + dx, p.at(44, 24)[1] + 1, EMBER if dx % 2 else EMBER_HOT)
+    # the quick toss: the same arm swing, but the cigarette in his mouth stays where it is (this one came from the pack)
+    p = pose("toss_0", up=(-1, 0)); p.arms("rest", (30, 12), upper=9, fore=9); p.cig(smoke=0)
+    loose_cigarette(p.canvas, p.at(33, 11)[0], p.at(33, 11)[1], -0.4)
+    p = pose("toss_1", up=(2, 1)); p.arms("rest", (44, 24), upper=10, fore=10); p.cig()
+    p = pose("toss_2", up=(1, 0)); p.arms("rest", (34, 20), upper=9, fore=9); p.cig()
     # the reload, in six drawings: the hand reaches the pack; a cigarette slides out; it is lifted; the filter goes into
     # his mouth; the lighter flames at its tip; the first drag, the ember glowing and a puff of smoke
     p = pose("throw_2", up=(0, 1)); p.arms("rest", (23, 37), front_bend=1); p.cig(mouth=False)
@@ -878,7 +883,12 @@ def main():
         img.save(SPRITES / f"{name}.png")
     for name, img in icons().items():
         img.save(ICONS / f"{name}.png")
-    portrait().save(PORTRAIT)
+    # his portrait is a photo of a friend (tools/katmata_photo.png, already cut and shrunk to 40 x 40), not the drawn one
+    photo = ROOT / "tools/katmata_photo.png"
+    if photo.exists():
+        Image.open(photo).save(PORTRAIT)
+    else:
+        portrait().save(PORTRAIT)
     print(f"{len(frames)} poses, effects, icons and the portrait written")
     if "--sheet" in sys.argv:
         sheet = Path(sys.argv[sys.argv.index("--sheet") + 1])

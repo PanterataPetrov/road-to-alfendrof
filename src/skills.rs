@@ -29,6 +29,18 @@ fn label(mv: &MoveData) -> String {
     if tags.is_empty() { mv.name.clone() } else { format!("{} ({})", mv.name, tags.join(", ")) }
 }
 
+/// The names of a button's moves on the ground, standing (its crouching and air versions are left out), as one line.
+pub fn move_names(c: &CharacterData, button: Button) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for mv in c.moves.iter().filter(|m| m.button == button && !m.crouching && !m.air) {
+        let name = label(mv);
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names.join(", ")
+}
+
 /// Moves grouped by button (Light, Heavy, Special), wrapped to `LINE_WIDTH` characters.
 pub fn skill_lines(c: &CharacterData) -> Vec<SkillLine> {
     let mut lines = Vec::new();

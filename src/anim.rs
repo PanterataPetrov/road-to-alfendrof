@@ -67,6 +67,13 @@ pub enum Frame {
     Bat(usize),
     /// Throwing a cigarette: the arm cocked back, the throw, taking a new one from the pack, lighting it.
     Throw(usize),
+    /// A quick cigarette toss: the arm cocked back, the throw, the arm returning.
+    Toss(usize),
+    /// Dashing towards the enemy behind the book held up in front (the Scribe).
+    Cover(usize),
+    /// The slam dunk: reaching, the hands on the enemy's shoulders, pushing himself up, the jump, the ball cocked, the
+    /// dunk, the landing.
+    Dunk(usize),
     /// Throwing an iced latte: the cup held back, the throw, the follow-through.
     Latte(usize),
     /// Idle while he rolls a cigarette: the paper, the tobacco, the roll, a lick of the edge.
@@ -112,6 +119,9 @@ impl Frame {
             Frame::Bat(i) => format!("batform_{i}"),
             Frame::PunchMid(i) => format!("punch_mid_{i}"),
             Frame::Throw(i) => format!("throw_{i}"),
+            Frame::Toss(i) => format!("toss_{i}"),
+            Frame::Dunk(i) => format!("dunk_{i}"),
+            Frame::Cover(i) => format!("cover_{i}"),
             Frame::Latte(i) => format!("latte_{i}"),
             Frame::Craft(i) => format!("craft_{i}"),
         }
@@ -167,6 +177,9 @@ pub const PORTAL_FRAMES: usize = 8;
 
 /// Throwing a cigarette, and rolling one while idle.
 pub const THROW_FRAMES: usize = 8;
+pub const TOSS_FRAMES: usize = 3;
+pub const DUNK_FRAMES: usize = 7;
+pub const COVER_FRAMES: usize = 2;
 pub const CRAFT_FRAMES: usize = 4;
 /// Throwing an iced latte.
 pub const LATTE_FRAMES: usize = 3;
@@ -220,6 +233,15 @@ pub fn frames_for(data: &CharacterData) -> Vec<Frame> {
     if data.moves.iter().any(|m| m.anim == AnimKind::Throw) {
         v.extend((0..THROW_FRAMES).map(Frame::Throw));
     }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Toss) {
+        v.extend((0..TOSS_FRAMES).map(Frame::Toss));
+    }
+    if data.moves.iter().any(|m| m.anim == AnimKind::Dunk) {
+        v.extend((0..DUNK_FRAMES).map(Frame::Dunk));
+    }
+    if data.dash_shield {
+        v.extend((0..COVER_FRAMES).map(Frame::Cover));
+    }
     if data.cigarettes.is_some() {
         v.extend((0..CRAFT_FRAMES).map(Frame::Craft));
     }
@@ -262,6 +284,8 @@ pub fn frame_for(f: &Fighter, data: &CharacterData, speaking: bool, tick: u32) -
         _ if f.bat_form > 0 => return Frame::Bat((tick / 5) as usize % BAT_FRAMES),
         FighterState::Blockstun | FighterState::Guard => return Frame::Block,
         FighterState::Attack => return attack_frame(f, data),
+        // dashing at the enemy behind a book
+        FighterState::Dash if f.covered => return Frame::Cover((f.state_frame / 4 % COVER_FRAMES as u32) as usize),
         // a dash is a quick run
         FighterState::Dash => return Frame::Walk(((f.state_frame / 3) % WALK_FRAMES as u32) as usize),
         FighterState::Roll => return Frame::Roll(roll_drawing(f)),
@@ -432,6 +456,33 @@ fn attack_frame(f: &Fighter, data: &CharacterData) -> Frame {
             1 + ((frame / 6) % 2) as usize
         } else {
             3
+        }),
+        AnimKind::Dunk => {
+            // reach, hold the shoulders, push up (the enemy is held), jump, cock the ball, dunk it, land
+            let dunk = mv.startup + (mv.hits.max(1) - 1) * mv.hit_gap;
+            let hop = mv.hop_at.max(1);
+            Frame::Dunk(if frame <= mv.startup {
+                0
+            } else if frame <= mv.startup + 8 {
+                1
+            } else if frame < hop {
+                2
+            } else if frame + 4 < dunk {
+                3
+            } else if frame <= dunk {
+                4
+            } else if frame <= dunk + mv.active + 6 {
+                5
+            } else {
+                6
+            })
+        }
+        AnimKind::Toss => Frame::Toss(if frame <= mv.startup {
+            0
+        } else if frame <= mv.startup + mv.active + 1 {
+            1
+        } else {
+            2
         }),
         AnimKind::Throw => {
             // the arm back, the throw, then six drawings while he reloads: reaching for the pack, pulling one out, raising

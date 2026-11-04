@@ -31,6 +31,16 @@ pub struct Projectile {
     pub power: i32,
 }
 
+impl Minion {
+    /// How long an agent's roll lasts, and which of those frames it can't be hit in (only the middle of it).
+    pub const ROLL_FRAMES: u32 = 14;
+    const ROLL_SAFE: std::ops::RangeInclusive<u32> = 4..=9;
+
+    fn rolling_through(&self) -> bool {
+        self.mode == MinionMode::Roll && Self::ROLL_SAFE.contains(&self.timer)
+    }
+}
+
 /// What a minion is doing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MinionMode {
@@ -59,6 +69,9 @@ pub struct Zone {
     pub half_width: i32,
     pub age: u32,
     pub life: u32,
+    /// Health lost every `tick_every` frames by those in it (see `ZoneData`).
+    pub tick_damage: i32,
+    pub tick_every: u32,
 }
 
 /// A summoned minion (a goblin).
@@ -208,9 +221,14 @@ impl GameState {
         let inputs = self.reversed(inputs);
 
         let before = [self.fighters[0].x, self.fighters[1].x];
+        let gap = (before[0] - before[1]).abs();
         for i in 0..2 {
+            self.fighters[i].foe_dist = gap;
             self.fighters[i].raven_away = self.ravens[i].active;
             self.fighters[i].step(inputs[i], chars[i]);
+            // a dash towards the enemy behind a book
+            let f = &mut self.fighters[i];
+            f.covered = chars[i].dash_shield && f.state == FighterState::Dash && f.move_dir == f.facing;
         }
         // in a glitched area they move at a third of their speed
         for i in 0..2 {
@@ -302,7 +320,8 @@ impl GameState {
     fn can_block(&self, defender: usize, input: Input) -> bool {
         let f = &self.fighters[defender];
         let blockable_state = f.is_neutral() || f.state == FighterState::Blockstun;
-        blockable_state && input.has(Input::BLOCK) && f.block_disabled == 0 && !self.in_zone(defender, super::data::ZoneKind::Glitch)
+        let guarding = blockable_state && input.has(Input::BLOCK) && f.block_disabled == 0;
+        (guarding || f.covered) && !self.in_zone(defender, super::data::ZoneKind::Glitch)
     }
 
     /// Whether `who` is standing in a zone of `kind` that isn't theirs (a spill only reaches those on the ground).
@@ -334,7 +353,7 @@ impl GameState {
     fn add_zone(&mut self, owner: usize, move_index: usize, zone: super::data::ZoneData, x: i32) {
         let limit = Self::STAGE_HALF_WIDTH - 10 * PX;
         self.zones.retain(|z| !(z.owner == owner && z.kind == zone.kind));
-        self.zones.push(Zone { owner, move_index, kind: zone.kind, x: x.clamp(-limit, limit), half_width: zone.half_width * PX, age: 0, life: zone.life });
+        self.zones.push(Zone { owner, move_index, kind: zone.kind, x: x.clamp(-limit, limit), half_width: zone.half_width * PX, age: 0, life: zone.life, tick_damage: zone.tick_damage, tick_every: zone.tick_every });
     }
 
     /// Glitched areas appear on the opponent when their move reaches its frame; every zone ages and goes.
@@ -343,6 +362,28 @@ impl GameState {
             z.age += 1;
         }
         self.zones.retain(|z| z.age < z.life);
+        // bleeding: a little health every so often until it runs out
+        for f in &mut self.fighters {
+            if f.bleed_ticks > 0 && f.health > 0 {
+                f.bleed_timer += 1;
+                if f.bleed_timer >= f.bleed_every.max(1) {
+                    f.bleed_timer = 0;
+                    f.bleed_ticks -= 1;
+                    f.health -= f.bleed_damage;
+                }
+            }
+        }
+        // a zone that hurts: a little damage every so often to whoever is in it
+        for k in 0..self.zones.len() {
+            let z = self.zones[k];
+            if z.tick_damage > 0 && z.tick_every > 0 && z.age % z.tick_every == 0 {
+                for who in 0..2 {
+                    if self.in_zone(who, z.kind) && self.fighters[who].health > 0 {
+                        self.fighters[who].health -= z.tick_damage;
+                    }
+                }
+            }
+        }
         // while a zone lasts its move's cooldown is held at full; it only starts counting once the zone is gone
         for z in &self.zones {
             if let Some(mv) = chars[z.owner].moves.get(z.move_index).filter(|m| m.cooldown > 0) {
@@ -483,6 +524,9 @@ impl GameState {
             if mv.light_lock > 0 && !blocked {
                 self.fighters[a].light_lock = mv.light_lock;
             }
+            if base.plot_armour > 0 && !blocked {
+                self.fighters[a].plot_armour = base.plot_armour;
+            }
             if mv.silence > 0 && !blocked {
                 self.fighters[1 - a].silenced = mv.silence;
             }
@@ -528,15 +572,16 @@ impl GameState {
         }
     }
 
-    /// Hurt every goblin of `owner` overlapping `area` (a world box in subpixels). A light attack (`lethal`) takes
-    /// an agent out in one hit whatever its health; heavier damage (a ground pound) has to add up.
+    /// Hurt every goblin of `owner` overlapping `area` (a world box in subpixels). A light attack (`lethal`) does an agent
+    /// `AGENT_LIGHT_DAMAGE` whatever the attack's own damage (two lights take one out); heavier damage (a ground pound) has to
+    /// add up.
     fn hit_minion(&mut self, owner: usize, area: [i32; 4], damage: i32, lethal: bool) -> bool {
         let mut any = false;
         // goblins can be hit anywhere along a fighter's height, and one swing hits every goblin it reaches
-        for m in self.minions.iter_mut().filter(|m| m.owner == owner && m.health > 0 && m.mode != MinionMode::Roll) {
+        for m in self.minions.iter_mut().filter(|m| m.owner == owner && m.health > 0 && !m.rolling_through()) {
             let (x0, x1) = (m.x - 8 * PX, m.x + 8 * PX);
             if area[0] < x1 && x0 < area[2] && area[1] < 56 * PX && 0 < area[3] {
-                m.health -= if lethal && m.agent { m.health } else { damage };
+                m.health -= if lethal && m.agent { Self::AGENT_LIGHT_DAMAGE.min(m.health) } else { damage };
                 m.hurt = 8;
                 any = true;
             }
@@ -633,6 +678,11 @@ impl GameState {
                                 r.step += 1;
                                 r.timer = 0;
                             }
+                        }
+                    } else if r.step == 2 * pecks && heal_pct == 0 {
+                        // no rose: straight home
+                        if Self::raven_toward(&mut r, home, speed) {
+                            r = Raven::idle();
                         }
                     } else if r.step == 2 * pecks {
                         // back above its owner with a rose in its beak
@@ -742,6 +792,16 @@ impl GameState {
                     ^ owner as u32;
                 h = (h ^ (h >> 15)).wrapping_mul(2_246_822_519);
                 self.fighters[owner].aim_low = (h >> 13) & 1 == 1;
+            } else if f.state_frame + 2 == mv.startup {
+                // just before the lash: it follows the enemy's height, most of the time (it goes under a jumper and over one who
+                // ducked, so those are no longer sure dodges)
+                let foe = &self.fighters[1 - owner];
+                let counter = if foe.state == FighterState::Crouch { Some(true) } else if !foe.grounded() { Some(false) } else { None };
+                let mut h = (self.frame).wrapping_mul(2_246_822_519) ^ (foe.x as u32).wrapping_mul(668_265_263) ^ owner as u32;
+                h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+                if let (Some(low), true) = (counter, (h >> 16) % 100 < 70) {
+                    self.fighters[owner].aim_low = low;
+                }
             } else if f.state_frame == mv.startup + 1 && mv.button == super::data::Button::Special {
                 self.fighters[owner].meter = 0;
             }
@@ -828,6 +888,10 @@ impl GameState {
 
     /// Damage and stun `defender` with `mv`, pushing them in direction `dir`.
     fn apply_hit(&mut self, defender: usize, mv: &MoveData, dir: i32, blocked: bool, power: i32) -> bool {
+        // plot armour: nothing gets through (it counts as blocked for the attacker, and costs the shield nothing)
+        if self.fighters[defender].plot_armour > 0 {
+            return true;
+        }
         // an attacker in a glitched area does half damage
         let weakened = self.in_zone(1 - defender, super::data::ZoneKind::Glitch);
         let d = &mut self.fighters[defender];
@@ -912,11 +976,19 @@ impl GameState {
                     }
                 }
             }
-            let (mut vx, mut vy) = ((if p.lob { land_x } else { target.x } - x) / frames, (if p.lob { 0 } else if p.aim_ground { 0 } else { target.y + p.aim_y * PX } - y) / frames);
+            // shots at the floor fan out round where the target will be: far apart while it moves, close while it stands
+            let mut aim_x = target.x;
+            if p.aim_ground && !p.lob && p.spread > 0 {
+                let moving = target.vx != 0;
+                let range = if moving { p.spread } else { p.spread / 3 };
+                aim_x += target.vx * frames * 6 / 10;
+                aim_x += ((f.shots as i32 * 37 + 11) % (2 * range + 1) - range) * PX;
+            }
+            let (mut vx, mut vy) = ((if p.lob { land_x } else { aim_x } - x) / frames, (if p.lob { 0 } else if p.aim_ground { 0 } else { target.y + p.aim_y * PX } - y) / frames);
             // straight shots fly ahead at a fixed speed; their lifetime limits the range
             if !p.aimed && !p.lob {
                 vx = if p.speed_tenths > 0 { f.facing * p.speed_tenths * PX / 10 } else { f.facing * if p.speed > 0 { p.speed } else { 5 } * PX };
-                vy = 0;
+                vy = if p.fan > 0 { ((f.shots as i32 * 37 + 11) % (2 * p.fan + 1) - p.fan) * PX / 10 } else { 0 };
             }
             if p.homing {
                 (vx, vy) = Self::missile_launch_velocity(p, f.facing);
@@ -1179,15 +1251,21 @@ impl GameState {
                 }
                 if m.timer >= 28 {
                     let foe = &self.fighters[1 - m.owner];
-                    // after the pair: slip away from an attack that's coming, or roll through to their other side
-                    m.mode = MinionMode::Roll;
-                    m.timer = 0;
-                    m.roll_dir = if foe.state == FighterState::Attack { -toward } else { toward };
+                    // after the pair: now and then slip away from an attack that's coming, or roll through to their other
+                    // side; the rest of the time it just goes again
+                    if m.age % 5 < 3 {
+                        m.mode = MinionMode::Roll;
+                        m.timer = 0;
+                        m.roll_dir = if foe.state == FighterState::Attack { -toward } else { toward };
+                    } else {
+                        m.mode = MinionMode::Charge;
+                        m.timer = 0;
+                    }
                 }
             }
             MinionMode::Roll => {
                 m.x += m.roll_dir * md.speed * 2 * PX;
-                if m.timer >= 16 {
+                if m.timer >= Minion::ROLL_FRAMES {
                     m.mode = MinionMode::Charge;
                     m.timer = 0;
                 }
@@ -1260,6 +1338,10 @@ impl GameState {
         if mv.button != super::data::Button::Light {
             return;
         }
+        // thrown quills are their own thing: they don't build the combo that ends in the book
+        if mv.burst_shots > 0 {
+            return;
+        }
         {
             let f = &mut self.fighters[attacker];
             f.combo = if was_finisher { 3 } else { (f.combo + 1).min(2) };
@@ -1297,7 +1379,7 @@ impl GameState {
             let Some(data) = &mv.projectile else { continue };
             // a heat-seeking missile turns towards the opponent's chest before it moves
             let mut close = false;
-            if data.homing {
+            if data.homing || data.steer {
                 let foe = &self.fighters[1 - owner];
                 let (dx, dy) = ((foe.x - p.x) as i64, (foe.y + 30 * PX - p.y) as i64);
                 let dist = (Self::isqrt((dx * dx + dy * dy) as u64) as i64).max(1);
@@ -1308,7 +1390,7 @@ impl GameState {
                 let now = (Self::isqrt((p.vx as i64 * p.vx as i64 + p.vy as i64 * p.vy as i64) as u64) as i64).max(1);
                 p.vx = (p.vx as i64 * speed / now) as i32;
                 p.vy = (p.vy as i64 * speed / now) as i32;
-                close = dist <= (data.detonate * PX) as i64;
+                close = data.homing && dist <= (data.detonate * PX) as i64;
             }
             p.x += p.vx;
             p.y += p.vy;
@@ -1366,6 +1448,20 @@ impl GameState {
                 } else {
                     let shot = mv.as_shot();
                     let blocked = self.apply_hit(defender, &shot, dir, blocked, p.power);
+                    // too many blocked shots in a row and the thrower is stunned
+                    if let Some(bs) = mv.blocked_stun {
+                        let thrower = &mut self.fighters[owner];
+                        if blocked {
+                            thrower.shots_blocked += 1;
+                            thrower.shots_blocked_timer = 300;
+                            if thrower.shots_blocked >= bs.shots {
+                                thrower.shots_blocked = 0;
+                                thrower.start_stun(FighterState::Hitstun, bs.stun, -dir * 2 * PX);
+                            }
+                        } else {
+                            thrower.shots_blocked = 0;
+                        }
+                    }
                     if mv.bat_form.is_some() && !blocked {
                         // she can turn into a bat until the heavy's cooldown runs out
                         let f = &mut self.fighters[owner];
@@ -1373,6 +1469,13 @@ impl GameState {
                     }
                     if !blocked && mv.futility > 0 {
                         self.fighters[defender].futile = mv.futility;
+                    }
+                    if !blocked && mv.plot_armour > 0 {
+                        self.fighters[owner].plot_armour = mv.plot_armour;
+                    }
+                    if let Some(b) = mv.bleed.filter(|_| !blocked) {
+                        let d = &mut self.fighters[defender];
+                        (d.bleed_ticks, d.bleed_damage, d.bleed_every, d.bleed_timer) = (b.ticks, b.damage, b.every, 0);
                     }
                     self.gain_meter(owner, &shot, shot.damage * p.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
                     self.register_light_hit(owner, mv, blocked);
@@ -1396,11 +1499,14 @@ impl GameState {
         }
     }
 
-    /// How close an enemy sub-agent has to be for a free fighter to turn to it instead of the opponent.
+    /// What a light attack does to a sub-agent (they have 48 hit points).
+    pub const AGENT_LIGHT_DAMAGE: i32 = 24;
+    /// How close an enemy sub-agent, or a goblin, has to be for a free fighter to turn to it instead of the opponent.
     pub const AGENT_ATTENTION: i32 = 100 * PX;
+    pub const GOBLIN_ATTENTION: i32 = 40 * PX;
 
-    /// Free fighters turn to face the opponent, or the nearest of the opponent's sub-agents when one is close (so
-    /// their attacks go at it); everyone else keeps their facing.
+    /// Free fighters turn to face the opponent, or the nearest of the opponent's sub-agents or goblins when one is
+    /// close (so their attacks go at it); everyone else keeps their facing.
     fn face_each_other(&mut self) {
         let toward = |from: i32, to: i32| if to > from { 1 } else { -1 };
         for i in 0..2 {
@@ -1411,7 +1517,7 @@ impl GameState {
             let agent = self
                 .minions
                 .iter()
-                .filter(|m| m.owner != i && m.agent && m.health > 0 && (m.x - x).abs() <= Self::AGENT_ATTENTION && m.x != x)
+                .filter(|m| m.owner != i && m.health > 0 && m.x != x && (m.x - x).abs() <= if m.agent { Self::AGENT_ATTENTION } else { Self::GOBLIN_ATTENTION })
                 .min_by_key(|m| (m.x - x).abs())
                 .map(|m| m.x);
             let target = agent.unwrap_or(self.fighters[1 - i].x);
@@ -1695,7 +1801,7 @@ mod tests {
         }
         assert!(highest > 150 * PX, "he should be launched way up, got {} px", highest / PX);
         assert_eq!(splash_taken, Some(boost.damage), "the splash on the ground comes first, before any bullet");
-        assert_eq!(s.fighters[0].shots, 3, "then the volley of three");
+        assert_eq!(s.fighters[0].shots, 4, "then the volley of four");
         let taken = Fighter::MAX_HEALTH - s.fighters[1].health;
         assert!((taken - boost.damage) % boost.shot_damage.unwrap() == 0 && taken >= boost.damage, "the rest is bullets of {:?} each, took {taken}", boost.shot_damage);
     }
@@ -1726,13 +1832,14 @@ mod tests {
             s.step([Input(Input::HEAVY), Input(0)], [&c, &evilayz()]);
             let mut volley_started = false;
             for frame in 0..120 {
-                // the enemy jumps just before the bullets come out (they leave at frames 39, 47 and 55)
-                let up = jump && (30..34).contains(&frame);
+                // the enemy jumps just before the bullets come out (they leave at frames 39, 47, 55 and 63), and again
+                // in the air for the last one
+                let up = jump && ((30..34).contains(&frame) || (58..62).contains(&frame));
                 s.step([Input(0), Input(if up { Input::UP } else { 0 })], [&c, &evilayz()]);
                 volley_started |= s.fighters[0].shots > 0;
             }
             assert!(volley_started, "the volley went out");
-            assert_eq!(s.fighters[0].shots, 3);
+            assert_eq!(s.fighters[0].shots, 4);
             Fighter::MAX_HEALTH - s.fighters[1].health
         };
         assert!(run(false) > 0, "a standing enemy gets hit");
@@ -2697,6 +2804,43 @@ mod tests {
     }
 
     #[test]
+    fn the_whip_storm_follows_the_enemys_height_most_of_the_time() {
+        let j = junkhead();
+        let (mut ducked_hit, mut aimed_over_jumper) = (0, 0);
+        for frame in 0..60u32 {
+            for jump in [false, true] {
+                let mut s = GameState::new();
+                s.frame = frame;
+                s.fighters[0].x = 0;
+                s.fighters[1].x = 80 * PX;
+                s.fighters[0].meter = Fighter::METER_MAX;
+                let mut aim_when_it_lashes = false;
+                for i in 0..60 {
+                    let a = if s.frame == frame { Input::SPECIAL } else { 0 };
+                    let foe = if !jump { Input::DOWN } else { 0 };
+                    s.step([Input(a), Input(foe)], [&j, &evilayz()]);
+                    if jump && i == 8 {
+                        s.fighters[1].vy = 1050;
+                        s.fighters[1].state = FighterState::Jump;
+                    }
+                    if i == 33 {
+                        aim_when_it_lashes = s.fighters[0].aim_low;
+                    }
+                }
+                if jump {
+                    // an enemy in the air gets the high lash (the low one would pass under)
+                    aimed_over_jumper += !aim_when_it_lashes as u32;
+                } else {
+                    ducked_hit += (s.fighters[1].health < Fighter::MAX_HEALTH) as u32;
+                }
+            }
+        }
+        // it used to be a coin flip (about 30 of 60); now it goes for them most of the time, but not always
+        assert!((40..60).contains(&ducked_hit), "a crouching enemy was hit {ducked_hit} of 60");
+        assert!((40..60).contains(&aimed_over_jumper), "the lash went high for a jumper {aimed_over_jumper} of 60");
+    }
+
+    #[test]
     fn the_whip_storm_goes_high_or_low_at_random_and_drags_a_victim_in_and_stuns_them() {
         let j = junkhead();
         // Both outcomes happen, depending on the moment.
@@ -2719,7 +2863,7 @@ mod tests {
             for _ in 0..60 {
                 let a = if s.frame == 0 { Input::SPECIAL } else { 0 };
                 s.step([Input(a), Input(foe_input)], [&j, &evilayz()]);
-                if s.frame == 1 {
+                if s.frame == 32 {
                     s.fighters[0].aim_low = aim_low;
                 }
                 // The opponent jumps during the spins, so they are in the air when the lash comes out.
@@ -2963,7 +3107,7 @@ mod tests {
             s.fighters[1].x = 90 * PX;
         }
         assert_eq!(names, ["Uh", "Meh", "Raven Claw"]);
-        assert_eq!(taken, [24, 28, 69], "the claw is the finisher: 46 x 150%");
+        assert_eq!(taken, [20, 24, 58], "the claw is the finisher: 39 x 150%");
         assert!(!s.ravens[0].active, "the raven is back on his shoulder");
     }
 
@@ -3031,7 +3175,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ravens_storm_pecks_from_the_left_then_the_right_then_the_left_and_drops_a_healing_rose() {
+    fn the_ravens_storm_pecks_from_the_left_then_the_right_then_the_left_and_drops_no_rose() {
         let mut s = GameState::new();
         s.fighters[0].x = -150 * PX;
         s.fighters[1].x = 100 * PX;
@@ -3056,8 +3200,8 @@ mod tests {
         }
         assert_eq!(sides, ["left", "right", "left"], "three pecks, switching sides");
         assert_eq!(Fighter::MAX_HEALTH - s.fighters[1].health, 3 * 42);
-        assert!(rose_seen, "it carried a rose");
-        assert_eq!(s.fighters[0].health, 550, "the rose heals 5% of his 1000 health");
+        assert!(!rose_seen, "no rose any more");
+        assert_eq!(s.fighters[0].health, 500, "and nothing heals him");
         assert_eq!(s.fighters[0].meter, 0, "the special spent the meter");
         assert!(!s.ravens[0].active, "and the raven came home");
         assert!(longest_away > 60, "it was away for a good while, {longest_away} frames");
@@ -3077,7 +3221,7 @@ mod tests {
     }
 
     #[test]
-    fn the_healing_rose_never_goes_over_full_health() {
+    fn the_storm_no_longer_heals_him() {
         let mut s = GameState::new();
         s.fighters[0].x = -100 * PX;
         s.fighters[1].x = 100 * PX;
@@ -3087,7 +3231,82 @@ mod tests {
         for _ in 0..400 {
             pstep(&mut s, 0, 0);
         }
-        assert_eq!(s.fighters[0].health, 1000);
+        assert_eq!(s.fighters[0].health, 990);
+    }
+
+    #[test]
+    fn the_professor_kicks_up_close_and_two_kicks_that_land_make_it_a_slam_dunk() {
+        let p = professor();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 40 * PX;
+        let mut names = Vec::new();
+        let mut hit_at = Vec::new();
+        for n in 0..3 {
+            pstep(&mut s, Input::LIGHT, 0);
+            names.push(p.moves[s.fighters[0].attack].name.clone());
+            let before = s.fighters[1].health;
+            // (the next light has to come while the combo is still on)
+            for _ in 0..if n < 2 { 30 } else { 120 } {
+                pstep(&mut s, 0, 0);
+                if s.fighters[1].health < before && hit_at.len() == n {
+                    hit_at.push(before - s.fighters[1].health);
+                }
+                // the kicks push the enemy back a little: close the gap again
+                if n < 2 {
+                    s.fighters[1].x = 40 * PX;
+                }
+            }
+        }
+        assert_eq!(names, ["Kick", "Kick 2", "Slam Dunk"]);
+        assert!(hit_at[0] > 0 && hit_at[1] > 0, "both kicks landed");
+        let total = Fighter::MAX_HEALTH - s.fighters[1].health;
+        assert!(total >= 19 + 20 + 6 + 66, "the dunk does the big damage, got {total}");
+    }
+
+    #[test]
+    fn the_slam_dunk_holds_the_enemy_while_he_pushes_himself_up_and_jumps() {
+        let p = professor();
+        let dunk = p.moves.iter().position(|m| m.name == "Slam Dunk").unwrap();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 45 * PX;
+        s.fighters[0].combo = 2;
+        pstep(&mut s, Input::LIGHT, 0);
+        assert_eq!(s.fighters[0].attack, dunk);
+        let mut highest = 0;
+        let mut held_until_dunk = true;
+        let mut dunk_frame = None;
+        for frame in 0..90 {
+            pstep(&mut s, 0, 0);
+            highest = highest.max(s.fighters[0].y);
+            let hurt_before_dunk = s.fighters[1].state != FighterState::Hitstun && s.fighters[1].health == Fighter::MAX_HEALTH;
+            if frame > 12 && frame < 40 && hurt_before_dunk {
+                held_until_dunk = false;
+            }
+            if dunk_frame.is_none() && Fighter::MAX_HEALTH - s.fighters[1].health >= 60 {
+                dunk_frame = Some(frame);
+            }
+        }
+        assert!(highest > 40 * PX, "he jumps, got {} px", highest / PX);
+        assert!(held_until_dunk, "the enemy is held the whole time");
+        assert!(dunk_frame.is_some_and(|f| f >= 30), "the dunk comes after the jump, {dunk_frame:?}");
+        assert_eq!(p.moves[dunk].say.as_deref(), Some("remember..."));
+        assert_eq!(p.moves[dunk].say_after.as_deref(), Some("... taller is the top"));
+    }
+
+    #[test]
+    fn the_professors_words_do_not_fly_as_far_as_they_did() {
+        let p = professor();
+        for name in ["Uh", "Meh"] {
+            let mv = p.moves.iter().find(|m| m.name == name).unwrap();
+            let pd = mv.projectile.as_ref().unwrap();
+            let range = pd.lifetime as i32 * pd.speed_tenths / 10;
+            assert!(range <= 200, "{name} reaches {range} px");
+        }
+        // and every light is 15% weaker than it was (24, 28, 46, 22, 26)
+        let dmg = |n: &str| p.moves.iter().find(|m| m.name == n).unwrap().damage;
+        assert_eq!([dmg("Uh"), dmg("Meh"), dmg("Raven Claw"), dmg("Low Uh"), dmg("Air Meh")], [20, 24, 39, 19, 22]);
     }
 
     #[test]
@@ -3278,15 +3497,15 @@ mod tests {
             }
             Fighter::MAX_HEALTH - s.fighters[0].health
         };
-        assert_eq!(run(false, false, 120), 24, "without the slam the word hits him");
+        assert_eq!(run(false, false, 120), 20, "without the slam the word hits him");
         assert_eq!(run(true, false, 120), 0, "the slam destroys it");
-        assert_eq!(run(true, true, 120), 24, "but not a melee projectile");
+        assert_eq!(run(true, true, 120), 20, "but not a melee projectile");
         // from the far side of the stage the word is still well outside the shockwave while it is active, and arrives
-        assert_eq!(run(true, false, 200), 24, "out of reach: not cleared");
+        assert_eq!(run(true, false, 200), 20, "out of reach: not cleared");
     }
 
     #[test]
-    fn the_staff_slam_is_a_quick_cast_and_then_cools_down_for_two_and_a_half_seconds() {
+    fn the_staff_slam_is_a_quick_cast_and_then_cools_down_for_three_and_a_half_seconds() {
         let a = anaran();
         let mut s = GameState::new();
         s.fighters[0].x = 0;
@@ -3306,12 +3525,12 @@ mod tests {
             // a new cast restarts the cooldown
             if s.fighters[0].cooldown_left(slam) > before && frame > 1 {
                 slams += 1;
-                assert!(frame >= 150, "cast again after only {frame} frames");
+                assert!(frame >= 210, "cast again after only {frame} frames");
             }
         }
         assert!(first_hit.is_some_and(|f| f <= 12), "the slam should land within a few frames, {first_hit:?}");
         assert!(slams >= 2 && slams <= 3, "mashing for ~6.5 seconds gives a couple of slams, got {slams}");
-        assert_eq!(a.moves.iter().find(|m| m.name == "Staff Slam").unwrap().cooldown, 150);
+        assert_eq!(a.moves.iter().find(|m| m.name == "Staff Slam").unwrap().cooldown, 210);
     }
 
     #[test]
@@ -3339,7 +3558,7 @@ mod tests {
         let jab = &c.moves[c.find_move(Button::Light, false, false).unwrap()];
         assert!(jab.startup <= 3 && jab.hitbox.w > 0, "very fast quill stabs");
         let fin = &c.moves[c.find_finisher().unwrap()];
-        assert!(fin.futility > 0 && fin.say.as_deref().unwrap().contains("{enemy}"), "the book writes about the enemy");
+        assert!(fin.bleed.is_some() && fin.say.as_deref().unwrap().contains("{enemy}"), "the book writes about the enemy and makes them bleed");
         assert!(fin.projectile.as_ref().is_some_and(|p| p.homing && p.unblockable), "an unblockable homing particle");
         let heavy = &c.moves[c.find_move(Button::Heavy, false, false).unwrap()];
         assert!(heavy.sparks.is_some() && heavy.projectile.as_ref().is_some_and(|p| p.lob && p.over_target), "sparks, then knives from a portal over the enemy");
@@ -3347,46 +3566,295 @@ mod tests {
         assert!(special.beam.is_some() && special.say.is_some());
     }
 
-    /// The Scribe (P1) with his combo at two lights, throws the book at a passive enemy 100 px away.
-    fn futility_fight() -> GameState {
+    #[test]
+    fn the_logical_fallacy_always_lands_hurts_and_then_bleeds_for_a_short_time() {
         let (c, e) = (scribe(), ayz());
         let mut s = GameState::new();
         s.fighters[1].x = s.fighters[0].x + 100 * PX;
         s.fighters[0].combo = 2;
         s.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
-        for _ in 0..160 {
+        assert_eq!(c.moves[s.fighters[0].attack].name, "Logical Fallacy");
+        // the particle lands
+        while s.fighters[1].bleed_ticks == 0 && s.frame < 300 {
             s.step([Input(0), Input(0)], [&c, &e]);
         }
-        s
+        assert_eq!(s.fighters[1].bleed_ticks, 6, "bleeding");
+        let hit = Fighter::MAX_HEALTH - s.fighters[1].health;
+        assert!(hit >= 36, "it hurt, got {hit}");
+        // over the next second and a half it costs 6 x 5 more
+        for _ in 0..120 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert_eq!(s.fighters[1].bleed_ticks, 0, "and it stops");
+        let total = Fighter::MAX_HEALTH - s.fighters[1].health;
+        assert!(total >= hit + 25 && total <= hit + 40, "about 30 more from the bleeding, got {}", total - hit);
     }
 
     #[test]
-    fn the_scribes_blue_particle_always_lands_and_makes_the_enemys_attacks_cost_them_health() {
+    fn the_scribe_throws_his_quill_from_afar_slowly_and_stabs_up_close() {
         let (c, e) = (scribe(), ayz());
-        let mut s = futility_fight();
-        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the particle landed");
-        assert!(s.fighters[1].futile > 0 || s.fighters[1].futile == 0 && s.frame > 0);
-        // right after it lands the debuff is on; starting an attack costs health
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 40 * PX;
+        s.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
+        assert_eq!(c.moves[s.fighters[0].attack].name, "Quill Jab");
         let mut t = GameState::new();
-        t.fighters[1].x = t.fighters[0].x + 100 * PX;
-        t.fighters[0].combo = 2;
+        t.fighters[0].x = 0;
+        t.fighters[1].x = 160 * PX;
         t.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
-        while t.fighters[1].futile == 0 && t.frame < 300 {
+        assert_eq!(c.moves[t.fighters[0].attack].name, "Quill Throw");
+        let mut flew = false;
+        for _ in 0..120 {
             t.step([Input(0), Input(0)], [&c, &e]);
+            flew |= !t.projectiles.is_empty();
         }
-        assert!(t.fighters[1].futile > 100, "futile for about 2.5 seconds, got {}", t.fighters[1].futile);
+        assert!(flew && t.fighters[1].health < Fighter::MAX_HEALTH, "the quill flew and hit");
+        // the third light stays the book, whatever the gap
+        let mut u = GameState::new();
+        u.fighters[1].x = 160 * PX;
+        u.fighters[0].combo = 2;
+        u.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
+        assert_eq!(c.moves[u.fighters[0].attack].name, "Logical Fallacy");
+    }
+
+    #[test]
+    fn katmata_throws_his_cigarettes_fast_one_after_the_other_then_lights_up_and_fights_with_the_lighter() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 200 * PX;
+        let mut thrown: Vec<(u32, String, bool)> = Vec::new();
+        let mut last = (usize::MAX, 0);
+        for frame in 0..400u32 {
+            // light mashed all the time
+            s.step([Input(if frame % 2 == 0 { Input::LIGHT } else { 0 }), Input(0)], [&k, &evilayz()]);
+            let f = &s.fighters[0];
+            if f.state == FighterState::Attack && (f.attack != last.0 || f.state_frame < last.1) {
+                thrown.push((frame, k.moves[f.attack].name.clone(), f.lighter_mode));
+            }
+            last = (if f.state == FighterState::Attack { f.attack } else { usize::MAX }, f.state_frame);
+        }
+        let last_cig = thrown.iter().position(|t| t.1 == "Last Cigarette").expect("a last cigarette");
+        assert!(thrown[last_cig].2, "after it he is in lighter mode");
+        // the cigarettes before it come quickly: a light every 20 frames at most (the latte takes longer)
+        assert!(thrown[..last_cig].iter().filter(|t| t.1.starts_with("Cigarette")).count() >= 4, "{thrown:?}");
+        assert!(thrown[..last_cig].windows(2).all(|w| w[1].0 - w[0].0 <= 40), "{thrown:?}");
+        // from then on only the lighter, until the pack is full again
+        let mut after = thrown[last_cig + 1..].iter().take_while(|t| t.2).peekable();
+        assert!(after.peek().is_some() && after.all(|t| t.1 == "Lighter Flick"), "{thrown:?}");
+        for _ in 0..600 {
+            s.step([Input(0), Input(0)], [&k, &evilayz()]);
+        }
+        assert!(!s.fighters[0].lighter_mode && s.fighters[0].cigs(&k) == 5, "the whole pack is back");
+    }
+
+    #[test]
+    fn the_scribes_heavy_is_a_sperm_whale_up_close_and_the_hail_from_afar() {
+        let (c, e) = (scribe(), ayz());
+        let mut near = GameState::new();
+        near.fighters[0].x = 0;
+        near.fighters[1].x = 50 * PX;
+        near.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        assert_eq!(c.moves[near.fighters[0].attack].name, "Sperm Whale");
+        assert_eq!(c.moves[near.fighters[0].attack].say.as_deref(), Some("I just read this book..."));
+        let mut bitten = false;
+        for _ in 0..80 {
+            near.step([Input(0), Input(0)], [&c, &e]);
+            bitten |= near.fighters[1].health < Fighter::MAX_HEALTH;
+        }
+        assert!(bitten, "the whale bites an enemy who stays");
+        assert!(Fighter::MAX_HEALTH - near.fighters[1].health >= 90, "a big bite");
+        // one who steps out of the pool is not bitten
+        let mut away = GameState::new();
+        away.fighters[0].x = 0;
+        away.fighters[1].x = 50 * PX;
+        away.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        for frame in 0..80 {
+            if frame == 14 {
+                away.fighters[1].x += 100 * PX;
+            }
+            away.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert_eq!(away.fighters[1].health, Fighter::MAX_HEALTH, "the whale bites where the enemy stood");
+        let mut far = GameState::new();
+        far.fighters[0].x = 0;
+        far.fighters[1].x = 150 * PX;
+        far.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        assert_eq!(c.moves[far.fighters[0].attack].name, "Hail of Knives");
+    }
+
+    #[test]
+    fn landing_the_logical_fallacy_gives_the_scribe_plot_armour_that_nothing_gets_through() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].combo = 2;
+        s.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
+        while s.fighters[0].plot_armour == 0 && s.frame < 300 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert!(s.fighters[0].plot_armour > 100, "the finisher landed, got {}", s.fighters[0].plot_armour);
+        // the enemy hits him with everything: nothing gets through
+        s.fighters[1].x = 20 * PX;
+        s.fighters[1].state = FighterState::Idle;
+        let health = s.fighters[0].health;
+        for _ in 0..60 {
+            let hit = c.moves.iter().find(|m| m.name == "Quill Jab").unwrap().clone();
+            s.apply_hit(0, &hit, -1, false, 100);
+        }
+        assert_eq!(s.fighters[0].health, health, "no damage");
+        assert_ne!(s.fighters[0].state, FighterState::Hitstun, "no stun");
+        // it runs out
+        for _ in 0..160 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert_eq!(s.fighters[0].plot_armour, 0);
+        let hit = c.moves.iter().find(|m| m.name == "Quill Jab").unwrap().clone();
+        s.apply_hit(0, &hit, -1, false, 100);
+        assert!(s.fighters[0].health < health, "and then he can be hurt again");
+    }
+
+    #[test]
+    fn the_scribe_throws_a_pencil_when_he_dashes_away_but_dashes_normally_towards_the_enemy() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 150 * PX;
+        let x0 = s.fighters[0].x;
+        tap(&mut s, Input::LEFT, 0);
+        s.step([Input(Input::LEFT), Input(0)], [&c, &e]);
+        assert_eq!(c.moves[s.fighters[0].attack].name, "Pencil Throw");
+        assert_eq!(s.fighters[0].state, FighterState::Attack);
+        let mut flew = false;
         for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+            flew |= !s.projectiles.is_empty();
+        }
+        assert!(x0 - s.fighters[0].x > 30 * PX, "he went backwards, {} px", (x0 - s.fighters[0].x) / PX);
+        assert!(flew && s.fighters[1].health < Fighter::MAX_HEALTH, "and the pencil hit");
+        // towards them it is the usual dash
+        let mut t = GameState::new();
+        t.fighters[0].x = -100 * PX;
+        t.fighters[1].x = 150 * PX;
+        tap(&mut t, Input::RIGHT, 0);
+        t.step([Input(Input::RIGHT), Input(0)], [&c, &e]);
+        assert_eq!(t.fighters[0].state, FighterState::Dash);
+        // and he walks 15% faster than the usual 200 (5%, then 10% on top)
+        assert_eq!(c.walk_speed, 231);
+    }
+
+    #[test]
+    fn the_scribe_blocks_hits_with_his_book_while_he_dashes_at_the_enemy() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[0].x = -100 * PX;
+        s.fighters[1].x = 100 * PX;
+        tap(&mut s, Input::RIGHT, 0);
+        s.step([Input(Input::RIGHT), Input(0)], [&c, &e]);
+        assert_eq!(s.fighters[0].state, FighterState::Dash);
+        assert!(s.fighters[0].covered, "behind the book");
+        // a hit during the dash is blocked: only chip damage
+        let before = s.fighters[0].health;
+        let hit = c.moves.iter().find(|m| m.name == "Quill Jab").unwrap().clone();
+        let blocked = s.can_block(0, Input(0));
+        assert!(blocked);
+        s.apply_hit(0, &hit, -1, blocked, 100);
+        assert!(before - s.fighters[0].health <= hit.damage / GameState::CHIP_DIVISOR + 1, "chip damage at most");
+        // once the dash is over the book is down
+        let mut t = GameState::new();
+        t.fighters[0].x = -100 * PX;
+        t.fighters[1].x = 100 * PX;
+        for _ in 0..80 {
             t.step([Input(0), Input(0)], [&c, &e]);
         }
-        let before = t.fighters[1].health;
-        t.step([Input(0), Input(Input::LIGHT)], [&c, &e]);
-        assert_eq!(before - t.fighters[1].health, Fighter::FUTILITY_DAMAGE, "an attack costs a little");
-        // it wears off
-        for _ in 0..200 {
+        assert!(!t.fighters[0].covered);
+        // and a dash away from the enemy is not covered (it is the pencil)
+        let mut u = GameState::new();
+        u.fighters[0].x = 0;
+        u.fighters[1].x = 150 * PX;
+        tap(&mut u, Input::LEFT, 0);
+        u.step([Input(Input::LEFT), Input(0)], [&c, &e]);
+        assert!(!u.fighters[0].covered);
+    }
+
+    #[test]
+    fn the_thrown_quills_steer_a_little_towards_the_enemy() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 200 * PX;
+        s.fighters[1].y = 50 * PX;
+        s.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
+        let mut climbed = false;
+        for _ in 0..30 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+            climbed |= s.projectiles.iter().any(|p| p.vy > 0);
+        }
+        assert!(climbed, "a quill rises towards an enemy above it");
+        // and only a little: the speed stays what it was
+        let q = c.moves.iter().find(|m| m.name == "Quill Throw").unwrap().projectile.as_ref().unwrap();
+        assert!(q.steer && q.homing_turn <= 6 && !q.homing);
+        // the special hits 20% harder (110 before)
+        let special = c.moves.iter().find(|m| m.name == "Then Jesus Appeared").unwrap();
+        assert_eq!(special.damage, 132);
+    }
+
+    #[test]
+    fn the_scribes_quills_are_one_a_press_with_almost_no_reload_and_come_in_groups_of_three() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 300 * PX;
+        let mut throws: Vec<u32> = Vec::new();
+        let mut last = (usize::MAX, 0);
+        for frame in 0..140u32 {
+            // light mashed all the time
+            s.step([Input(if frame % 2 == 0 { Input::LIGHT } else { 0 }), Input(0)], [&c, &e]);
+            let f = &s.fighters[0];
+            if f.state == FighterState::Attack && c.moves[f.attack].name == "Quill Throw" && (f.attack != last.0 || f.state_frame < last.1) {
+                throws.push(frame);
+            }
+            last = (if f.state == FighterState::Attack { f.attack } else { usize::MAX }, f.state_frame);
+        }
+        assert!(throws.len() >= 6, "two groups at least, got {throws:?}");
+        // three in a row, a few frames apart (the old volley took 25 frames for three)
+        assert!(throws[2] - throws[0] <= 24, "the first three came fast: {throws:?}");
+        // then the reload, then three more
+        assert!(throws[3] - throws[2] >= 20, "a reload after the third: {throws:?}");
+        assert!(throws[5] - throws[3] <= 24, "and three again: {throws:?}");
+        // one quill a throw
+        let mut t = GameState::new();
+        t.fighters[0].x = 0;
+        t.fighters[1].x = 300 * PX;
+        t.step([Input(Input::LIGHT), Input(0)], [&c, &e]);
+        for _ in 0..12 {
             t.step([Input(0), Input(0)], [&c, &e]);
         }
-        assert_eq!(t.fighters[1].futile, 0);
-        s.fighters[1].health = 1000;
+        assert_eq!(t.fighters[0].shots, 1);
+    }
+
+    #[test]
+    fn katmata_flicks_his_lighter_at_close_range_without_using_a_cigarette() {
+        let k = katmata();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 35 * PX;
+        s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
+        assert_eq!(k.moves[s.fighters[0].attack].name, "Lighter Flick");
+        assert_eq!(s.fighters[0].cigs(&k), 5, "no cigarette used");
+    }
+
+    #[test]
+    fn the_gun_boost_and_the_whip_storm_are_hard_to_interrupt() {
+        let (cowboy, junk) = (cowboy(), junkhead());
+        for (c, name) in [(&cowboy, "Gun Boost"), (&junk, "Whip Storm")] {
+            let mv = c.moves.iter().find(|m| m.name == name).unwrap();
+            assert!(mv.committed && mv.commit_frame() <= 4, "{name} is committed almost at once, got {}", mv.commit_frame());
+        }
+        // and the whip reaches further than it did (it was 140)
+        let storm = junk.moves.iter().find(|m| m.name == "Whip Storm").unwrap();
+        assert!(storm.hitbox.w >= 180);
     }
 
     #[test]
@@ -3394,13 +3862,13 @@ mod tests {
         let (c, e) = (scribe(), ayz());
         let run = |walk_away: bool| {
             let mut s = GameState::new();
-            s.fighters[1].x = s.fighters[0].x + 100 * PX;
+            s.fighters[1].x = s.fighters[0].x + 150 * PX;
             let spot = s.fighters[1].x;
             s.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
             let mut portal = None;
             for frame in 0..220 {
-                if frame == 55 && walk_away {
-                    s.fighters[1].x += 120 * PX;
+                if frame == 18 && walk_away {
+                    s.fighters[1].x -= 350 * PX;
                 }
                 s.step([Input(0), Input(0)], [&c, &e]);
                 portal = portal.or(s.fighters[0].moon);
@@ -3425,8 +3893,8 @@ mod tests {
             s.step([Input(Input::SPECIAL), Input(0)], [&c, &e]);
             let mut starts = Vec::new();
             for frame in 0..170 {
-                // after Jesus has locked on (0.6 s), before the beam comes down
-                if frame == 40 && walk_away {
+                // after Jesus has locked on (0.4 s), before the beam comes down
+                if frame == 28 && walk_away {
                     s.fighters[1].x += 120 * PX;
                 }
                 s.step([Input(0), Input(0)], [&c, &e]);
@@ -3460,7 +3928,7 @@ mod tests {
         let hit_at = |special: bool, frame_to_hit: u32| {
             let mut s = GameState::new();
             s.fighters[0].meter = Fighter::METER_MAX;
-            s.fighters[1].x = s.fighters[0].x + 100 * PX;
+            s.fighters[1].x = s.fighters[0].x + 150 * PX;
             s.step([Input(if special { Input::SPECIAL } else { Input::HEAVY }), Input(0)], [&c, &e]);
             for _ in 0..frame_to_hit {
                 s.step([Input(0), Input(0)], [&c, &e]);
@@ -3474,10 +3942,10 @@ mod tests {
         };
         // before the portal or Jesus shows, a hit knocks him out of it
         assert_eq!(hit_at(false, 10).0, FighterState::Hitstun);
-        assert_eq!(hit_at(true, 30).0, FighterState::Hitstun);
+        assert_eq!(hit_at(true, 20).0, FighterState::Hitstun);
         // once they show, it doesn't
         assert_eq!(hit_at(false, 20).0, FighterState::Attack);
-        assert_eq!(hit_at(true, 38).0, FighterState::Attack);
+        assert_eq!(hit_at(true, 28).0, FighterState::Attack);
         // once the knives or the beam are going, the hit hurts but the move goes on
         let (state, health) = hit_at(false, 80);
         assert_eq!(state, FighterState::Attack, "the hail goes on");
@@ -3678,6 +4146,28 @@ mod tests {
     }
 
     #[test]
+    fn the_bat_wave_is_a_short_spray_of_small_bats_fanning_out_forward() {
+        let g = gray_persona();
+        let heavy = &g.moves[g.find_move(Button::Heavy, false, false).unwrap()];
+        let p = heavy.projectile.as_ref().unwrap();
+        // a short way: it used to fly 80 frames at 4 px (320 px)
+        assert!(p.lifetime as i32 * p.speed <= 200, "range {} px", p.lifetime as i32 * p.speed);
+        assert!(heavy.volley >= 6 && p.fan > 0 && p.size.0 < 20, "several small bats");
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 400 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&g, &evilayz()]);
+        let mut slopes = std::collections::BTreeSet::new();
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&g, &evilayz()]);
+            for q in &s.projectiles {
+                slopes.insert(q.vy);
+            }
+        }
+        assert!(slopes.len() >= 4, "the bats fly off at different slopes, got {slopes:?}");
+    }
+
+    #[test]
     fn the_bat_wave_hops_her_back() {
         let g = gray_persona();
         let mut s = GameState::new();
@@ -3692,7 +4182,7 @@ mod tests {
             s.step([Input(0), Input(0)], [&g, &evilayz()]);
         }
         assert_eq!(s.fighters[0].y, 0);
-        assert_eq!(s.projectiles.len() + (s.fighters[1].health < Fighter::MAX_HEALTH) as usize, 1, "the bats still flew");
+        assert!(s.projectiles.len() >= 1 || s.fighters[1].health < Fighter::MAX_HEALTH, "the bats still flew");
     }
 
     #[test]
@@ -3701,8 +4191,8 @@ mod tests {
         for button in [Button::Heavy, Button::Special] {
             let index = scribe.find_move(button, false, false).unwrap();
             let mv = &scribe.moves[index];
-            // the portal shows 0.3 s in, Jesus 0.6 s in, and from then on the move can't be stopped
-            assert_eq!(mv.commit_frame(), if button == Button::Heavy { 18 } else { 36 }, "{}", mv.name);
+            // the portal shows 0.2 s in, Jesus 0.4 s in, and from then on the move can't be stopped
+            assert_eq!(mv.commit_frame(), if button == Button::Heavy { 12 } else { 24 }, "{}", mv.name);
             let mut f = Fighter::new(0, 1);
             f.state = FighterState::Attack;
             f.attack = index;
@@ -3724,10 +4214,10 @@ mod tests {
         let mut s = GameState::new();
         s.fighters[0].x = 0;
         s.fighters[1].x = 80 * PX;
-        assert_eq!(s.fighters[0].cigs(&k), 7);
+        assert_eq!(s.fighters[0].cigs(&k), 5);
         s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
         assert_eq!(k.moves[s.fighters[0].attack].name, "Cigarette Toss");
-        assert_eq!(s.fighters[0].cigs(&k), 6);
+        assert_eq!(s.fighters[0].cigs(&k), 4);
         for _ in 0..40 {
             s.step([Input(0), Input(0)], [&k, &evilayz()]);
         }
@@ -3740,7 +4230,7 @@ mod tests {
         let mut s = GameState::new();
         s.fighters[0].x = 0;
         s.fighters[1].x = 200 * PX;
-        s.fighters[0].cigs_used = 7;
+        s.fighters[0].cigs_used = 5;
         s.step([Input(Input::LIGHT), Input(0)], [&k, &evilayz()]);
         assert_eq!(k.moves[s.fighters[0].attack].name, "Lighter Flick");
         assert_eq!(s.fighters[0].cigs(&k), 0);
@@ -3752,7 +4242,7 @@ mod tests {
         for _ in 0..60 * 8 {
             s.step([Input(0), Input(0)], [&k, &evilayz()]);
         }
-        assert_eq!(s.fighters[0].cigs(&k), 7, "never more than seven");
+        assert_eq!(s.fighters[0].cigs(&k), 5, "never more than five");
     }
 
     #[test]
@@ -3848,6 +4338,12 @@ mod tests {
         assert_eq!(z.kind, ZoneKind::Glitch);
         assert!((z.x - 100 * PX).abs() < 4 * PX, "on the enemy");
         assert_eq!(z.half_width, 80 * PX, "a large area");
+        let hurt_before = s.fighters[1].health;
+        for _ in 0..60 {
+            s.step([Input(0), Input(0)], [&k, &e]);
+        }
+        assert!(s.fighters[1].health < hurt_before, "a little damage while they are in it");
+        assert_eq!(s.fighters[0].health, Fighter::MAX_HEALTH, "and none to him");
         // in it: slowed to a third, can't block, does half damage; out of it nothing changes
         assert!(s.in_zone(1, ZoneKind::Glitch) && !s.in_zone(0, ZoneKind::Glitch));
         let x = s.fighters[1].x;
@@ -3915,11 +4411,75 @@ mod tests {
             }
             s.step([Input(0), Input(0)], [&k, &e]);
         }
-        assert!(s.minions.iter().all(|m| m.health <= 0), "the swing reached the agents behind");
+        assert!(s.minions.iter().all(|m| m.health < 48), "the swing reached the agents behind");
     }
 
     #[test]
-    fn two_agents_walk_in_punch_and_die_to_one_hit() {
+    fn three_blocked_scroll_missiles_stun_anaran() {
+        let anaran = CharacterData::from_ron(include_str!("../../assets/characters/anaran.ron")).unwrap();
+        let e = ayz();
+        let mut s = GameState::new();
+        s.fighters[0].x = -150 * PX;
+        s.fighters[1].x = 150 * PX;
+        let (mut blocked, mut stunned_at) = (0, None);
+        for frame in 0..900 {
+            s.step([Input(Input::LIGHT), Input(Input::BLOCK)], [&anaran, &e]);
+            blocked = blocked.max(s.fighters[0].shots_blocked);
+            if stunned_at.is_none() && s.fighters[0].state == FighterState::Hitstun {
+                stunned_at = Some(frame);
+            }
+        }
+        assert!(blocked >= 2, "his missiles were blocked");
+        let at = stunned_at.expect("the third blocked missile stuns him");
+        assert!(at > 100, "not before the third one ({at})");
+        assert_eq!(s.fighters[0].shots_blocked, 0, "and the count starts again");
+    }
+
+    #[test]
+    fn a_missile_that_gets_through_resets_the_count() {
+        let mut f = Fighter::new(0, 1);
+        f.shots_blocked = 2;
+        f.shots_blocked_timer = 300;
+        for _ in 0..300 {
+            f.step(Input(0), &CharacterData::from_ron(include_str!("../../assets/characters/anaran.ron")).unwrap());
+        }
+        assert_eq!(f.shots_blocked, 0, "forgotten after five seconds without another");
+    }
+
+    #[test]
+    fn a_fighter_turns_to_a_goblin_that_is_right_on_them() {
+        let anaran = CharacterData::from_ron(include_str!("../../assets/characters/anaran.ron")).unwrap();
+        let e = ayz();
+        let mut s = GameState::new();
+        s.fighters[0].x = -200 * PX;
+        s.fighters[1].x = 100 * PX;
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&anaran, &e]);
+        for _ in 0..200 {
+            s.step([Input(0), Input(0)], [&anaran, &e]);
+        }
+        assert!(s.minions.iter().any(|m| m.health > 0), "the goblins reached them");
+        // one right behind: they turn round to it
+        for m in &mut s.minions {
+            m.x = s.fighters[1].x + 20 * PX;
+        }
+        s.fighters[1].state = FighterState::Idle;
+        s.step([Input(0), Input(0)], [&anaran, &e]);
+        assert_eq!(s.fighters[1].facing, 1, "turned to the goblins");
+    }
+
+    #[test]
+    fn holding_up_and_down_together_does_nothing() {
+        let c = ayz();
+        let mut s = GameState::new();
+        for _ in 0..200 {
+            s.step([Input(Input::UP | Input::DOWN), Input(0)], [&c, &c]);
+            assert!(s.fighters[0].grounded() && !s.fighters[0].slamming, "no jump and no slam");
+        }
+    }
+
+    #[test]
+    fn two_agents_walk_in_punch_and_die_to_two_lights() {
         let k = katmata();
         let mut s = GameState::new();
         s.fighters[0].x = 0;
@@ -3930,14 +4490,14 @@ mod tests {
             s.step([Input(0), Input(0)], [&k, &evilayz()]);
         }
         assert_eq!(s.minions.len(), 2);
-        assert!(s.minions.iter().all(|m| m.agent && m.health == 40));
+        assert!(s.minions.iter().all(|m| m.agent && m.health == 48));
         let start = s.fighters[1].x;
         for _ in 0..240 {
             s.step([Input(0), Input(0)], [&k, &evilayz()]);
         }
         assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the agents punched the enemy");
         let _ = start;
-        // a ground pound (28) doesn't kill one, but any light attack does
+        // a ground pound (28) doesn't kill one, and a light attack (24) takes half of one: it takes two
         let jab = [s.minions[0].x - 4 * PX, 0, s.minions[0].x + 4 * PX, 40 * PX];
         s.minions[0].mode = MinionMode::Charge;
         let before = s.minions[0].health;
@@ -3945,7 +4505,17 @@ mod tests {
         assert!(s.minions[0].health > 0 && s.minions[0].health < before, "a slam hurts but doesn't kill");
         s.minions[0].hurt = 0;
         assert!(s.hit_minion(0, jab, 1, true));
-        assert!(s.minions[0].health <= 0, "one light attack kills");
+        assert!(s.minions[0].health <= 0, "a light attack finishes a hurt one");
+        // a fresh one survives one light attack and not two
+        s.minions[1].x = s.minions[0].x + 100 * PX;
+        s.minions[1].health = 48;
+        let other = [s.minions[1].x - 4 * PX, 0, s.minions[1].x + 4 * PX, 40 * PX];
+        s.minions[1].mode = MinionMode::Charge;
+        assert!(s.hit_minion(0, other, 1, true));
+        assert!(s.minions[1].health > 0, "one light is not enough");
+        s.minions[1].hurt = 0;
+        assert!(s.hit_minion(0, other, 1, true));
+        assert!(s.minions[1].health <= 0, "two are");
     }
 
     #[test]
@@ -3953,7 +4523,7 @@ mod tests {
         let g = gray_persona();
         let heavy = &g.moves[g.find_move(Button::Heavy, false, false).unwrap()];
         assert!(heavy.cooldown > 0);
-        assert_eq!(heavy.projectile.as_ref().unwrap().image_name(), "bats");
+        assert_eq!(heavy.projectile.as_ref().unwrap().image_name(), "batspray");
     }
 }
 

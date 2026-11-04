@@ -1,0 +1,9 @@
+Sound effects in this folder were cut and converted from these free packs:
+
+- Deadly Kombat Free Library (hits, blocks, whooshes, gore, blades) - Daniel Sounds Good, https://danielsoundsgood.itch.io/free-deadly-kombat-sound-effects
+- Magic Spell SFX Soundpack (fire, dark, holy, earth, wind, water, lightning) - Leonardo Calvo / Soundrack, CC BY 4.0, https://thesoundrack.itch.io/freemagicspellsfx
+- Gun sounds (gunshots) - alienanthony, public domain, https://alienanthony.itch.io/gun-sounds
+- Owlish Media Sound Effects (footsteps, cloth, paper, UI, scifi) - Owlish Media, CC0, https://opengameart.org/content/sound-effects-pack
+- Foley pack (glass, leather) - https://opengameart.org/content/super-foley-pack
+- Whip sound - Reemax, CC BY, https://opengameart.org/content/whip-sound
+- Free Audio Creature Sample Pack (goblin squeaks) - fairlight1337, https://fairlight1337.itch.io/free-audio-creature-sample-pack

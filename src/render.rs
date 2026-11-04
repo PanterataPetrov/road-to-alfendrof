@@ -82,6 +82,16 @@ pub struct WorryLine(pub usize, pub usize);
 pub struct JesusOf(pub usize);
 #[derive(Component)]
 pub struct BeamPart(pub usize, pub bool);
+/// The blue bubble of plot armour round a fighter, and its label.
+#[derive(Component)]
+pub struct ShieldOf(pub usize);
+#[derive(Component)]
+pub struct ShieldLabel(pub usize);
+/// The pool and the whale's head of a fighter whose beam is a whale.
+#[derive(Component)]
+pub struct PoolOf(pub usize);
+#[derive(Component)]
+pub struct WhaleOf(pub usize);
 #[derive(Component)]
 pub struct BubbleText(pub usize);
 
@@ -115,7 +125,7 @@ fn all_stems(frames: &[Frame], effects: &[(String, usize)], mark: bool, whip: bo
         stems.extend(frames.iter().map(|f| format!("{}_mark", f.file_stem())));
     }
     for (base, drawings) in effects {
-        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 8 } else if base == "agent" { 9 } else if base == "glitch" { 4 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
+        let count = if *drawings > 0 { *drawings } else if base == "goblin" { 8 } else if base == "agent" { 9 } else if base == "glitch" { 4 } else if base == "whale" { 6 } else { CRESCENT_FRAMES.max(STAR_FRAMES) };
         stems.extend((0..count).map(|i| format!("{base}_{i}")));
     }
     stems
@@ -256,6 +266,43 @@ pub fn spawn_fighter(
                 .id();
             commands.entity(root).add_child(line);
         }
+        // the bubble of plot armour, and the words on its top left
+        if effects.iter().any(|e| e.0 == "shield") {
+            commands.spawn((
+                ShieldOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("shield_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 2.0),
+                Visibility::Hidden,
+            ));
+            commands.spawn((
+                ShieldLabel(fighter),
+                DespawnOnExit(AppState::Fight),
+                Text2d::new("Plot Armour"),
+                crate::pixel_font(8.0),
+                TextColor(Color::srgb(0.7, 0.9, 1.0)),
+                bevy::sprite::Anchor::BOTTOM_LEFT,
+                Transform::from_xyz(0.0, 0.0, 2.2),
+                Visibility::Hidden,
+            ));
+        }
+        // the pool and the whale that comes up out of it
+        if effects.iter().any(|e| e.0 == "whale") {
+            commands.spawn((
+                PoolOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("pool_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 1.0),
+                Visibility::Hidden,
+            ));
+            commands.spawn((
+                WhaleOf(fighter),
+                DespawnOnExit(AppState::Fight),
+                Sprite::from_image(get("whale_0").expect("loaded with the rest")),
+                Transform::from_xyz(0.0, 0.0, 1.2),
+                Visibility::Hidden,
+            ));
+        }
         // Jesus and his beam, in the sky
         if effects.iter().any(|e| e.0 == "jesus") {
             commands.spawn((
@@ -374,6 +421,11 @@ pub fn animate_body(
         }
         if f.futile > 0 {
             set_ne!(sprite.color, futile_tint(sprite.color));
+        }
+        // bleeding: washed over with red
+        if f.bleed_ticks > 0 {
+            let c = sprite.color.to_srgba();
+            set_ne!(sprite.color, Color::srgba(c.red, c.green * 0.65, c.blue * 0.65, c.alpha));
         }
         // inside a portal there is nothing to see
         if f.hidden {
@@ -715,7 +767,7 @@ pub fn animate_moons(
                 set_ne!(tf.translation.y, GROUND_Y + (y / PX) as f32);
                 let grow = (age as f32 / 12.0).min(1.0).max(0.1);
                 // a portal over the opponent is wide
-                tf.scale = if base == "portal" { Vec3::new(grow * 1.9, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
+                tf.scale = if base == "portal" { Vec3::new(grow * 5.6, grow * 1.1, 1.0) } else { Vec3::splat(grow) };
                 let fade = ((Fighter::MOON_LIFE - age.min(Fighter::MOON_LIFE)) as f32 / 25.0).min(1.0);
                 set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, fade));
                 let twinkle = (sim.0.frame / 8 % CRESCENT_FRAMES as u32) as usize;
@@ -770,7 +822,10 @@ pub fn animate_bubbles(
         let index = lingering.unwrap_or(f.attack.min(data.moves.len() - 1));
         let mv = &data.moves[index];
         // a writing move says its line (with the enemy's name in it) while it plays
-        let line = mv.say.as_ref().map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
+        // (a move can have a second line, said once its last hit has landed)
+        let last_hit = mv.startup + (mv.hits.max(1) - 1) * mv.hit_gap;
+        let said_after = attacking && mv.say_after.is_some() && f.state_frame > last_hit;
+        let line = if said_after { mv.say_after.as_ref() } else { mv.say.as_ref() }.map(|say| say.replace("{enemy}", &roster.0[sel.chars[1 - *i]].name));
         spoken[*i] = if attacking && line.is_some() { Some(index) } else { lingering };
         // a grab says it while he holds the enemy (after the pull); the others while they wind up
         let grabbing = mv.hits > 1;
@@ -789,7 +844,8 @@ pub fn animate_bubbles(
                 1.0
             } else if line.is_some() {
                 // a written line types at its own pace (30 letters a second), whatever the move is doing
-                (f.state_frame as f32 * 0.5 / full.chars().count().max(1) as f32).min(1.0)
+                let typed_for = if said_after { f.state_frame - last_hit } else { f.state_frame };
+                (typed_for as f32 * if said_after { 1.5 } else { 0.5 } / full.chars().count().max(1) as f32).min(1.0)
             } else if grabbing {
                 (f.state_frame.saturating_sub(mv.startup) as f32 / (mv.hit_gap as f32 * 0.6).max(1.0)).min(1.0)
             } else {
@@ -1387,14 +1443,14 @@ pub fn animate_scribe_effects(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        match (f.state == FighterState::Attack, mv.beam, f.beam_lock) {
+        match (f.state == FighterState::Attack, mv.beam.filter(|b| !b.whale), f.beam_lock) {
             (true, Some(b), Some(lock)) => {
                 set_ne!(*visibility, Visibility::Inherited);
                 let age = f.state_frame.saturating_sub(b.lock_frame);
                 let rise = (age as f32 / 14.0).min(1.0);
                 let leave = if f.state_frame > mv.startup + mv.active { ((mv.total_frames() - f.state_frame.min(mv.total_frames())) as f32 / 12.0).min(1.0) } else { 1.0 };
                 set_ne!(tf.translation.x, (lock / PX) as f32 - f.facing as f32 * b.lead as f32);
-                set_ne!(tf.translation.y, GROUND_Y + 128.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5);
+                set_ne!(tf.translation.y, GROUND_Y + 170.0 + (1.0 - rise) * 24.0 + (time.elapsed_secs() * 2.0).sin() * 1.5);
                 set_ne!(sprite.color, Color::srgba(1.0, 1.0, 1.0, rise * leave));
                 let frame = (sim.0.frame / 8 % 2) as usize;
                 if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("jesus_{frame}"))) {
@@ -1410,7 +1466,7 @@ pub fn animate_scribe_effects(
         let f = &sim.0.fighters[*i];
         let data = &roster.0[sel.chars[*i]];
         let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
-        let (Some(b), Some(lock)) = (mv.beam, f.beam_lock) else {
+        let (Some(b), Some(lock)) = (mv.beam.filter(|b| !b.whale), f.beam_lock) else {
             set_ne!(*visibility, Visibility::Hidden);
             continue;
         };
@@ -1424,7 +1480,7 @@ pub fn animate_scribe_effects(
         let progress = (f.state_frame.saturating_sub(mv.startup) as f32).min(mv.active as f32) / mv.active.max(1) as f32;
         let lock_x = (lock / PX) as f32;
         let (start, end) = (lock_x - f.facing as f32 * b.lead as f32, lock_x + f.facing as f32 * b.sweep as f32);
-        let from = Vec2::new(lock_x - f.facing as f32 * b.lead as f32, GROUND_Y + 118.0);
+        let from = Vec2::new(lock_x - f.facing as f32 * b.lead as f32, GROUND_Y + 160.0);
         let to = Vec2::new(start + (end - start) * progress, GROUND_Y + 4.0);
         let (dx, dy) = (to.x - from.x, to.y - from.y);
         let length = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -1439,5 +1495,126 @@ pub fn animate_scribe_effects(
         // bottom sweeps
         tf.rotation = Quat::from_rotation_z(dx.atan2(-dy));
         sprite.color = if *core { Color::srgba(1.0, 1.0, 0.95, fade) } else { Color::srgba(1.0, 0.88, 0.45, 0.55 * fade) };
+    }
+}
+
+/// The Scribe's whale: a pool opens in the ground where the enemy stood, the whale's head rises out of it, opens wide, snaps
+/// shut on the spot, and sinks again. Every stage is its own drawing (`whale_0..5`), so nothing here moves it.
+pub fn animate_whale(
+    sim: Res<Sim>,
+    roster: Res<Roster>,
+    sel: Res<Selection>,
+    handles: Res<FrameHandles>,
+    mut pools: Query<(&PoolOf, &mut Sprite, &mut Transform, &mut Visibility), Without<WhaleOf>>,
+    mut whales: Query<(&WhaleOf, &mut Sprite, &mut Transform, &mut Visibility), Without<PoolOf>>,
+) {
+    // which drawing of the whale at which frame of the move: rising until the bite, the bite, then sinking
+    let drawing = |mv: &t2f::sim::MoveData, frame: u32, lock_frame: u32| -> Option<usize> {
+        let bite_end = mv.startup + mv.active;
+        if frame < lock_frame + 4 {
+            None
+        } else if frame < mv.startup.saturating_sub(10) {
+            Some(0)
+        } else if frame < mv.startup.saturating_sub(6) {
+            Some(1)
+        } else if frame < mv.startup.saturating_sub(2) {
+            Some(2)
+        } else if frame <= mv.startup {
+            Some(3)
+        } else if frame <= bite_end + 4 {
+            Some(4)
+        } else if frame <= bite_end + 12 {
+            Some(5)
+        } else {
+            None
+        }
+    };
+    for (PoolOf(i), mut sprite, mut tf, mut visibility) in &mut pools {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(b), Some(lock), true) = (mv.beam.filter(|b| b.whale), f.beam_lock, f.state == FighterState::Attack) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        // the pool is there from the lock until the whale has gone down again
+        if f.state_frame > mv.startup + mv.active + 16 {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        }
+        let _ = b;
+        set_ne!(*visibility, Visibility::Inherited);
+        set_ne!(tf.translation.x, (lock / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y - 2.0);
+        let frame = (sim.0.frame / 6 % 2) as usize;
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("pool_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+    for (WhaleOf(i), mut sprite, mut tf, mut visibility) in &mut whales {
+        let f = &sim.0.fighters[*i];
+        let data = &roster.0[sel.chars[*i]];
+        let mv = &data.moves[f.attack.min(data.moves.len() - 1)];
+        let (Some(b), Some(lock), true) = (mv.beam.filter(|b| b.whale), f.beam_lock, f.state == FighterState::Attack) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        let Some(which) = drawing(mv, f.state_frame, b.lock_frame) else {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        };
+        set_ne!(*visibility, Visibility::Inherited);
+        // the drawings stand on the water line, 4 px up from the bottom of the picture
+        set_ne!(tf.translation.x, (lock / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + 28.0);
+        // it faces the one who called it
+        set_ne!(tf.scale.x, f.facing as f32);
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("whale_{which}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+}
+
+/// The bubble of plot armour round a fighter who has it (it flickers in its last half second), with its label above the top
+/// left of it.
+pub fn animate_shield(
+    sim: Res<Sim>,
+    handles: Res<FrameHandles>,
+    mut bubbles: Query<(&ShieldOf, &mut Sprite, &mut Transform, &mut Visibility), Without<ShieldLabel>>,
+    mut labels: Query<(&ShieldLabel, &mut Transform, &mut Visibility, &mut TextColor), Without<ShieldOf>>,
+) {
+    for (ShieldOf(i), mut sprite, mut tf, mut visibility) in &mut bubbles {
+        let f = &sim.0.fighters[*i];
+        if f.plot_armour == 0 {
+            set_ne!(*visibility, Visibility::Hidden);
+            continue;
+        }
+        // blinking as it runs out
+        let shown = f.plot_armour > 30 || (f.plot_armour / 3) % 2 == 0;
+        set_ne!(*visibility, if shown { Visibility::Inherited } else { Visibility::Hidden });
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 33.0);
+        let frame = (sim.0.frame / 10 % 2) as usize;
+        if let Some(image) = handles.0.get(*i).and_then(|m| m.get(&format!("shield_{frame}"))) {
+            if sprite.image != *image {
+                sprite.image = image.clone();
+            }
+        }
+    }
+    for (ShieldLabel(i), mut tf, mut visibility, mut color) in &mut labels {
+        let f = &sim.0.fighters[*i];
+        let shown = f.plot_armour > 30 || (f.plot_armour / 3) % 2 == 0;
+        set_ne!(*visibility, if f.plot_armour > 0 && shown { Visibility::Inherited } else { Visibility::Hidden });
+        // on the top left of the bubble, just outside it
+        set_ne!(tf.translation.x, (f.x / PX) as f32 - 36.0);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + 68.0);
+        let tone = Color::srgb(0.7, 0.9, 1.0);
+        if color.0 != tone {
+            color.0 = tone;
+        }
     }
 }

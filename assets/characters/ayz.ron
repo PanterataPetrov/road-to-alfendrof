@@ -1,19 +1,24 @@
 // The Professor (Ayz): a ranged fighter with a raven on his shoulder. A big man with long black hair, a bald top,
 // glasses and a moustache, in a tight white shirt and orange trousers. Evilayz is the same drawings in negative colours.
 //
-// Light: he speaks at the enemy, "uh" then "meh" (each word flies out and hits); the third hit of the combo is the
-//        raven flying in to claw them. If the raven is away the combo starts again with a word. Crouching Light is
-//        a low word, in the air a word aimed at the opponent.
+// Light: he speaks at the enemy, "uh" then "meh" (each word flies out, a short way, and hits); the third hit of the combo is
+//        the raven flying in to claw them. If the raven is away the combo starts again with a word. Crouching Light is
+//        a low word, in the air a word aimed at the opponent. Up close (within 56 px) the light is a kick instead: two
+//        kicks, and if both land the third is the slam dunk: he takes the enemy by the shoulders (they are held), pushes
+//        himself up saying "remember...", jumps, dunks a basketball on them, and says "... taller is the top". (Every light
+//        does 15% less than it used to.)
 // Heavy: "Here's the Thing...": if the enemy is in range he pulls them in, grabs them by the collar and says it,
 //        then shoves them away for the damage.
 // Special (the scar glows when the meter is full): the raven flies after the enemy wherever they are and pecks
-//        them three times (left, right, left), then flies back and drops a rose on him that heals 5%.
+//        them three times (left, right, left), then flies back home (no rose, no healing).
 //
 // See cowboy.ron / junkhead.ron for the whip and pull fields, and src/sim/data.rs for combo_step, raven,
 // raven_move and hit_overrides.
 (
     name: "The Professor",
     subtitle: Some("Probably not a real professor..."),
+    // what Light, Heavy and Special do, shown in the character select
+    blurbs: ["Up close two kicks then a slam dunk; from afar \"uh\" and \"meh\" then the raven's claw.", "Here's the Thing: pulls the enemy in, grabs their collar, says it, then shoves them away.", "The raven chases the enemy anywhere and pecks three times."],
     sprites: Some("ayz"),
     color: (1.0, 0.60, 0.10),
     walk_speed: 200,
@@ -24,36 +29,51 @@
     raven: Some((home: (15, 46), speed: 14)),
     special_mark: Some(Scar(color: (0.78, 0.52, 0.42), glow: (1.0, 0.88, 0.25))),
     moves: [
-        (name: "Uh", button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(0),
-         startup: 8, active: 1, recovery: 12, damage: 24, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+        (name: "Uh", sfx: (hit: Some("slap")), button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(0),
+         startup: 8, active: 1, recovery: 12, damage: 20, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 18, y: 50, aim_y: 50, travel_frames: 1, lifetime: 100, size: (18, 13), image: Some("word_uh"), summon_image: Some("none"), speed_tenths: 32, upright: true))),
-        (name: "Meh", button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(1),
-         startup: 8, active: 1, recovery: 14, damage: 28, hitstun: 13, blockstun: 8, knockback: 2, hitstop: 3,
+         projectile: Some((x: 18, y: 50, aim_y: 50, travel_frames: 1, lifetime: 60, size: (18, 13), image: Some("word_uh"), summon_image: Some("none"), speed_tenths: 32, upright: true))),
+        (name: "Meh", sfx: (hit: Some("slap")), button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(1),
+         startup: 8, active: 1, recovery: 14, damage: 24, hitstun: 13, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 18, y: 50, aim_y: 50, travel_frames: 1, lifetime: 110, size: (30, 13), image: Some("word_meh"), summon_image: Some("none"), speed_tenths: 24, upright: true))),
+         projectile: Some((x: 18, y: 50, aim_y: 50, travel_frames: 1, lifetime: 75, size: (30, 13), image: Some("word_meh"), summon_image: Some("none"), speed_tenths: 24, upright: true))),
         // third hit: the raven flies in fast and claws
-        (name: "Raven Claw", button: Light, crouching: false, anim: Point, walk_pct: 0, finisher_move: true,
+        (name: "Raven Claw", sfx: (cast: Some("raven_cast"), hit: Some("raven_hit")), button: Light, crouching: false, anim: Point, walk_pct: 0, finisher_move: true,
          raven_move: Some(Claw),
-         startup: 9, active: 1, recovery: 14, damage: 46, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 6,
+         startup: 9, active: 1, recovery: 14, damage: 39, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 6,
          hitbox: (x: 0, y: 0, w: 0, h: 0)),
-        (name: "Low Uh", button: Light, crouching: true, anim: Soft, walk_pct: 0,
-         startup: 9, active: 1, recovery: 12, damage: 22, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
+        // up close the light is a kick instead: two kicks, and if both land, the slam dunk
+        (name: "Kick", sfx: (hit: Some("slap")), button: Light, crouching: false, anim: Kicks, walk_pct: 40, combo_step: Some(0), within: Some(56),
+         startup: 6, active: 3, recovery: 9, damage: 19, hitstun: 13, blockstun: 8, knockback: 3, hitstop: 3,
+         hitbox: (x: 8, y: 4, w: 36, h: 30)),
+        (name: "Kick 2", sfx: (hit: Some("slap")), button: Light, crouching: false, anim: Kicks, walk_pct: 40, combo_step: Some(1), within: Some(56),
+         startup: 6, active: 3, recovery: 9, damage: 20, hitstun: 13, blockstun: 8, knockback: 3, hitstop: 3,
+         hitbox: (x: 8, y: 4, w: 36, h: 30)),
+        // the third: he takes the enemy by the shoulders (they are held), pushes himself up saying "remember...", jumps, and
+        // dunks a basketball on them; then "... taller is the top"
+        (name: "Slam Dunk", sfx: (cast: Some("grab"), hit: Some("slap")), button: Light, crouching: false, anim: Dunk, walk_pct: 0, finisher_move: true, within: Some(56),
+         pull_foe: true, pull_gap: 26, hits: 2, hit_gap: 36, hop: Some((800, 0)), hop_at: 28, world_y: true,
+         hit_overrides: [(damage: 6, hitstun: 70, knockback: 0), (damage: 66, hitstun: 28, knockback: 6)],
+         say: Some("remember..."), say_after: Some("... taller is the top"),
+         startup: 8, active: 3, recovery: 36, damage: 66, hitstun: 28, blockstun: 14, knockback: 6, hitstop: 8,
+         hitbox: (x: 4, y: 8, w: 56, h: 50)),
+        (name: "Low Uh", sfx: (hit: Some("slap")), button: Light, crouching: true, anim: Soft, walk_pct: 0,
+         startup: 9, active: 1, recovery: 12, damage: 19, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 18, y: 14, aim_y: 14, travel_frames: 1, lifetime: 100, size: (18, 13), image: Some("word_uh"), summon_image: Some("none"), speed_tenths: 32, upright: true))),
-        (name: "Air Meh", button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
-         startup: 6, active: 1, recovery: 12, damage: 26, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
+         projectile: Some((x: 18, y: 14, aim_y: 14, travel_frames: 1, lifetime: 60, size: (18, 13), image: Some("word_uh"), summon_image: Some("none"), speed_tenths: 32, upright: true))),
+        (name: "Air Meh", sfx: (hit: Some("slap")), button: Light, crouching: false, air: true, anim: Soft, walk_pct: 100,
+         startup: 6, active: 1, recovery: 12, damage: 22, hitstun: 14, blockstun: 8, knockback: 2, hitstop: 3,
          hitbox: (x: 0, y: 0, w: 0, h: 0),
-         projectile: Some((x: 14, y: 36, aim_y: 30, travel_frames: 25, lifetime: 100, size: (30, 13), image: Some("word_meh"), summon_image: Some("none"), aimed: true, upright: true))),
+         projectile: Some((x: 14, y: 36, aim_y: 30, travel_frames: 25, lifetime: 70, size: (30, 13), image: Some("word_meh"), summon_image: Some("none"), aimed: true, upright: true))),
         // the grab: the first window pulls the enemy in and holds them (no damage, a long stun while he talks), the second shoves them away for the damage
-        (name: "Here's the Thing", button: Heavy, crouching: false, anim: Grab, walk_pct: 0,
+        (name: "Here's the Thing", sfx: (cast: Some("grab")), button: Heavy, crouching: false, anim: Grab, walk_pct: 0,
          pull_foe: true, pull_gap: 26, hits: 2, hit_gap: 80, cooldown: 240,
          hit_overrides: [(damage: 0, hitstun: 100, knockback: 0), (damage: 95, hitstun: 26, knockback: 10)],
          startup: 22, active: 4, recovery: 24, damage: 95, hitstun: 26, blockstun: 14, knockback: 10, hitstop: 6,
          hitbox: (x: 6, y: 8, w: 135, h: 48)),
-        // the raven's storm: it does the pecking (damage per peck) and the rose
-        (name: "Raven Storm", button: Special, crouching: false, anim: Summon, walk_pct: 0,
-         raven_move: Some(Storm(pecks: 3, heal_pct: 5)), guard_hits: Some(3),
+        // the raven's storm: it does the pecking (damage per peck); no rose any more
+        (name: "Raven Storm", sfx: (cast: Some("raven_cast"), hit: Some("raven_hit")), button: Special, crouching: false, anim: Summon, walk_pct: 0,
+         raven_move: Some(Storm(pecks: 3, heal_pct: 0)), guard_hits: Some(3),
          startup: 28, active: 1, recovery: 22, damage: 42, hitstun: 16, blockstun: 10, knockback: 1, hitstop: 4,
          hitbox: (x: 0, y: 0, w: 0, h: 0)),
     ],

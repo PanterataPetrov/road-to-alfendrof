@@ -790,8 +790,22 @@ fn spec(frame: Frame) -> Spec {
         Frame::Punch(1) => s((Keep, pose((44.0, 22.0), (55.0, 21.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
         Frame::Punch(2) => s((pose((5.0, 27.0), (11.0, 23.0)), Keep), 1.0, 0, stand(), 0),
         Frame::Punch(_) => s((pose((24.0, 23.0), (46.0, 21.0)), Keep), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 0),
-        // The kicks are the Cowboy's own (see cb_spec).
-        Frame::Kick(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        // The Professor's kicks (the Cowboy's own are in cb_spec): the front knee comes up, the leg shoots out with the
+        // body leaning back, the leg comes back down.
+        Frame::Kick(0) => s((Keep, pose((38.0, 28.0), (34.0, 31.0))), -1.0, 0, legs((8.0, 45.0), (5.0, 48.0), (37.0, 38.0), (34.0, 43.0)), 0),
+        Frame::Kick(1) => s((Keep, pose((39.0, 28.0), (35.0, 31.0))), 0.0, 0, legs((8.0, 45.0), (5.0, 48.0), (36.0, 42.0), (36.0, 46.0)), 0),
+        Frame::Kick(2) => s((pose((2.0, 26.0), (-2.0, 21.0)), pose((38.0, 27.0), (34.0, 31.0))), -3.0, 0, legs((8.0, 45.0), (5.0, 48.0), (40.0, 40.0), (52.0, 38.0)), 0),
+        Frame::Kick(_) => s((pose((2.0, 26.0), (-2.0, 21.0)), pose((38.0, 27.0), (34.0, 31.0))), -4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (41.0, 38.0), (53.0, 35.0)), 0),
+        // The slam dunk: reaching with both hands; the hands on the enemy's shoulders; pushing himself up on them, legs
+        // swinging off the ground, talking; the jump (arms up); the ball cocked overhead; the dunk, the arm down in front
+        // with the ball; the landing, a finger up.
+        Frame::Dunk(0) => s((pose((20.0, 24.0), (34.0, 22.0)), pose((38.0, 22.0), (49.0, 21.0))), 3.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (37.0, 48.0)), 0),
+        Frame::Dunk(1) => s((pose((22.0, 26.0), (44.0, 25.0)), pose((40.0, 23.0), (47.0, 21.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (37.0, 48.0)), 0),
+        Frame::Dunk(2) => s((pose((30.0, 28.0), (43.0, 33.0)), pose((40.0, 27.0), (46.0, 31.0))), 5.0, -2, legs((9.0, 43.0), (5.0, 44.0), (31.0, 44.0), (27.0, 45.0)), 1),
+        Frame::Dunk(3) => s((pose((1.0, 15.0), (5.0, 6.0)), pose((42.0, 14.0), (38.0, 5.0))), 0.0, 0, legs((6.0, 43.0), (9.0, 46.0), (36.0, 43.0), (33.0, 46.0)), 2),
+        Frame::Dunk(4) => s((pose((2.0, 24.0), (-2.0, 18.0)), pose((40.0, 12.0), (35.0, 1.0))), -3.0, 0, legs((4.0, 44.0), (9.0, 45.0), (37.0, 44.0), (32.0, 45.0)), 2),
+        Frame::Dunk(5) => s((pose((3.0, 28.0), (0.0, 34.0)), pose((45.0, 15.0), (54.0, 27.0))), 6.0, 0, legs((6.0, 45.0), (3.0, 48.0), (38.0, 45.0), (41.0, 48.0)), 1),
+        Frame::Dunk(_) => Spec { arms: (Keep, pose((43.0, 15.0), (41.0, 9.0))), lean: 1.0, dy: 0, legs: stand(), mouth: 2, finger: Some((41.0, 9.0)) },
         // Commanding the raven: a finger up, the arm thrown out at the enemy, then back.
         Frame::Point(0) => Spec { arms: (Keep, pose((42.0, 17.0), (44.0, 10.0))), lean: 0.0, dy: 0, legs: stand(), mouth: 1, finger: Some((44.0, 10.0)) },
         Frame::Point(1) => s((Keep, pose((44.0, 22.0), (57.0, 20.0))), 4.0, 0, legs((8.0, 45.0), (5.0, 48.0), (33.0, 45.0), (36.0, 48.0)), 1),
@@ -810,7 +824,7 @@ fn spec(frame: Frame) -> Spec {
         // Anaran's reading and staff slam are his own (see an_spec).
         Frame::Read(_) | Frame::Staff(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
         // The roll is made from the finished crouch drawing (`--roll-frames`), not drawn here.
-        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) | Frame::Throw(_) | Frame::Craft(_) | Frame::Latte(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
+        Frame::Roll(_) | Frame::Boost(_) | Frame::Lean(_) | Frame::Write(_) | Frame::Portal(_) | Frame::Bat(_) | Frame::PunchMid(_) | Frame::Throw(_) | Frame::Toss(_) | Frame::Craft(_) | Frame::Latte(_) | Frame::Cover(_) => s((Keep, Keep), 0.0, 0, stand(), 0),
     }
 }
 
@@ -902,10 +916,48 @@ fn leg_layer(parts: &Parts, legs: &Legs) -> Grid {
 }
 
 /// A whole-body drawing (upright, even for the KO), legs first, then the torso leaned and dropped over them.
+/// Where the basketball is in the dunk drawings (its centre, in the default pose's coordinates): above the raised
+/// hand as he jumps, cocked overhead, and in front of him as it is slammed down.
+fn dunk_ball(frame: Frame) -> Option<(i32, i32)> {
+    match frame {
+        Frame::Dunk(3) => Some((38, -1)),
+        Frame::Dunk(4) => Some((36, -1)),
+        Frame::Dunk(5) => Some((57, 31)),
+        _ => None,
+    }
+}
+
+/// A basketball, 11 x 11: orange with a black outline and seams, a shaded edge and a highlight.
+fn stamp_ball(canvas: &mut Grid, cx: i32, cy: i32) {
+    for dy in -5i32..=5 {
+        for dx in -5i32..=5 {
+            let d = dx * dx + dy * dy;
+            if d > 28 {
+                continue;
+            }
+            let ch = if d >= 23 {
+                'g'
+            } else if dx == 0 || dy == 0 || (dx.abs() == 3 && dy.abs() <= 2) {
+                'g'
+            } else if dx <= -2 && dy <= -2 && d <= 13 {
+                'r'
+            } else if d >= 17 && dx + dy > 0 {
+                'q'
+            } else {
+                'o'
+            };
+            canvas.set(cx + dx, cy + dy, ch);
+        }
+    }
+}
+
 fn drawing_upright(parts: &Parts, frame: Frame, raven: bool) -> Grid {
     let spec = spec(frame);
     let mut canvas = leg_layer(parts, &spec.legs);
     let mut upper = torso(parts, spec.arms, spec.mouth, spec.finger);
+    if let Some((bx, by)) = dunk_ball(frame) {
+        stamp_ball(&mut upper, bx + OX, by + OY);
+    }
     if raven {
         // The raven perches on his front shoulder and leans with the torso.
         stamp_raven(&mut upper, &raven_perched(), RAVEN_PERCH.0, RAVEN_PERCH.1);
@@ -1189,6 +1241,8 @@ fn all_frames(default: &Grid, raven: bool) -> Vec<(String, image::RgbaImage)> {
         // The Professor's new moves (the negative twin keeps his old drawings).
         every.extend((0..t2f::anim::POINT_FRAMES).map(Frame::Point));
         every.extend((0..t2f::anim::GRAB_FRAMES).map(Frame::Grab));
+        every.extend((0..t2f::anim::KICK_FRAMES).map(Frame::Kick));
+        every.extend((0..t2f::anim::DUNK_FRAMES).map(Frame::Dunk));
     }
     for f in every {
         let (body, mark) = drawing_and_mark_with(&parts, f, raven);
@@ -2356,6 +2410,9 @@ fn gs_spec(frame: Frame) -> GsSpec {
         Frame::Write(1) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((24.0, 27.0), (18.0, 25.0))), 1.0, 0, Legs::Stand),
         Frame::Write(2) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((25.0, 26.0), (21.0, 24.0))), 1.0, 0, Legs::Stand),
         Frame::Write(_) => own((pose((6.0, 28.0), (11.0, 29.0)), pose((29.0, 16.0), (31.0, 7.0))), 2.0, 0, Legs::Stand),
+        // Dashing behind the book: both arms out in front holding it up, leaning in (a small shuffle between the two).
+        Frame::Cover(0) => own((pose((17.0, 27.0), (28.0, 25.0)), pose((24.0, 22.0), (30.0, 17.0))), 3.0, 0, stance()),
+        Frame::Cover(_) => own((pose((17.0, 27.0), (28.0, 26.0)), pose((24.0, 22.0), (30.0, 18.0))), 3.0, 1, legs((10.0, 45.0), (6.0, 48.0), (31.0, 46.0), (33.0, 47.0))),
         // Everything else is the Professor's pose moved over to his proportions.
         other => {
             let mut sp = spec(other);
@@ -2376,6 +2433,31 @@ fn gs_belt_book(c: &mut Grid) {
     for (dy, row) in rows.iter().enumerate() {
         for (dx, ch) in row.chars().enumerate() {
             c.set(5 + dx as i32 + GOX, 34 + dy as i32 + GOY, ch);
+        }
+    }
+}
+
+/// The book held up in front of him as a shield while he dashes at the enemy: its brown cover towards them, a gold band and
+/// a corner guard, the pages' edge showing along the top.
+fn gs_cover_book(c: &mut Grid) {
+    let (x0, y0, w, h) = (27, 9, 12, 25);
+    for dy in 0..h {
+        for dx in 0..w {
+            let edge = dx == 0 || dy == h - 1 || dx == w - 1;
+            let ch = if dy == 0 {
+                't'
+            } else if dy == 1 {
+                'U'
+            } else if edge || dx == 1 {
+                'ä'
+            } else if (7..=9).contains(&dy) && (3..=w - 3).contains(&dx) {
+                'Y'
+            } else if dy >= h - 3 && dx >= w - 4 {
+                'm'
+            } else {
+                'ö'
+            };
+            c.set(x0 + dx + GOX, y0 + dy + GOY, ch);
         }
     }
 }
@@ -2461,6 +2543,8 @@ fn gs_torso(parts: &Parts, frame: Frame, gs: &GsSpec) -> (Grid, Grid) {
     }
     if let Frame::Write(k) = frame {
         gs_open_book(&mut c, k);
+    } else if let Frame::Cover(_) = frame {
+        gs_cover_book(&mut c);
     } else {
         gs_belt_book(&mut c);
     }
@@ -2565,6 +2649,7 @@ fn gs_frame_list() -> Vec<Frame> {
     let mut v = Frame::all();
     v.extend((0..t2f::anim::PUNCH_FRAMES).map(Frame::Punch));
     v.extend((0..t2f::anim::WRITE_FRAMES).map(Frame::Write));
+    v.extend((0..t2f::anim::COVER_FRAMES).map(Frame::Cover));
     v
 }
 
@@ -5603,6 +5688,15 @@ fn main() {
                 }
                 // The scar overlay stays white: the game tints it.
                 let img = if negative && !frame.ends_with("_mark") { invert(&img) } else { img };
+                img.save(folder.join(format!("{frame}.png"))).unwrap();
+            }
+        }
+        // The Negaprofessor has the new kicks and the dunk too: the same drawings, inverted.
+        let folder = assets.join("sprites").join("evilayz");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (frame, img) in all_frames(&default, true) {
+            if frame.starts_with("kick_") || frame.starts_with("dunk_") {
+                let img = if frame.ends_with("_mark") { img } else { invert(&img) };
                 img.save(folder.join(format!("{frame}.png"))).unwrap();
             }
         }

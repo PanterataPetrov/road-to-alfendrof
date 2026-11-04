@@ -4,6 +4,10 @@
 use bevy::prelude::*;
 
 use crate::settings::{self, Display, Settings, ACTIONS};
+use crate::sfx::UiSound;
+use t2f::skills::move_names;
+use bevy::sprite::Anchor;
+use t2f::sim::Button;
 use crate::{AppState, Mode, Roster, Selection, Stages};
 
 pub struct MenuPlugin;
@@ -28,9 +32,12 @@ impl Plugin for MenuPlugin {
                      controls_confirm.run_if(in_state(AppState::Controls)))
                         .before(menu_labels),
                     // (menus only: during a fight there is nothing for them to do)
-                    menu_nav.run_if(not(in_state(AppState::Fight))),
+                    menu_nav.run_if(not(in_state(AppState::Fight))).run_if(not(in_state(AppState::CharSelect))),
+                    carousel_nav.run_if(in_state(AppState::CharSelect)),
+                    menu_click.run_if(not(in_state(AppState::Fight))).run_if(not(in_state(AppState::Online))),
                     menu_labels.run_if(not(in_state(AppState::Fight))),
                     menu_pages.run_if(not(in_state(AppState::Fight))),
+                    (carousel_slide, carousel_info).run_if(in_state(AppState::CharSelect)),
                     glitch_subtitles.run_if(not(in_state(AppState::Fight))),
                     animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
@@ -247,6 +254,9 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
         Transform::from_xyz(-105.0, 58.0, 3.0),
     ));
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.7), Vec2::new(86.0, 12.0)), Transform::from_xyz(0.0, 8.0, 4.0)));
+    // sound credits, as the licences ask (the full list is in assets/sfx/CREDITS.txt)
+    let credit = spawn_text(&mut commands, state.clone(), "Sound: Deadly Kombat, Soundrack (CC BY), Owlish Media, alienanthony, Reemax".into(), 6.0, Color::srgb(0.5, 0.5, 0.6), -102.0);
+    commands.entity(credit).insert(Transform::from_xyz(0.0, -102.0, 5.0));
     let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);
     commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
     // the version, small in the bottom right corner
@@ -273,6 +283,18 @@ fn animate_title(time: Res<Time>, mut logo: Query<&mut Transform, With<TitleLogo
     }
 }
 
+/// A fighter's picture in the character select carousel; `0` is its place in the roster.
+#[derive(Component)]
+struct Slot(usize);
+
+/// The name, subtitle and skills of the fighter in the middle of the carousel (rebuilt when it turns).
+#[derive(Component)]
+struct CarouselInfo;
+
+/// Where the pictures sit left and right of the middle one, and how big they are.
+const SLOT_X: [f32; 3] = [0.0, 62.0, 104.0];
+const SLOT_SCALE: [f32; 3] = [1.15, 0.72, 0.5];
+
 fn spawn_char_select(
     mut commands: Commands,
     mut menu: ResMut<Menu>,
@@ -282,31 +304,195 @@ fn spawn_char_select(
     asset_server: Res<AssetServer>,
 ) {
     picking.0 = 0;
-    spawn_backdrop(&mut commands, AppState::CharSelect, &asset_server);
-    let items = roster
-        .0
-        .iter()
-        .map(|c| {
-            let mut item = Item::new(c.name.clone(), Color::srgb(c.color.0, c.color.1, c.color.2));
-            item.subtitle = c.subtitle.clone();
-            item.corrupted = c.corrupted_subtitle;
-            // portraits/<sprite folder>.png, if it exists
-            let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
-            if crate::assets_dir().join(format!("portraits/{folder}.png")).exists() {
-                item.portrait = Some(asset_server.load(format!("portraits/{folder}.png")));
+    let state = AppState::CharSelect;
+    spawn_backdrop(&mut commands, state.clone(), &asset_server);
+    spawn_panel(&mut commands, state.clone());
+    // one fighter at a time: the cursor is the page
+    menu.cursor = 0;
+    menu.len = roster.0.len();
+    menu.per_page = 1;
+    let header = spawn_text(&mut commands, state.clone(), pick_title(0, *mode), 16.0, Color::srgb(1.0, 0.9, 0.4), 90.0);
+    commands.entity(header).insert(Header);
+    spawn_text(&mut commands, state.clone(), "A/D: turn    F / J / Enter: pick    G / K / Esc: back".into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
+    for (index, c) in roster.0.iter().enumerate() {
+        // portraits/<sprite folder>.png, if it exists
+        let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
+        let has_picture = crate::assets_dir().join(format!("portraits/{folder}.png")).exists();
+        let picture = if has_picture {
+            Sprite { image: asset_server.load(format!("portraits/{folder}.png")), custom_size: Some(Vec2::splat(40.0)), ..default() }
+        } else {
+            Sprite::from_color(Color::srgb(c.color.0, c.color.1, c.color.2), Vec2::splat(40.0))
+        };
+        commands
+            .spawn((
+                DespawnOnExit(state.clone()),
+                Slot(index),
+                Portrait(index),
+                picture,
+                Transform::from_xyz(0.0, 60.0, 5.0),
+                Visibility::Hidden,
+            ))
+            .with_children(|p| {
+                // a dark frame behind the picture
+                p.spawn((Sprite::from_color(Color::srgb(0.02, 0.02, 0.05), Vec2::splat(44.0)), Transform::from_xyz(0.0, 0.0, -0.1)));
+            });
+    }
+    commands.spawn((DespawnOnExit(state), CarouselInfo, Transform::default(), Visibility::default()));
+}
+
+/// The fighter whose place `i` takes in the carousel: a secret shares the place of the one it hides behind.
+fn host_of(roster: &[t2f::sim::CharacterData], i: usize) -> usize {
+    match &roster[i].secret_behind {
+        Some(name) => roster.iter().position(|c| &c.name == name).unwrap_or(i),
+        None => i,
+    }
+}
+
+/// A/D (or the arrows) turn the carousel. Up on a fighter with a secret behind them turns up the secret, Down goes back.
+fn carousel_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, roster: Res<Roster>, mut ui: MessageWriter<UiSound>) {
+    let roster = &roster.0;
+    if roster.is_empty() || menu.cursor >= roster.len() {
+        return;
+    }
+    let host = host_of(roster, menu.cursor);
+    let up = keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp);
+    let down = keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown);
+    let turn = left_right(&keys);
+    if up && menu.cursor == host {
+        if let Some(secret) = roster.iter().position(|c| c.secret_behind.as_ref() == Some(&roster[host].name)) {
+            menu.cursor = secret;
+            ui.write(UiSound::Move);
+        }
+    } else if down && menu.cursor != host {
+        menu.cursor = host;
+        ui.write(UiSound::Move);
+    } else if turn != 0 {
+        let shown: Vec<usize> = (0..roster.len()).filter(|&i| roster[i].secret_behind.is_none()).collect();
+        if let Some(at) = shown.iter().position(|&i| i == host) {
+            menu.cursor = shown[(at as i32 + turn).rem_euclid(shown.len() as i32) as usize];
+            ui.write(UiSound::Move);
+        }
+    }
+}
+
+/// The distance in places from the middle one, going round (the roster is a ring).
+fn ring_offset(index: usize, cursor: usize, len: usize) -> i32 {
+    let len = len as i32;
+    (index as i32 - cursor as i32 + len / 2).rem_euclid(len) - len / 2
+}
+
+/// The pictures slide to their places round the middle one; the ones further out than the sides are hidden.
+fn carousel_slide(time: Res<Time>, menu: Res<Menu>, roster: Res<Roster>, mut slots: Query<(&Slot, &mut Transform, &mut Visibility)>) {
+    let ease = 1.0 - (-18.0 * time.delta_secs()).exp();
+    let roster = &roster.0;
+    // the secrets aren't in the ring: they take the place of the fighter they hide behind while picked
+    let ring: Vec<usize> = (0..roster.len()).filter(|&i| roster[i].secret_behind.is_none()).collect();
+    let place = |i: usize| ring.iter().position(|&r| r == host_of(roster, i)).unwrap_or(0);
+    for (Slot(index), mut tf, mut visibility) in &mut slots {
+        let secret = roster[*index].secret_behind.is_some();
+        let picked_secret = menu.cursor < roster.len() && roster[menu.cursor].secret_behind.is_some();
+        // hidden: a secret that isn't picked, and the one it takes the place of while it is
+        let out = if secret { menu.cursor != *index } else { picked_secret && host_of(roster, menu.cursor) == *index };
+        if out {
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
             }
-            item
-        })
-        .collect();
-    spawn_menu(
-        &mut commands,
-        &mut menu,
-        AppState::CharSelect,
-        &pick_title(0, *mode),
-        "W/S: move    A/D: page    F / J / Enter: pick    G / K / Esc: back",
-        items,
-        None,
-    );
+            if secret {
+                // waits in the middle, so it appears there
+                tf.translation.x = 0.0;
+                tf.scale = Vec3::new(SLOT_SCALE[0], SLOT_SCALE[0], 1.0);
+            }
+            continue;
+        }
+        let d = ring_offset(place(*index), place(menu.cursor.min(roster.len() - 1)), ring.len().max(1));
+        let far = d.unsigned_abs() as usize;
+        let shown = far < SLOT_X.len();
+        let want = if shown { Visibility::Inherited } else { Visibility::Hidden };
+        if *visibility != want {
+            *visibility = want;
+        }
+        let side = if d < 0 { -1.0 } else { 1.0 };
+        if shown {
+            tf.translation.x += (side * SLOT_X[far] - tf.translation.x) * ease;
+            let s = tf.scale.x + (SLOT_SCALE[far] - tf.scale.x) * ease;
+            tf.scale = Vec3::new(s, s, 1.0);
+        } else {
+            // out of sight: wait at the edge on its own side, so it slides in from there
+            tf.translation.x = side * 150.0;
+            tf.scale = Vec3::new(0.4, 0.4, 1.0);
+        }
+        tf.translation.z = 5.0 - far as f32 * 0.1;
+    }
+}
+
+/// Breaks `text` into lines of at most `width` characters.
+fn wrap(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut line = 0;
+    for word in text.split_whitespace() {
+        if line > 0 && line + 1 + word.len() > width {
+            out.push('\n');
+            line = 0;
+        } else if line > 0 {
+            out.push(' ');
+            line += 1;
+        }
+        out.push_str(word);
+        line += word.len();
+    }
+    out
+}
+
+/// The name, subtitle, and each button's icon, moves and what it does, for the fighter in the middle.
+fn carousel_info(
+    mut commands: Commands,
+    menu: Res<Menu>,
+    roster: Res<Roster>,
+    asset_server: Res<AssetServer>,
+    info: Single<Entity, With<CarouselInfo>>,
+    mut shown: Local<Option<usize>>,
+) {
+    if *shown == Some(menu.cursor) || menu.cursor >= roster.0.len() {
+        return;
+    }
+    *shown = Some(menu.cursor);
+    let c = &roster.0[menu.cursor];
+    let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
+    let color = Color::srgb(c.color.0, c.color.1, c.color.2);
+    let body = Color::srgb(0.82, 0.82, 0.9);
+    let gold = Color::srgb(1.0, 0.9, 0.4);
+    commands.entity(*info).despawn_related::<Children>().with_children(|ui| {
+        fn text(ui: &mut bevy::ecs::relationship::RelatedSpawnerCommands<ChildOf>, value: String, size: f32, color: Color, anchor: Anchor, x: f32, y: f32) -> Entity {
+            ui.spawn((Text2d::new(value), crate::pixel_font(size), TextColor(color), anchor, Transform::from_xyz(x, y, 5.0))).id()
+        }
+        text(ui, c.name.clone(), 16.0, color, Anchor::CENTER, 0.0, 28.0);
+        let mut glitched = None;
+        if let Some(sub) = c.subtitle.clone() {
+            let e = text(ui, sub.clone(), 8.0, color.with_alpha(0.7), Anchor::CENTER, 0.0, 16.0);
+            if c.corrupted_subtitle {
+                glitched = Some((e, sub));
+            }
+        }
+        for (row, (button, icon)) in [(Button::Light, "light"), (Button::Heavy, "heavy"), (Button::Special, "special")].into_iter().enumerate() {
+            let top = 2.0 - row as f32 * 30.0;
+            ui.spawn((
+                Sprite { image: asset_server.load(format!("icons/{folder}/{icon}.png")), custom_size: Some(Vec2::splat(24.0)), ..default() },
+                Transform::from_xyz(-166.0, top - 13.0, 5.0),
+            ));
+            let mut names = move_names(c, button);
+            if names.len() > 56 {
+                names.truncate(53);
+                names.push_str("...");
+            }
+            text(ui, names, 8.0, gold, Anchor::TOP_LEFT, -148.0, top);
+            if let Some(blurb) = c.blurbs.get(row) {
+                text(ui, wrap(blurb, 56), 8.0, body, Anchor::TOP_LEFT, -148.0, top - 10.0);
+            }
+        }
+        if let Some((e, sub)) = glitched {
+            ui.commands().entity(e).insert(Glitch(sub));
+        }
+    });
 }
 
 fn pick_title(player: usize, mode: Mode) -> String {
@@ -335,13 +521,16 @@ fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Re
     );
 }
 
-fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: Res<Rebinding>) {
+fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: Res<Rebinding>, mut ui: MessageWriter<UiSound>) {
     // W and S could be the key being bound
     if menu.len == 0 || rebinding.0.is_some() {
         return;
     }
     let up = keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp);
     let down = keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown);
+    if up || down {
+        ui.write(UiSound::Move);
+    }
     if up {
         menu.cursor = (menu.cursor + menu.len - 1) % menu.len;
     }
@@ -354,6 +543,18 @@ fn menu_nav(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Menu>, rebinding: 
         let (per_page, pages) = (menu.per_page, menu.pages() as i32);
         let page = (menu.page() as i32 + turn).rem_euclid(pages) as usize;
         menu.cursor = (page * per_page + menu.cursor % per_page).min(menu.len - 1);
+    }
+}
+
+/// The click of confirming or going back in the menus (not while a key is being bound).
+fn menu_click(keys: Res<ButtonInput<KeyCode>>, rebinding: Res<Rebinding>, mut ui: MessageWriter<UiSound>) {
+    if rebinding.0.is_some() {
+        return;
+    }
+    if confirm_pressed(&keys) {
+        ui.write(UiSound::Confirm);
+    } else if back_pressed(&keys) {
+        ui.write(UiSound::Back);
     }
 }
 
@@ -554,6 +755,7 @@ fn options_confirm(
     mut settings: ResMut<Settings>,
     mut items: Query<&mut MenuItem>,
     mut next: ResMut<NextState<AppState>>,
+    mut ui: MessageWriter<UiSound>,
 ) {
     let step = left_right(&keys);
     let confirm = confirm_pressed(&keys);
@@ -563,7 +765,10 @@ fn options_confirm(
     }
     match menu.cursor {
         0 if step != 0 => settings.music_volume = (settings.music_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8,
-        1 if step != 0 => settings.sfx_volume = (settings.sfx_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8,
+        1 if step != 0 => {
+            settings.sfx_volume = (settings.sfx_volume as i32 + step).clamp(0, Settings::MAX_VOLUME as i32) as u8;
+            ui.write(UiSound::Preview);
+        }
         2 if step != 0 || confirm => {
             let n = Display::ALL.len() as i32;
             let i = Display::ALL.iter().position(|&d| d == settings.display).unwrap_or(0) as i32;

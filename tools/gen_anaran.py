@@ -68,6 +68,18 @@ def split_arms(img):
             if take is not None:
                 take[(x, y)] = c
                 body.putpixel((x, y), (0, 0, 0, 0))
+    # where the back arm hung inside the silhouette (body on both sides of it) fill the gap with the nearest colour to the
+    # right, so a pose that moves the arm away doesn't leave a hole
+    def body_left(y):
+        """The leftmost body pixel in the rows round `y` that aren't part of the arm."""
+        xs = [xx for yy in range(max(0, y - 4), min(img.height, y + 5)) for xx in range(img.width) if body.getpixel((xx, yy))[3] == 255 and (xx, yy) not in back]
+        return min(xs) if xs else None
+
+    for (x, y) in sorted(back):
+        right = [body.getpixel((xx, y)) for xx in range(x + 1, img.width) if body.getpixel((xx, y))[3] == 255]
+        edge = body_left(y)
+        if right and edge is not None and x >= edge:
+            body.putpixel((x, y), right[0])
     return body, back, front
 
 

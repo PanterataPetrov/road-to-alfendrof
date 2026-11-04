@@ -17,7 +17,7 @@ use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
-use t2f::cpu::cpu_input_vs;
+use t2f::brain::Brain;
 use t2f::sim::{CharacterData, Fighter, GameState, Input, Phase, PX};
 use t2f::stage::StageData;
 
@@ -339,6 +339,8 @@ fn main() {
         )
         .add_systems(Update, (briefing::press_ready, briefing::update).run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_scribe_effects.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_whale.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, render::animate_shield.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_portals.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_cigarettes.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_zones.run_if(in_state(AppState::Fight)))
@@ -389,7 +391,8 @@ fn spawn_fight(
     asset_server: Res<AssetServer>,
     dev: Res<DevOptions>,
 ) {
-    *sim = fresh_sim(&roster, &selection, !dev.fight);
+    // (the fighters' skills are shown in the character select now, so the match starts at once)
+    *sim = fresh_sim(&roster, &selection, false);
     if dev.spread {
         sim.0.fighters[0].x = -380 * PX;
         sim.0.fighters[1].x = 380 * PX;
@@ -523,8 +526,15 @@ fn spawn_fight(
         if c.moves.iter().filter_map(|m| m.projectile.as_ref()).any(|p| p.lob && !p.over_target) && !effects.iter().any(|e| e == "moon_star") {
             effects.push("moon_star".to_string());
         }
-        if c.moves.iter().any(|m| m.beam.is_some()) && !effects.iter().any(|e| e == "jesus") {
+        if c.moves.iter().any(|m| m.beam.is_some_and(|b| !b.whale)) && !effects.iter().any(|e| e == "jesus") {
             effects.push("jesus".to_string());
+        }
+        if c.moves.iter().any(|m| m.plot_armour > 0) && !effects.iter().any(|e| e == "shield") {
+            effects.push("shield".to_string());
+        }
+        if c.moves.iter().any(|m| m.beam.is_some_and(|b| b.whale)) && !effects.iter().any(|e| e == "whale") {
+            effects.push("pool".to_string());
+            effects.push("whale".to_string());
         }
         if c.moves.iter().any(|m| m.minions.is_some_and(|md| !md.agent)) && !effects.iter().any(|e| e == "goblin") {
             effects.push("goblin".to_string());
@@ -578,6 +588,7 @@ fn step_sim(
     mut next: ResMut<NextState<AppState>>,
     mut info: ResMut<online::OnlineInfo>,
     ready_press: ResMut<briefing::ReadyPress>,
+    mut brain: Local<Brain>,
     mut commands: Commands,
 ) {
     // the keys set in Options > Controls; player 2 is the CPU
@@ -599,7 +610,7 @@ fn step_sim(
         }
         return;
     }
-    let mut cpu = cpu_input_vs(&sim.0, 1, &roster.0[sel.chars[1]], &roster.0[sel.chars[0]]);
+    let mut cpu = brain.input(&sim.0, 1, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
     if briefing {
         cpu.0 |= Input::READY;
     }

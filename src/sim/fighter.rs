@@ -127,6 +127,11 @@ pub struct Fighter {
     /// Cigarettes used up (the character starts with all of them), and frames since the last one was rolled.
     pub cigs_used: u8,
     pub cig_timer: u32,
+    /// After the last cigarette: he fights with the lighter, rolling new cigarettes as he goes, until the pack is full.
+    pub lighter_mode: bool,
+    /// Shots of this fighter's that were blocked in a row, and the frames left before that count is forgotten.
+    pub shots_blocked: u8,
+    pub shots_blocked_timer: u32,
     /// Which way the drawing faces: the opponent, except a bat (or a bat roll) faces where it is flying.
     pub heading: i32,
     /// This fighter's roll is a bat too.
@@ -163,6 +168,20 @@ pub struct Fighter {
     pub slam_damage: i32,
     /// Futility: frames left in which every attack this fighter starts costs them `FUTILITY_DAMAGE`.
     pub futile: u32,
+    /// Throws in the current burst (`burst_shots`), and the frames since the last one.
+    pub burst_count: u32,
+    pub burst_idle: u32,
+    /// Dashing towards the enemy behind a book held up in front (`dash_shield`): hits are blocked.
+    pub covered: bool,
+    /// Plot armour: frames left in which no hit gets through.
+    pub plot_armour: u32,
+    /// Bleeding: ticks left, health lost at each, and the frames between them.
+    pub bleed_ticks: u32,
+    pub bleed_damage: i32,
+    pub bleed_every: u32,
+    pub bleed_timer: u32,
+    /// How far the other fighter is (subpixels), set by the match each frame (for moves that depend on the gap).
+    pub foe_dist: i32,
     /// A committed move is firing: hits no longer interrupt it (set each frame by `step`).
     pub armored: bool,
     /// The moon is a portal over the opponent: it closes when the move that opened it is over.
@@ -190,6 +209,8 @@ impl Fighter {
     pub const COMBO_DISPLAY: u32 = 30;
     /// A broken guard can't block again for 2.4 seconds.
     pub const BLOCK_DISABLED_FRAMES: u32 = 144;
+    /// How long after a throw the next one still counts as part of the same burst of quills.
+    pub const BURST_WINDOW: u32 = 24;
     /// Tapping the same direction again within this many frames is a dash.
     pub const DASH_TAP_WINDOW: u32 = 15;
     pub const DASH_FRAMES: u32 = 14;
@@ -280,6 +301,15 @@ impl Fighter {
             slam_landed: false,
             slam_damage: Self::SLAM_DAMAGE,
             futile: 0,
+            plot_armour: 0,
+            covered: false,
+            burst_count: 0,
+            burst_idle: 0,
+            bleed_ticks: 0,
+            bleed_damage: 0,
+            bleed_every: 1,
+            bleed_timer: 0,
+            foe_dist: i32::MAX / 2,
             armored: false,
             portal: false,
             beam_lock: None,
@@ -289,6 +319,9 @@ impl Fighter {
             bat_ready: 0,
             cigs_used: 0,
             cig_timer: 0,
+            lighter_mode: false,
+            shots_blocked: 0,
+            shots_blocked_timer: 0,
             heading: facing,
             bat_roll: false,
             held: false,
@@ -410,7 +443,7 @@ impl Fighter {
 
     /// Whether move `index` is still cooling down from its last use.
     pub fn on_cooldown(&self, index: usize, data: &CharacterData) -> bool {
-        self.cooldown_left(index) > 0 && data.moves[index].cooldown > 0
+        self.cooldown_left(index) > 0 && (data.moves[index].cooldown > 0 || data.moves[index].burst_shots > 0)
     }
 
     /// Frames left before move `index` can be started again.
@@ -420,6 +453,9 @@ impl Fighter {
 
     fn begin_attack(&mut self, index: usize, mv: &MoveData) {
         self.cigs_used = self.cigs_used.saturating_add(mv.cig_cost as u8);
+        if mv.last_cig {
+            self.lighter_mode = true;
+        }
         if mv.cig_cost > 0 {
             self.cig_timer = 0;
         }
@@ -429,6 +465,17 @@ impl Fighter {
         if mv.cooldown > 0 {
             if let Some(left) = self.cooldowns.get_mut(index) {
                 *left = mv.cooldown;
+            }
+        }
+        // a burst: the last throw of the group starts the reload
+        if mv.burst_shots > 0 {
+            self.burst_count += 1;
+            self.burst_idle = 0;
+            if self.burst_count >= mv.burst_shots {
+                self.burst_count = 0;
+                if let Some(left) = self.cooldowns.get_mut(index) {
+                    *left = mv.burst_reload;
+                }
             }
         }
         // the third light of a combo is the finisher
@@ -473,6 +520,8 @@ impl Fighter {
 
     /// Advance one frame.
     pub fn step(&mut self, input: Input, data: &CharacterData) {
+        // up and down together cancel (like left and right), or holding both would jump and slam over and over
+        let input = if input.has(Input::UP) && input.has(Input::DOWN) { Input(input.0 & !(Input::UP | Input::DOWN)) } else { input };
         let pressed = Input((input.0 & !self.prev_input.0) | self.buffer.0);
         self.prev_input = input;
         self.bat_roll = data.bat_form().is_some();
@@ -511,15 +560,25 @@ impl Fighter {
         self.block_disabled = self.block_disabled.saturating_sub(1);
         self.silenced = self.silenced.saturating_sub(1);
         self.light_lock = self.light_lock.saturating_sub(1);
+        if self.shots_blocked_timer > 0 {
+            self.shots_blocked_timer -= 1;
+            if self.shots_blocked_timer == 0 {
+                self.shots_blocked = 0;
+            }
+        }
         // while he isn't fighting he rolls a new cigarette every so often
         if let Some(c) = data.cigarettes {
             self.cigs_used = self.cigs_used.min(c.max);
-            if self.cigs_used > 0 && self.is_neutral() {
+            // (with the lighter in his hand he rolls them while he fights, until he has the whole pack again)
+            if self.cigs_used > 0 && (self.is_neutral() || self.lighter_mode) {
                 self.cig_timer += 1;
                 if self.cig_timer >= c.roll_frames {
                     self.cig_timer = 0;
                     self.cigs_used -= 1;
                 }
+            }
+            if self.cigs_used == 0 {
+                self.lighter_mode = false;
             }
         }
         // a grab only holds someone while they are stunned by it
@@ -533,6 +592,14 @@ impl Fighter {
             self.poof = self.bat_form == 0;
         }
         self.futile = self.futile.saturating_sub(1);
+        self.plot_armour = self.plot_armour.saturating_sub(1);
+        // a burst that is left alone starts over
+        if self.burst_count > 0 {
+            self.burst_idle += 1;
+            if self.burst_idle > Self::BURST_WINDOW {
+                self.burst_count = 0;
+            }
+        }
         if self.state != FighterState::Attack {
             self.armored = false;
         }
@@ -591,7 +658,7 @@ impl Fighter {
                     self.vy = -Self::SLAM_SPEED;
                 }
                 // a hop back as it starts (landing doesn't end the move)
-                if let (Some((up, back)), 1, true) = (mv.hop, self.state_frame, self.grounded()) {
+                if let (Some((up, back)), true) = (mv.hop, self.state_frame == mv.hop_at.max(1) && self.grounded()) {
                     self.vy = up;
                     self.vx = -self.facing * back;
                 }
@@ -613,7 +680,7 @@ impl Fighter {
                     }
                 }
                 if self.grounded() && !self.air_used && self.vy <= 0 {
-                    if mv.lunge > 0 && self.state_frame <= mv.startup + mv.active {
+                    if mv.lunge != 0 && self.state_frame <= mv.startup + mv.active {
                         // a step in behind the strike
                         self.vx = self.facing * mv.lunge;
                     } else {
@@ -835,6 +902,16 @@ impl Fighter {
                 // the light combo can have its own move for each hit (the third is the finisher, which needs the raven at home if it's the raven's claw)
                 let stepped = if button == Button::Light && !crouching { data.find_combo_move(self.combo, !self.raven_away) } else { None };
                 if let Some(index) = stepped.or_else(|| data.find_move(button, crouching, false)) {
+                    // a move for when the foe is close or far (the lighter, the thrown quill)
+                    let index = data.ranged_variant(index, self.foe_dist / PX);
+                    // the lighter after the last cigarette, and the last cigarette's own move
+                    let index = if self.lighter_mode && button == Button::Light && !crouching {
+                        data.out_of_cigs_move(button).unwrap_or(index)
+                    } else if data.moves[index].cig_cost > 0 && data.moves[index].cig_cost == self.cigs(data) {
+                        data.last_cig_move(button).unwrap_or(index)
+                    } else {
+                        index
+                    };
                     // a raven that's away can't be sent again, and a move on cooldown can't be used
                     if (data.moves[index].raven_move.is_some() && self.raven_away) || self.on_cooldown(index, data) {
                         continue;
@@ -867,6 +944,14 @@ impl Fighter {
             return;
         }
         if self.want_dash != 0 && !input.has(Input::BLOCK) {
+            // a dash away from the enemy throws something, for the ones who do (a pencil)
+            if self.want_dash == -self.facing && self.silenced == 0 && self.bat_form == 0 {
+                if let Some(index) = data.dash_throw_move().filter(|&i| !self.on_cooldown(i, data)) {
+                    self.want_dash = 0;
+                    self.begin_attack(index, &data.moves[index]);
+                    return;
+                }
+            }
             self.begin_dash(self.want_dash);
             return;
         }
