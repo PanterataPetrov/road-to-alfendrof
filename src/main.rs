@@ -857,7 +857,7 @@ fn restart_match(
     mut next: ResMut<NextState<AppState>>,
     mut commands: Commands,
 ) {
-    if keys.just_pressed(KeyCode::Enter) && sim.0.phase == Phase::MatchOver {
+    if menus::confirm_pressed(&keys) && sim.0.phase == Phase::MatchOver {
         if *mode == Mode::Online {
             // online, a rematch means inviting again
             commands.remove_resource::<online::NetSession>();

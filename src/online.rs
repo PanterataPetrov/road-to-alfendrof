@@ -261,6 +261,9 @@ fn online_screen(
     let Some(l) = lobby.0.as_mut() else {
         input_text.0 = "-".into();
         status_text.0 = info.message.clone();
+        if keys.just_pressed(KeyCode::Escape) {
+            next.set(AppState::Title);
+        }
         return;
     };
     l.set_name(&settings.username);
@@ -273,7 +276,7 @@ fn online_screen(
     }
 
     if invited {
-        if keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::Enter) {
+        if crate::menus::confirm_pressed(&keys) {
             // accepting types their code into the field and presses Enter: the invitation goes back to them (two
             // invitations that cross count as accepted by both)
             if let Stage::Invited(from) = l.stage {
@@ -282,12 +285,12 @@ fn online_screen(
                 info.invite_from = None;
                 info.message = "Accepted. Connecting...".into();
             }
-        } else if keys.just_pressed(KeyCode::KeyG) {
+        } else if keys.just_pressed(KeyCode::Escape) {
             l.decline();
             info.invite_from = None;
             info.message = "Declined.".into();
         }
-    } else if keys.just_pressed(KeyCode::Enter) && !info.typed.is_empty() && !info.editing_name {
+    } else if crate::menus::confirm_pressed(&keys) && !info.typed.is_empty() && !info.editing_name {
         let parsed = code::decode(&info.typed)
             .or_else(|| info.typed.parse::<SocketAddr>().ok())
             .or_else(|| info.typed.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, DEFAULT_PORT)));
@@ -302,7 +305,7 @@ fn online_screen(
             None => info.message = "That code doesn't work. Check it letter by letter.".into(),
         }
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    if !invited && keys.just_pressed(KeyCode::Escape) {
         if matches!(l.stage, Stage::Inviting(_)) {
             l.leave();
             info.message = "Cancelled.".into();
@@ -348,7 +351,7 @@ fn online_screen(
     let new_popup = match (l.stage, info.invite_from) {
         (Stage::Invited(from), _) | (_, Some(from)) if invited => {
             let who = if l.peer_name.is_empty() { format!("Someone ({})", code::show(from)) } else { l.peer_name.clone() };
-            format!("{who} has invited you!   F: accept    G: decline")
+            format!("{who} has invited you!   Enter: accept    Esc: decline")
         }
         _ => String::new(),
     };
@@ -367,7 +370,7 @@ fn name_field(
     mut field: Single<&mut Text2d, With<NameText>>,
     time: Res<Time>,
 ) {
-    if keys.just_pressed(KeyCode::Tab) || (info.editing_name && keys.just_pressed(KeyCode::Enter)) {
+    if keys.just_pressed(KeyCode::Tab) || (info.editing_name && crate::menus::confirm_pressed(&keys)) {
         info.editing_name = !info.editing_name;
     }
     let mut name = settings.username.clone();
