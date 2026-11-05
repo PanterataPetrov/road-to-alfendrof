@@ -8,7 +8,8 @@ use crate::sfx::UiSound;
 use t2f::skills::move_names;
 use bevy::sprite::Anchor;
 use t2f::sim::Button;
-use crate::{AppState, Mode, Roster, Selection, Stages};
+use crate::{AppState, Mode, Roster, Selection, Sim, Stages};
+use t2f::sim::Phase;
 
 pub struct MenuPlugin;
 
@@ -17,6 +18,8 @@ impl Plugin for MenuPlugin {
         app.init_resource::<Menu>()
             .init_resource::<Picking>()
             .init_resource::<Rebinding>()
+            .init_resource::<Pause>()
+            .init_resource::<Surrendering>()
             .add_systems(OnEnter(AppState::Title), spawn_title)
             .add_systems(OnEnter(AppState::Options), spawn_options)
             .add_systems(OnEnter(AppState::Controls), spawn_controls)
@@ -28,17 +31,20 @@ impl Plugin for MenuPlugin {
                     (title_confirm.run_if(in_state(AppState::Title)),
                      char_confirm.run_if(in_state(AppState::CharSelect)),
                      stage_confirm.run_if(in_state(AppState::StageSelect)),
-                     options_confirm.run_if(in_state(AppState::Options)),
-                     controls_confirm.run_if(in_state(AppState::Controls)))
+                     options_confirm.run_if(options_open),
+                     controls_confirm.run_if(controls_open))
                         .before(menu_labels),
+                    pause_main.run_if(in_state(AppState::Fight)).before(options_confirm).before(controls_confirm),
+                    sync_pause.run_if(in_state(AppState::Fight)).after(pause_main).after(options_confirm).after(controls_confirm),
+                    adopt_overlay.after(sync_pause),
                     // (menus only: during a fight there is nothing for them to do)
-                    menu_nav.run_if(not(in_state(AppState::Fight))).run_if(not(in_state(AppState::CharSelect))),
+                    menu_nav.run_if(menu_live).run_if(not(in_state(AppState::CharSelect))),
                     carousel_nav.run_if(in_state(AppState::CharSelect)),
-                    menu_click.run_if(not(in_state(AppState::Fight))).run_if(not(in_state(AppState::Online))),
-                    menu_labels.run_if(not(in_state(AppState::Fight))),
-                    menu_pages.run_if(not(in_state(AppState::Fight))),
+                    menu_click.run_if(menu_live).run_if(not(in_state(AppState::Online))),
+                    menu_labels.run_if(menu_live),
+                    menu_pages.run_if(menu_live),
                     (carousel_slide, carousel_info).run_if(in_state(AppState::CharSelect)),
-                    glitch_subtitles.run_if(not(in_state(AppState::Fight))),
+                    glitch_subtitles.run_if(menu_live),
                     animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
                 ),
@@ -152,11 +158,33 @@ fn spawn_backdrop(commands: &mut Commands, state: AppState, asset_server: &Asset
     ));
 }
 
+/// Most characters of small text on one line: the pixel font is about 5 px a character and the view 384 px wide.
+pub const LINE_CHARS: usize = 66;
+
+/// Fits long text on the screen: a line made of several hints (set apart by three spaces or more) is split between
+/// them, and what is still too long is wrapped at spaces.
+pub fn fit(text: &str, max: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for part in text.split("   ").map(str::trim).filter(|p| !p.is_empty()) {
+        match lines.last_mut() {
+            Some(last) if last.chars().count() + 4 + part.chars().count() <= max => {
+                last.push_str("    ");
+                last.push_str(part);
+            }
+            _ => lines.push(part.to_string()),
+        }
+    }
+    lines.iter().map(|line| if line.chars().count() > max { wrap(line, max) } else { line.clone() }).collect::<Vec<_>>().join("
+")
+}
+
 fn spawn_text(commands: &mut Commands, state: AppState, text: String, size: f32, color: Color, y: f32) -> Entity {
     commands
         .spawn((
             DespawnOnExit(state),
             Text2d::new(text),
+            // (several lines are centred too)
+            bevy::text::TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::NoWrap),
             crate::pixel_font(size),
             TextColor(color),
             Transform::from_xyz(0.0, y, 5.0),
@@ -180,7 +208,9 @@ fn spawn_menu(commands: &mut Commands, menu: &mut Menu, state: AppState, title: 
     }
     let header = spawn_text(commands, state.clone(), title.into(), 24.0, Color::srgb(1.0, 0.9, 0.4), 82.0);
     commands.entity(header).insert(Header);
-    spawn_text(commands, state.clone(), hint.into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
+    // (long hints take two lines; the text grows upwards from just above the bottom of the panel)
+    let hint = spawn_text(commands, state.clone(), fit(hint, LINE_CHARS), 9.0, Color::srgb(0.6, 0.6, 0.7), -99.0);
+    commands.entity(hint).insert(Anchor::BOTTOM_CENTER);
 
     // rows with pictures need more room: four to a page, the rest on the next; long lists of text get smaller
     let with_pictures = items.iter().any(|i| i.portrait.is_some());
@@ -255,8 +285,8 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     ));
     commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.7), Vec2::new(86.0, 12.0)), Transform::from_xyz(0.0, 8.0, 4.0)));
     // sound credits, as the licences ask (the full list is in assets/sfx/CREDITS.txt)
-    let credit = spawn_text(&mut commands, state.clone(), "Sound: Deadly Kombat, Soundrack (CC BY), Owlish Media, alienanthony, Reemax".into(), 6.0, Color::srgb(0.5, 0.5, 0.6), -102.0);
-    commands.entity(credit).insert(Transform::from_xyz(0.0, -102.0, 5.0));
+    let credit = spawn_text(&mut commands, state.clone(), "Sound: Deadly Kombat, Soundrack (CC BY), Owlish Media + more".into(), 6.0, Color::srgb(0.5, 0.5, 0.6), -104.0);
+    commands.entity(credit).insert(Transform::from_xyz(0.0, -104.0, 5.0));
     let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);
     commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
     // the version, small in the bottom right corner
@@ -736,11 +766,16 @@ fn options_labels(settings: &Settings) -> Vec<String> {
 }
 
 fn spawn_options(mut commands: Commands, mut menu: ResMut<Menu>, settings: Res<Settings>) {
-    let items = options_labels(&settings).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
+    build_options(&mut commands, &mut menu, AppState::Options, &settings);
+}
+
+/// The options screen, in the menus (`AppState::Options`) or over a fight (`AppState::Overlay`).
+fn build_options(commands: &mut Commands, menu: &mut Menu, state: AppState, settings: &Settings) {
+    let items = options_labels(settings).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
     spawn_menu(
-        &mut commands,
-        &mut menu,
-        AppState::Options,
+        commands,
+        menu,
+        state,
         "Options",
         "W/S: move    A/D or Left/Right: change    F / J / Enter: select    Esc: back",
         items,
@@ -756,11 +791,18 @@ fn options_confirm(
     mut items: Query<&mut MenuItem>,
     mut next: ResMut<NextState<AppState>>,
     mut ui: MessageWriter<UiSound>,
+    mut pause: ResMut<Pause>,
 ) {
     let step = left_right(&keys);
     let confirm = confirm_pressed(&keys);
+    // over a fight, Back goes to the pause menu instead of the title screen
+    let in_fight = pause.open();
     if back_pressed(&keys) {
-        next.set(AppState::Title);
+        if in_fight {
+            *pause = Pause::Main;
+        } else {
+            next.set(AppState::Title);
+        }
         return;
     }
     match menu.cursor {
@@ -774,8 +816,20 @@ fn options_confirm(
             let i = Display::ALL.iter().position(|&d| d == settings.display).unwrap_or(0) as i32;
             settings.display = Display::ALL[(i + if step == 0 { 1 } else { step }).rem_euclid(n) as usize];
         }
-        3 if confirm => next.set(AppState::Controls),
-        4 if confirm => next.set(AppState::Title),
+        3 if confirm => {
+            if in_fight {
+                *pause = Pause::Controls;
+            } else {
+                next.set(AppState::Controls);
+            }
+        }
+        4 if confirm => {
+            if in_fight {
+                *pause = Pause::Main;
+            } else {
+                next.set(AppState::Title);
+            }
+        }
         _ => {}
     }
     // F11 changes the display mode too
@@ -802,11 +856,15 @@ fn controls_labels(settings: &Settings, rebinding: Option<usize>) -> Vec<String>
 
 fn spawn_controls(mut commands: Commands, mut menu: ResMut<Menu>, settings: Res<Settings>, mut rebinding: ResMut<Rebinding>) {
     rebinding.0 = None;
-    let items = controls_labels(&settings, None).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
+    build_controls(&mut commands, &mut menu, AppState::Controls, &settings);
+}
+
+fn build_controls(commands: &mut Commands, menu: &mut Menu, state: AppState, settings: &Settings) {
+    let items = controls_labels(settings, None).into_iter().map(|label| Item::new(label, Color::WHITE)).collect();
     spawn_menu(
-        &mut commands,
-        &mut menu,
-        AppState::Controls,
+        commands,
+        menu,
+        state,
         "Controls",
         "F / J / Enter: change, then press the new key    Esc: back",
         items,
@@ -822,7 +880,16 @@ fn controls_confirm(
     mut rebinding: ResMut<Rebinding>,
     mut items: Query<&mut MenuItem>,
     mut next: ResMut<NextState<AppState>>,
+    mut pause: ResMut<Pause>,
 ) {
+    let in_fight = pause.open();
+    let mut back = |next: &mut NextState<AppState>| {
+        if in_fight {
+            *pause = Pause::Options;
+        } else {
+            next.set(AppState::Options);
+        }
+    };
     if let Some(i) = rebinding.0 {
         if keys.just_pressed(KeyCode::Escape) {
             rebinding.0 = None;
@@ -831,18 +898,156 @@ fn controls_confirm(
             rebinding.0 = None;
         }
     } else if back_pressed(&keys) {
-        next.set(AppState::Options);
+        back(&mut next);
     } else if confirm_pressed(&keys) {
         match menu.cursor {
             i if i < ACTIONS.len() => rebinding.0 = Some(i),
             i if i == ACTIONS.len() => settings.keys = Settings::default().keys,
-            _ => next.set(AppState::Options),
+            _ => back(&mut next),
         }
     }
     if settings.is_changed() || rebinding.is_changed() {
         let labels = controls_labels(&settings, rebinding.0);
         for mut item in &mut items {
             item.label = labels[item.index].clone();
+        }
+    }
+}
+
+// ---- the pause menu over a fight ----
+
+/// Which screen of the pause menu is open over the fight (Esc opens it). Its pieces are drawn in the fight's HUD, and
+/// the options and controls screens are the same ones as in the menus.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pause {
+    #[default]
+    Closed,
+    Main,
+    Options,
+    Controls,
+    /// "Really give up?"
+    Surrender,
+}
+
+impl Pause {
+    pub fn open(self) -> bool {
+        self != Pause::Closed
+    }
+}
+
+/// The player chose to surrender: the fight sends it until the match is over.
+#[derive(Resource, Default)]
+pub struct Surrendering(pub bool);
+
+/// Where the pause menu's pieces go: in the HUD, on top of everything.
+#[derive(Component)]
+pub struct PauseRoot;
+
+/// A piece of the pause menu (cleared when its screen changes).
+#[derive(Component)]
+struct PauseUi;
+
+/// Menu systems work in the menus, and over a fight while the pause menu is open.
+fn menu_live(state: Res<State<AppState>>, pause: Res<Pause>) -> bool {
+    *state.get() != AppState::Fight || pause.open()
+}
+
+fn options_open(state: Res<State<AppState>>, pause: Res<Pause>) -> bool {
+    *state.get() == AppState::Options || *pause == Pause::Options
+}
+
+fn controls_open(state: Res<State<AppState>>, pause: Res<Pause>) -> bool {
+    *state.get() == AppState::Controls || *pause == Pause::Controls
+}
+
+/// Esc opens the pause menu in a fight that is on (not before it starts or after it ends); in it, the main screen
+/// and the surrender question are answered here (the other screens by the options and controls systems).
+fn pause_main(keys: Res<ButtonInput<KeyCode>>, mut pause: ResMut<Pause>, menu: Res<Menu>, sim: Res<Sim>, mut surrender: ResMut<Surrendering>) {
+    let live = matches!(sim.0.phase, Phase::Countdown(_) | Phase::Fighting | Phase::RoundEnd(_));
+    if pause.open() && !live {
+        // the match ended behind the menu (the other player gave up)
+        *pause = Pause::Closed;
+        return;
+    }
+    match *pause {
+        Pause::Closed => {
+            if live && keys.just_pressed(KeyCode::Escape) {
+                *pause = Pause::Main;
+            }
+        }
+        Pause::Main => {
+            if back_pressed(&keys) {
+                *pause = Pause::Closed;
+            } else if confirm_pressed(&keys) {
+                *pause = match menu.cursor {
+                    0 => Pause::Closed,
+                    1 => Pause::Options,
+                    _ => Pause::Surrender,
+                };
+            }
+        }
+        Pause::Surrender => {
+            if back_pressed(&keys) {
+                *pause = Pause::Main;
+            } else if confirm_pressed(&keys) {
+                if menu.cursor == 1 {
+                    surrender.0 = true;
+                    *pause = Pause::Closed;
+                } else {
+                    *pause = Pause::Main;
+                }
+            }
+        }
+        Pause::Options | Pause::Controls => {}
+    }
+}
+
+/// Draw the screen of the pause menu that is open, replacing the last one.
+fn sync_pause(
+    mut commands: Commands,
+    pause: Res<Pause>,
+    mut shown: Local<Pause>,
+    mut menu: ResMut<Menu>,
+    settings: Res<Settings>,
+    mode: Res<Mode>,
+    mut rebinding: ResMut<Rebinding>,
+    old: Query<Entity, With<PauseUi>>,
+) {
+    if *shown == *pause {
+        return;
+    }
+    *shown = *pause;
+    for piece in &old {
+        commands.entity(piece).despawn();
+    }
+    rebinding.0 = None;
+    let red = Color::srgb(1.0, 0.55, 0.55);
+    match *pause {
+        Pause::Closed => {}
+        Pause::Main => {
+            let title = if *mode == Mode::Online { "Paused (the match goes on)" } else { "Paused" };
+            let items = vec![Item::new("Resume", Color::WHITE), Item::new("Options", Color::WHITE), Item::new("Surrender", red)];
+            spawn_menu(&mut commands, &mut menu, AppState::Overlay, title, "W/S or Up/Down: move    F / J / Enter: select    Esc: resume", items, None);
+        }
+        Pause::Options => build_options(&mut commands, &mut menu, AppState::Overlay, &settings),
+        Pause::Controls => build_controls(&mut commands, &mut menu, AppState::Overlay, &settings),
+        Pause::Surrender => {
+            let items = vec![Item::new("No, keep fighting", Color::WHITE), Item::new("Yes, surrender", red)];
+            spawn_menu(&mut commands, &mut menu, AppState::Overlay, "Surrender?", "You lose the match.    Esc: back", items, None);
+        }
+    }
+}
+
+/// The pieces of the pause menu are spawned like any menu's; this puts them in the fight's HUD.
+fn adopt_overlay(
+    mut commands: Commands,
+    new: Query<(Entity, &DespawnOnExit<AppState>), Added<DespawnOnExit<AppState>>>,
+    root: Option<Single<Entity, With<PauseRoot>>>,
+) {
+    let Some(root) = root else { return };
+    for (piece, scope) in &new {
+        if scope.0 == AppState::Overlay {
+            commands.entity(piece).insert((ChildOf(*root), PauseUi));
         }
     }
 }

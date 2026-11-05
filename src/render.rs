@@ -168,6 +168,11 @@ pub fn spawn_fighter(
             .spawn((SpriteOf(fighter), Sprite::from_image(image), Transform::from_xyz(shift, FULL_H as f32 / 2.0, 0.0)))
             .id();
         commands.entity(root).add_child(body);
+        // the stroke and glow behind the body (see outline.rs)
+        let ring = commands
+            .spawn((crate::outline::OutlineOf(fighter), Sprite::default(), Transform::from_xyz(shift, FULL_H as f32 / 2.0, -0.02), Visibility::Hidden))
+            .id();
+        commands.entity(root).add_child(ring);
         if mark {
             let overlay = commands
                 .spawn((
@@ -358,7 +363,9 @@ pub fn spawn_fighter(
 fn speaking(s: &GameState, fighter: usize) -> bool {
     match s.phase {
         Phase::Briefing(_) => false,
-        Phase::Fighting => s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60),
+        // both talk big while the countdown runs
+        Phase::Countdown(_) => true,
+        Phase::Fighting => false,
         Phase::RoundEnd(_) => false,
         Phase::MatchOver => s.match_winner() == Some(fighter),
     }
@@ -653,7 +660,8 @@ pub fn animate_whips(
                 let foe_mid = (foe.y + foe.height() * PX / 2) as f32 / PX as f32 - f.y as f32 / PX as f32;
                 foe_mid.clamp(lo - mv.assist as f32, hi + mv.assist as f32)
             }
-            .max(3.0);
+            // (a special lashing from the air at the floor line points down: it is not held up at his own height)
+            .max(if special && mv.world_y { -400.0 } else { 3.0 });
             // the lash snaps out over its first frames
             let ext = (f.state_frame.saturating_sub(mv.startup) as f32 / 3.0).clamp(0.35, 1.0);
             let tip_full = (t2f::anim::CENTRE_X as f32 + tip_fwd, FULL_H as f32 - tip_up);
@@ -970,7 +978,7 @@ pub fn animate_skill_bar(
         let cooling = cooling && !bat_slot;
         let bat_blocked = f.bat_form > 0 && buttons[k] != Button::Heavy;
         let resting = buttons[k] == Button::Light && f.light_lock > 0;
-        let frames = if cooling { index.map_or(0, |i| f.cooldown_left(i)) } else if silenced { f.silenced } else if resting { f.light_lock } else { 0 };
+        let frames = if cooling { index.map_or(0, |i| f.cooldown_left_in(i, data)) } else if silenced { f.silenced } else if resting { f.light_lock } else { 0 };
         let shade = if waiting_for_meter && !cooling && !silenced && !bat_blocked { 1.0 - f.meter as f32 / Fighter::METER_MAX as f32 } else { 1.0 };
         (!(cooling || silenced || raven_away || waiting_for_meter || bat_blocked || resting), frames, shade)
     };
@@ -1616,5 +1624,35 @@ pub fn animate_shield(
         if color.0 != tone {
             color.0 = tone;
         }
+    }
+}
+
+/// "(is not playing)" over a fighter whose player has the pause menu open (online the match goes on without them).
+#[derive(Component)]
+pub struct AwayLabel(pub usize);
+
+pub fn spawn_away_labels(commands: &mut Commands) {
+    for fighter in 0..2 {
+        commands.spawn((
+            AwayLabel(fighter),
+            DespawnOnExit(AppState::Fight),
+            Text2d::new("(is not playing)"),
+            crate::pixel_font(8.0),
+            TextColor(Color::srgb(1.0, 0.95, 0.6)),
+            Transform::from_xyz(0.0, 0.0, 9.0),
+            Visibility::Hidden,
+        ));
+    }
+}
+
+pub fn animate_away(sim: Res<Sim>, mut labels: Query<(&AwayLabel, &mut Transform, &mut Visibility)>) {
+    for (AwayLabel(i), mut tf, mut visibility) in &mut labels {
+        let f = &sim.0.fighters[*i];
+        let wanted = if sim.0.away[*i] { Visibility::Inherited } else { Visibility::Hidden };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+        set_ne!(tf.translation.x, (f.x / PX) as f32);
+        set_ne!(tf.translation.y, GROUND_Y + (f.y / PX) as f32 + FULL_H as f32 + 10.0);
     }
 }

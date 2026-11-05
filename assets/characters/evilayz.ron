@@ -22,7 +22,7 @@
     raven: Some((home: (15, 46), speed: 14)),
     special_mark: Some(Scar(color: (0.23, 0.48, 0.58), glow: (0.35, 0.95, 1.0))),
     // Negaprofessor's own voice, on top of the game's generic sounds (assets/sfx/voice_negaprofessor_*.wav, never the same one twice in a row)
-    voice: (dash: Some("voice_negaprofessor_dash"), hurt: Some("voice_negaprofessor_hurt"), ko: Some("voice_negaprofessor_death"), block: Some("voice_negaprofessor_block"),
+    voice: (dash: Some("voice_negaprofessor_dash"), hurt: Some("voice_negaprofessor_hurt"), hurt_chance: Some(50), ko: Some("voice_negaprofessor_death"), block: Some("voice_negaprofessor_block"),
             guard_break: Some("voice_negaprofessor_stun"), smash: Some("voice_negaprofessor_stomp"), win: Some("voice_negaprofessor_victory")),
     moves: [
         (name: "Uh", sfx: (hit: Some("slap"), voice: Some("voice_negaprofessor_uh")), button: Light, crouching: false, anim: Speak, walk_pct: 60, combo_step: Some(0),

@@ -8,6 +8,7 @@ mod music;
 mod online;
 mod particles;
 mod render;
+mod outline;
 mod settings;
 mod sfx;
 mod update;
@@ -57,6 +58,9 @@ pub enum AppState {
     Options,
     Controls,
     Fight,
+    /// Never entered: the scope of the pause menu's pieces (`menus::Pause`), which are cleared by hand and not by a
+    /// state change, as the fight behind them stays.
+    Overlay,
 }
 
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,6 +114,11 @@ struct SubBannerText;
 
 /// The pixel font that replaces Bevy's default one (Silkscreen, SIL Open Font License; see assets/fonts).
 const PIXEL_FONT: &[u8] = include_bytes!("../assets/fonts/silkscreen.ttf");
+/// The same sheared to the right, for usernames (made by tools/italic_font.py).
+const ITALIC_FONT: &[u8] = include_bytes!("../assets/fonts/silkscreen-italic.ttf");
+
+#[derive(Resource)]
+pub struct ItalicFont(pub Handle<Font>);
 
 /// Text in the pixel font. Its grid is 8 px, so sizes snap to a multiple of 8 to keep every letter on the
 /// same pixel grid as the art; the glyphs are antialiased and drawn at `SCREEN_SCALE` times their size.
@@ -285,6 +294,8 @@ fn main() {
         .resource_mut::<Assets<Font>>()
         .insert(bevy::asset::AssetId::default(), Font::from_bytes(PIXEL_FONT.to_vec()))
         .expect("pixel font");
+    let italic = app.world_mut().resource_mut::<Assets<Font>>().add(Font::from_bytes(ITALIC_FONT.to_vec()));
+    app.insert_resource(ItalicFont(italic));
     app
         .insert_resource(Roster({
             // characters marked `menu_last` go to the end
@@ -300,6 +311,7 @@ fn main() {
         .init_resource::<render::FrameHandles>()
         .init_resource::<particles::Shake>()
         .init_resource::<briefing::ReadyPress>()
+        .init_resource::<outline::Rings>()
         .add_plugins(settings::SettingsPlugin)
         .add_plugins(sfx::SfxPlugin)
         .add_plugins(menus::MenuPlugin)
@@ -308,7 +320,8 @@ fn main() {
         .add_plugins(online::OnlinePlugin)
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(AppState::Fight), (spawn_fight, render::spawn_skill_bar, render::spawn_cigarette_hud, render::spawn_zone_sprites, briefing::spawn).chain())
-        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>, mut handles: ResMut<render::FrameHandles>| {
+        .add_systems(OnExit(AppState::Fight), |mut clear: ResMut<ClearColor>, mut fixed: ResMut<Time<Fixed>>, mut handles: ResMut<render::FrameHandles>, mut rings: ResMut<outline::Rings>| {
+            rings.0.clear();
             clear.0 = MENU_BACKGROUND;
             fixed.set_timestep_hz(60.0);
             // let go of the fighters' drawings: the menus don't use them, and the next fight loads its own
@@ -343,6 +356,7 @@ fn main() {
         )
         .add_systems(Update, (briefing::press_ready, briefing::update).run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_scribe_effects.run_if(in_state(AppState::Fight)))
+        .add_systems(Update, (outline::animate_outline.after(render::animate_body), render::animate_away).run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_whale.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_shield.run_if(in_state(AppState::Fight)))
         .add_systems(Update, render::animate_portals.run_if(in_state(AppState::Fight)))
@@ -394,9 +408,21 @@ fn spawn_fight(
     selection: Res<Selection>,
     asset_server: Res<AssetServer>,
     dev: Res<DevOptions>,
+    mut pause: ResMut<menus::Pause>,
+    mut surrender: ResMut<menus::Surrendering>,
+    mut names: ResMut<online::PlayerNames>,
+    mode: Res<Mode>,
+    settings: Res<settings::Settings>,
+    italic: Res<ItalicFont>,
 ) {
-    // (the fighters' skills are shown in the character select now, so the match starts at once)
+    // against the CPU only your own name is shown (online both were set when the match was agreed)
+    if *mode != Mode::Online {
+        names.0 = [settings.username.clone(), String::new()];
+    }
+    // (the fighters' skills are shown in the character select now, so the match starts with the countdown)
     *sim = fresh_sim(&roster, &selection, false);
+    *pause = menus::Pause::Closed;
+    surrender.0 = false;
     if dev.spread {
         sim.0.fighters[0].x = -380 * PX;
         sim.0.fighters[1].x = 380 * PX;
@@ -444,13 +470,19 @@ fn spawn_fight(
                         Transform::from_xyz(x, BAR_Y - 17.0, 10.1),
                     ));
                 }
-                hud.spawn((
-                    Text2d::new(roster.0[selection.chars[side]].name.clone()),
-                    crate::pixel_font(10.0),
-                    TextColor(rgb(roster.0[selection.chars[side]].color)),
-                    // long names sit further in so they stay on screen
-                    Transform::from_xyz(dir * (BAR_EDGE - 6.0 - roster.0[selection.chars[side]].name.len() as f32 * 2.8), BAR_Y - 18.0, 10.2),
-                ));
+                // the username, in italics, then the fighter's name; long names sit further in so they stay on screen
+                let character = &roster.0[selection.chars[side]];
+                let who = names.0[side].clone();
+                let width = character.name.len() + if who.is_empty() { 0 } else { who.len() + 1 };
+                let at = Transform::from_xyz(dir * (BAR_EDGE - 6.0 - width as f32 * 2.8), BAR_Y - 18.0, 10.2);
+                if who.is_empty() {
+                    hud.spawn((Text2d::new(character.name.clone()), crate::pixel_font(10.0), TextColor(rgb(character.color)), at));
+                } else {
+                    let italic_font = TextFont { font: bevy::text::FontSource::Handle(italic.0.clone()), ..crate::pixel_font(10.0) };
+                    hud.spawn((Text2d::new(format!("{who} ")), italic_font, TextColor(rgb(character.color)), at)).with_children(|label| {
+                        label.spawn((TextSpan::new(character.name.clone()), crate::pixel_font(10.0), TextColor(rgb(character.color))));
+                    });
+                }
             }
             hud.spawn((
                 TimerText,
@@ -465,6 +497,8 @@ fn spawn_fight(
                 TextColor(Color::srgb(1.0, 0.9, 0.4)),
                 Transform::from_xyz(0.0, 20.0, 10.2),
             ));
+            // the pause menu's pieces are put here (see menus::Pause)
+            hud.spawn((menus::PauseRoot, Transform::from_xyz(0.0, 0.0, 40.0), Visibility::default()));
             hud.spawn((
                 SubBannerText,
                 Text2d::new(""),
@@ -580,6 +614,7 @@ fn spawn_fight(
             render::spawn_portals(&mut commands, &asset_server, i, c.sprites.as_deref().unwrap_or(&c.name));
         }
     }
+    render::spawn_away_labels(&mut commands);
     render::spawn_curses(&mut commands, &asset_server);
     render::spawn_combo_ui(&mut commands, &asset_server);
     render::spawn_minion_sprites(&mut commands);
@@ -601,10 +636,23 @@ fn step_sim(
     ready_press: ResMut<briefing::ReadyPress>,
     mut brain: Local<Brain>,
     mut commands: Commands,
+    pause: Res<menus::Pause>,
+    mut surrender: ResMut<menus::Surrendering>,
 ) {
-    // the keys set in Options > Controls; player 2 is the CPU
-    let mut player = settings.read_input(&keys);
-    player.0 |= dev.hold;
+    // the keys set in Options > Controls; player 2 is the CPU. With the pause menu open you are away: the other
+    // side is told, and your buttons do nothing
+    let paused = pause.open();
+    let mut player = if paused { Input(Input::AWAY) } else { settings.read_input(&keys) };
+    if !paused {
+        player.0 |= dev.hold;
+    }
+    // a surrender is sent until the match is over (online, an input only counts on a frame the session advances)
+    if sim.0.phase == Phase::MatchOver {
+        surrender.0 = false;
+    }
+    if surrender.0 {
+        player.0 |= Input::SURRENDER;
+    }
     let briefing = matches!(sim.0.phase, Phase::Briefing(_));
     // (kept until the match starts: online, an input only counts on a frame the session actually advances)
     if briefing && ready_press.0 {
@@ -619,6 +667,10 @@ fn step_sim(
                 next.set(AppState::Online);
             }
         }
+        return;
+    }
+    // against the CPU the pause menu stops the fight (a surrender still goes through)
+    if paused && !surrender.0 {
         return;
     }
     let mut cpu = brain.input(&sim.0, 1, [&roster.0[sel.chars[0]], &roster.0[sel.chars[1]]]);
@@ -747,9 +799,9 @@ fn sync_hud(
 
     let name = |i: usize| roster.0[sel.chars[i]].name.clone();
     let new_banner = match s.phase {
-        Phase::Fighting if s.frame < 90 || (s.round > 1 && s.timer > GameState::ROUND_FRAMES - 60) => {
-            format!("Round {}", s.round)
-        }
+        // 3, 2, 1, then FIGHT! for the first moments of the round
+        Phase::Countdown(n) => (3 - (n / 60).min(2)).to_string(),
+        Phase::Fighting if s.timer > GameState::ROUND_FRAMES - 45 => "FIGHT!".into(),
         Phase::Fighting | Phase::Briefing(_) => String::new(),
         Phase::RoundEnd(_) => {
             if s.fighters.iter().any(|f| f.health <= 0) { "K.O.".into() } else { "Time!".into() }
@@ -762,9 +814,13 @@ fn sync_hud(
     if banner.0 != new_banner {
         banner.0 = new_banner;
     }
-    let new_sub = if s.phase == Phase::MatchOver { "Enter: rematch    Esc: menu" } else { "" };
+    let new_sub = match s.phase {
+        Phase::MatchOver => "Enter: rematch    Esc: menu".to_string(),
+        Phase::Countdown(_) => format!("Round {}", s.round),
+        _ => String::new(),
+    };
     if sub_banner.0 != new_sub {
-        sub_banner.0 = new_sub.into();
+        sub_banner.0 = new_sub;
     }
 }
 
@@ -815,15 +871,15 @@ fn restart_match(
 /// New match; each fighter starts with their character's health.
 fn fresh_sim(roster: &Roster, sel: &Selection, briefing: bool) -> Sim {
     let mut sim = Sim::default();
-    if briefing {
-        sim.0.phase = Phase::Briefing(0);
-    }
+    // (without the skills screen the match starts with the countdown)
+    sim.0.phase = if briefing { Phase::Briefing(0) } else { Phase::Countdown(0) };
     sim.0.set_health([0, 1].map(|i| roster.0[sel.chars[i]].health.unwrap_or(Fighter::MAX_HEALTH)));
     sim
 }
 
-fn leave_fight(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>, mut commands: Commands) {
-    if keys.just_pressed(KeyCode::Escape) {
+/// Esc leaves a fight that is over (or not begun); in one that is on it opens the pause menu (see `menus::Pause`).
+fn leave_fight(keys: Res<ButtonInput<KeyCode>>, sim: Res<Sim>, pause: Res<menus::Pause>, mut next: ResMut<NextState<AppState>>, mut commands: Commands) {
+    if keys.just_pressed(KeyCode::Escape) && !pause.open() && matches!(sim.0.phase, Phase::MatchOver | Phase::Briefing(_)) {
         commands.remove_resource::<online::NetSession>();
         next.set(AppState::Title);
     }

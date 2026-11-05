@@ -6,7 +6,7 @@
 //        in a puff of grey smoke that stuns anyone close for a second. The heavy then rests 4 seconds, or 6 if the
 //        smoke stunned. Being hit as a bat turns her back without the smoke.
 // Special (the brooch glows when the meter is full): a portal opens behind her and she leaps back into it, then one
-//        opens right behind the enemy and a hand reaches out to grab (move away to dodge it). If it holds, the enemy is
+//        opens right behind the enemy and drags them towards it while a hand reaches out to grab (walking away is not enough; roll through it). If it holds, the enemy is
 //        stuck while she comes out and bites, healing 10%.
 // Drawings come from `python tools/gen_gray_persona.py`. See ayz.ron for what each field means; heal_pct and
 // portal are explained in src/sim/data.rs.
@@ -22,11 +22,11 @@
     punch_tweens: true,
     special_mark: Some(Scar(color: (0.55, 0.08, 0.1), glow: (1.0, 0.2, 0.25))),
     moves: [
-        (name: "Nail Scratch", button: Light, crouching: false, anim: Punch, walk_pct: 60, lunge: 260,
+        (name: "Nail Scratch", button: Light, crouching: false, anim: Punch, walk_pct: 60, lunge: 260, pull_foe: true, pull_gap: 20,
          startup: 3, active: 3, recovery: 5, damage: 28, hitstun: 12, blockstun: 8, knockback: 2, hitstop: 4,
          hitbox: (x: 10, y: 24, w: 30, h: 16)),
         // third hit of the combo: both hands and the fangs; a landed bite heals her, and her lights rest for a second
-        (name: "Fang Frenzy", sfx: (hit: Some("bite")), button: Light, crouching: false, anim: Hard, walk_pct: 0, finisher_move: true, heal_pct: 3, light_lock: 60,
+        (name: "Fang Frenzy", sfx: (hit: Some("bite")), button: Light, crouching: false, anim: Hard, walk_pct: 0, finisher_move: true, heal_pct: 3, light_lock: 60, pull_foe: true, pull_gap: 20,
          startup: 7, active: 5, recovery: 14, damage: 38, hitstun: 18, blockstun: 10, knockback: 3, hitstop: 7,
          hitbox: (x: 8, y: 20, w: 34, h: 28)),
         (name: "Low Scratch", button: Light, crouching: true, anim: Soft, walk_pct: 0,
@@ -42,10 +42,10 @@
          hitbox: (x: 0, y: 0, w: 0, h: 0),
          hop: Some((400, 180)),
          bat_form: Some((duration: 180, speed_pct: 170, radius: 44, stun: 60, miss_cooldown: 240, hit_cooldown: 360)),
-         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 30, size: (14, 10), image: Some("batspray"), summon_image: Some("none"), speed: 6, fan: 14, unblockable: true))),
+         projectile: Some((x: 20, y: 34, aim_y: 34, travel_frames: 1, lifetime: 30, size: (14, 10), image: Some("batspray"), summon_image: Some("none"), speed: 6, fan: 14, unblockable: true, pierces_dodges: true))),
         // the portal: gone at frame 24; the grab (window 1) holds them for the bite (window 2)
         (name: "Blood Portal", sfx: (cast: Some("portal_open"), hit: Some("bite")), button: Special, crouching: false, anim: Portal, walk_pct: 0,
-         portal: Some((vanish: 24, gap: 26)), heal_pct: 10, hits: 2, hit_gap: 32, guard_hits: Some(0), committed: true, commit_at: Some(40),
+         portal: Some((vanish: 24, gap: 26, pull: 450)), heal_pct: 10, hits: 2, hit_gap: 32, guard_hits: Some(0), committed: true, commit_at: Some(40),
          hit_overrides: [(damage: 0, hitstun: 60, knockback: 0), (damage: 130, hitstun: 26, knockback: 5)],
          startup: 54, active: 6, recovery: 30, damage: 130, hitstun: 26, blockstun: 0, knockback: 5, hitstop: 8,
          hitbox: (x: 0, y: 8, w: 55, h: 46)),

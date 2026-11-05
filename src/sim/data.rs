@@ -218,6 +218,10 @@ pub struct BatFormData {
 pub struct PortalData {
     pub vanish: u32,
     pub gap: i32,
+    /// While the far portal is open the enemy is dragged towards it this many subpixels a frame (walking away is
+    /// about 200, a dash 520 for a moment), until they are a few pixels from where she comes out. 0: no pull.
+    #[serde(default)]
+    pub pull: i32,
 }
 
 impl PortalData {
@@ -318,6 +322,10 @@ pub struct ProjectileData {
     /// The projectile ignores blocking.
     #[serde(default)]
     pub unblockable: bool,
+    /// Crouching and rolling don't dodge it: it hits a crouching fighter as if standing and a rolling one as if not
+    /// rolling (the bat wave).
+    #[serde(default)]
+    pub pierces_dodges: bool,
 }
 
 impl ProjectileData {
@@ -395,6 +403,8 @@ pub struct CharacterVoice {
     pub dash: Option<String>,
     /// Taking a hit (not a block).
     pub hurt: Option<String>,
+    /// Percent of hits that get the `hurt` sound (none: every hit; a character who would never stop crying out).
+    pub hurt_chance: Option<u32>,
     /// Being knocked out.
     pub ko: Option<String>,
     /// Blocking a hit.
@@ -612,6 +622,10 @@ pub struct MoveData {
     /// This move's sounds (see `MoveSfx`).
     #[serde(default)]
     pub sfx: MoveSfx,
+    /// Its cooldown is shared with the character's other moves of this button that say so too: using one puts them
+    /// all on cooldown (a heavy that is a different move close up and far away).
+    #[serde(default)]
+    pub shared_cooldown: bool,
     /// While the hitbox is active, every enemy projectile within the hitbox's horizontal range (at any
     /// height up to a little above the head) is destroyed, except `melee` ones (the staff's shockwave).
     #[serde(default)]

@@ -76,13 +76,15 @@ pub struct Settings {
     /// 0 to 10: hits, blocks and whooshes in a fight.
     pub sfx_volume: u8,
     pub display: Display,
+    /// The name shown in front of your fighter's, and sent to a friend with an invitation (empty: none).
+    pub username: String,
     /// One key per entry of `ACTIONS`.
     pub keys: [KeyCode; ACTIONS.len()],
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { music_volume: 7, sfx_volume: 8, display: Display::Windowed, keys: ACTIONS.map(|(_, _, key)| key) }
+        Settings { music_volume: 7, sfx_volume: 8, display: Display::Windowed, username: String::new(), keys: ACTIONS.map(|(_, _, key)| key) }
     }
 }
 
@@ -131,6 +133,9 @@ struct Saved {
     #[serde(default = "default_sfx_volume")]
     sfx_volume: u8,
     display: Display,
+    /// Missing in files saved before usernames existed.
+    #[serde(default)]
+    username: String,
     keys: Vec<(String, String)>,
 }
 
@@ -163,6 +168,7 @@ pub fn load() -> Settings {
     settings.music_volume = saved.music_volume.min(Settings::MAX_VOLUME);
     settings.sfx_volume = saved.sfx_volume.min(Settings::MAX_VOLUME);
     settings.display = saved.display;
+    settings.username = t2f::net::lobby::clean_name(&saved.username);
     for (action, key) in saved.keys {
         let i = ACTIONS.iter().position(|a| a.0 == action);
         let key = BINDABLE.iter().copied().find(|k| format!("{k:?}") == key);
@@ -178,6 +184,7 @@ fn save(settings: &Settings) {
         music_volume: settings.music_volume,
         sfx_volume: settings.sfx_volume,
         display: settings.display,
+        username: settings.username.clone(),
         keys: ACTIONS.iter().zip(settings.keys).map(|(a, k)| (a.0.to_string(), format!("{k:?}"))).collect(),
     };
     let path = settings_path();

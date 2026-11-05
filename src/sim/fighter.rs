@@ -445,7 +445,16 @@ impl Fighter {
 
     /// Whether move `index` is still cooling down from its last use.
     pub fn on_cooldown(&self, index: usize, data: &CharacterData) -> bool {
-        self.cooldown_left(index) > 0 && (data.moves[index].cooldown > 0 || data.moves[index].burst_shots > 0)
+        self.cooldown_left_in(index, data) > 0 && (data.moves[index].cooldown > 0 || data.moves[index].burst_shots > 0)
+    }
+
+    /// Frames left before move `index` can be started again, counting the moves it shares its cooldown with.
+    pub fn cooldown_left_in(&self, index: usize, data: &CharacterData) -> u32 {
+        let mv = &data.moves[index];
+        if !mv.shared_cooldown {
+            return self.cooldown_left(index);
+        }
+        data.moves.iter().enumerate().filter(|(_, other)| other.shared_cooldown && other.button == mv.button).map(|(i, _)| self.cooldown_left(i)).max().unwrap_or(0)
     }
 
     /// Frames left before move `index` can be started again.

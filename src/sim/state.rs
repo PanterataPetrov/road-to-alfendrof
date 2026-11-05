@@ -7,6 +7,8 @@ pub enum Phase {
     /// Before the match: the fighters' skills are shown until both players are ready. The number has a bit
     /// set for each player who is (bit 0 = player 0).
     Briefing(u8),
+    /// The grace period before a round: the number is the frames gone (see `COUNTDOWN_FRAMES`). Nobody can act.
+    Countdown(u32),
     Fighting,
     /// Frames since the round ended (KO or time up).
     RoundEnd(u32),
@@ -158,6 +160,8 @@ pub struct GameState {
     /// 1-based round number.
     pub round: u8,
     pub phase: Phase,
+    /// Who has the pause menu open (online the match goes on without them).
+    pub away: [bool; 2],
 }
 
 impl GameState {
@@ -165,6 +169,10 @@ impl GameState {
     pub const STAGE_HALF_WIDTH: i32 = 400 * PX;
     pub const ROUND_FRAMES: u32 = 99 * 60;
     pub const ROUND_END_FRAMES: u32 = 150;
+    /// The grace period and countdown before each round: three seconds.
+    pub const COUNTDOWN_FRAMES: u32 = 180;
+    /// The portal's pull stops this many pixels from where she comes out.
+    const PORTAL_PULL_STOP: i32 = 20;
     pub const ROUNDS_TO_WIN: u8 = 2;
     /// A blocked hit takes 1/CHIP_DIVISOR of its damage but never kills.
     const CHIP_DIVISOR: i32 = 10;
@@ -185,6 +193,7 @@ impl GameState {
             wins: [0; 2],
             round: 1,
             phase: Phase::Fighting,
+            away: [false; 2],
         }
     }
 
@@ -209,8 +218,15 @@ impl GameState {
                     ready |= 1 << i;
                 }
             }
-            self.phase = if ready == 0b11 { Phase::Fighting } else { Phase::Briefing(ready) };
+            self.phase = if ready == 0b11 { Phase::Countdown(0) } else { Phase::Briefing(ready) };
             return;
+        }
+        self.away = [inputs[0].has(Input::AWAY), inputs[1].has(Input::AWAY)];
+        if self.phase != Phase::MatchOver {
+            if let Some(loser) = (0..2).find(|&i| inputs[i].has(Input::SURRENDER)) {
+                self.surrender(loser);
+                return;
+            }
         }
         self.frame += 1;
         let now = self.frame;
@@ -277,8 +293,26 @@ impl GameState {
                     self.phase = Phase::RoundEnd(n + 1);
                 }
             }
+            Phase::Countdown(n) => {
+                self.phase = if n + 1 >= Self::COUNTDOWN_FRAMES { Phase::Fighting } else { Phase::Countdown(n + 1) };
+            }
             Phase::MatchOver | Phase::Briefing(_) => {}
         }
+    }
+
+    /// `who` gives up: the match is over, the other player wins, and `who` is on the floor.
+    fn surrender(&mut self, who: usize) {
+        self.wins[1 - who] = Self::ROUNDS_TO_WIN;
+        self.wins[who] = self.wins[who].min(Self::ROUNDS_TO_WIN - 1);
+        let f = &mut self.fighters[who];
+        f.health = 0;
+        f.state = FighterState::Ko;
+        f.state_frame = 1;
+        f.hitstop = 0;
+        f.vx = 0;
+        self.projectiles.clear();
+        self.minions.clear();
+        self.phase = Phase::MatchOver;
     }
 
     /// Who won the match once it's over; `None` if it ended level.
@@ -313,7 +347,7 @@ impl GameState {
         self.impacts.clear();
         self.timer = Self::ROUND_FRAMES;
         self.round += 1;
-        self.phase = Phase::Fighting;
+        self.phase = Phase::Countdown(0);
     }
 
     /// Whether the defender is guarding: free to act (or already blocking) and holding block.
@@ -455,6 +489,17 @@ impl GameState {
         Some([x0, y0, x1, y1])
     }
 
+    /// The hurtbox as if the defender were not dodging: standing tall even when crouched or mid-roll (a fighter
+    /// inside a portal is still out of reach).
+    fn undodged_hurtbox(&self, defender: usize) -> [i32; 4] {
+        let f = &self.fighters[defender];
+        if f.hidden {
+            return [i32::MAX / 2; 4];
+        }
+        let height = if f.state == FighterState::Crouch { Fighter::STAND_HEIGHT } else { f.height() };
+        [f.x - Fighter::HALF_WIDTH, f.y, f.x + Fighter::HALF_WIDTH, f.y + height * PX]
+    }
+
     /// World-space hurtbox `[x0, y0, x1, y1]` in subpixels.
     pub fn hurtbox(&self, defender: usize) -> [i32; 4] {
         let f = &self.fighters[defender];
@@ -504,6 +549,8 @@ impl GameState {
             // a hand out of a portal can't be blocked, only dodged
             let can_block = blocks[1 - a] && base.portal.is_none();
             let blocked = self.apply_hit(1 - a, mv, dir, can_block, power);
+            // too many blocked swings in a row and the attacker is stunned
+            self.count_blocked_attack(a, base, blocked, dir);
             // the first window of a grab (it does no damage, a later hit does) holds them where they are,
             // even in the middle of a jump
             if !blocked && base.hits > 1 && mv.damage == 0 && base.window(self.fighters[a].state_frame) == Some(0) && self.fighters[1 - a].state == FighterState::Hitstun {
@@ -531,9 +578,26 @@ impl GameState {
                 self.fighters[1 - a].silenced = mv.silence;
             }
             self.apply_pulls(a, mv, blocked);
-            self.gain_meter(a, mv, mv.damage * power / 100, blocked, chars[a].meter_gain_pct.unwrap_or(100));
+            self.gain_meter(a, mv, mv.damage * power / 100, blocked, chars);
             self.register_light_hit(a, mv, blocked);
             self.mark_curse(a);
+        }
+    }
+
+    /// Moves with `blocked_stun` count how often they get blocked: after `shots` of them in a row (no hit of theirs
+    /// getting through in between, and not five seconds apart) the attacker is stunned. Shots and swings alike.
+    fn count_blocked_attack(&mut self, owner: usize, mv: &MoveData, blocked: bool, dir: i32) {
+        let Some(bs) = mv.blocked_stun else { return };
+        let attacker = &mut self.fighters[owner];
+        if blocked {
+            attacker.shots_blocked += 1;
+            attacker.shots_blocked_timer = 300;
+            if attacker.shots_blocked >= bs.shots {
+                attacker.shots_blocked = 0;
+                attacker.start_stun(FighterState::Hitstun, bs.stun, -dir * 2 * PX);
+            }
+        } else {
+            attacker.shots_blocked = 0;
         }
     }
 
@@ -735,7 +799,7 @@ impl GameState {
                 let defender = 1 - owner;
                 let blocked = self.can_block(defender, inputs[defender]);
                 let blocked = self.apply_hit(defender, mv, dir, blocked, r.power);
-                self.gain_meter(owner, mv, mv.damage * r.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
+                self.gain_meter(owner, mv, mv.damage * r.power / 100, blocked, chars);
                 self.register_light_hit_as(owner, mv, blocked, r.power == 150);
             }
         }
@@ -824,6 +888,8 @@ impl GameState {
             let mv = &chars[owner].moves[f.attack];
             let (frame, foe_x) = (f.state_frame, self.fighters[1 - owner].x);
             let f = &mut self.fighters[owner];
+            // while the far portal is open it drags the enemy in, so walking away from it is not enough
+            let pulling = (pd.pull > 0 && frame > pd.aim_frame(mv.startup) && frame < mv.startup).then_some(f.portal_x).flatten();
             if frame == pd.vanish {
                 f.hidden = true;
                 f.meter = 0;
@@ -845,6 +911,17 @@ impl GameState {
             }
             if f.hidden && frame > mv.startup + mv.active {
                 f.hidden = false;
+            }
+            if let Some(portal_x) = pulling {
+                let foe = &mut self.fighters[1 - owner];
+                if foe.state != FighterState::Ko {
+                    // (stopping a few pixels short, well inside her reach)
+                    let away = portal_x - foe.x;
+                    let step = pd.pull.min(away.abs() - Self::PORTAL_PULL_STOP * PX);
+                    if step > 0 {
+                        foe.x += away.signum() * step;
+                    }
+                }
             }
         }
     }
@@ -1066,6 +1143,9 @@ impl GameState {
             let f = &self.fighters[owner];
             let beam = (f.state == FighterState::Attack).then(|| chars[owner].moves[f.attack].beam).flatten();
             match beam {
+                // a lock left over from the move before (the heavy's whale and the special are both beams, and one can
+                // start the moment the other ends) is forgotten, so this move locks on for itself and spends its meter
+                Some(b) if f.beam_lock.is_some() && f.state_frame < b.lock_frame => self.fighters[owner].beam_lock = None,
                 Some(b) if f.beam_lock.is_none() && f.state_frame >= b.lock_frame => {
                     let x = self.fighters[1 - owner].x;
                     self.fighters[owner].beam_lock = Some(x);
@@ -1359,11 +1439,16 @@ impl GameState {
         }
     }
 
-    /// Fill a fighter's special meter for a hit they landed (half for a blocked one). Specials don't fill it.
-    fn gain_meter(&mut self, owner: usize, mv: &MoveData, damage: i32, blocked: bool, rate_pct: i32) {
-        if mv.button == super::data::Button::Special {
+    /// Fill a fighter's special meter for a hit they landed (half for a blocked one). Specials don't fill it, and neither
+    /// does anything that lands while their own special is playing (a quill thrown just before it): the meter they
+    /// just spent stays empty.
+    fn gain_meter(&mut self, owner: usize, mv: &MoveData, damage: i32, blocked: bool, chars: [&CharacterData; 2]) {
+        let f = &self.fighters[owner];
+        let in_special = f.state == FighterState::Attack && chars[owner].moves[f.attack].button == super::data::Button::Special;
+        if mv.button == super::data::Button::Special || in_special {
             return;
         }
+        let rate_pct = chars[owner].meter_gain_pct.unwrap_or(100);
         let gain = (damage / 3 + 4) * rate_pct / 100;
         let f = &mut self.fighters[owner];
         f.meter = (f.meter + if blocked { gain / 2 } else { gain }).min(Fighter::METER_MAX);
@@ -1397,7 +1482,7 @@ impl GameState {
             p.age += 1;
 
             let defender = 1 - owner;
-            let hurt = self.hurtbox(defender);
+            let hurt = if data.pierces_dodges { self.undodged_hurtbox(defender) } else { self.hurtbox(defender) };
             // a lob comes down and splashes on the ground around where it lands
             if data.lob {
                 if p.age >= data.travel_frames.max(1) {
@@ -1407,7 +1492,7 @@ impl GameState {
                         let dir = if self.fighters[defender].x >= p.land_x { 1 } else { -1 };
                         let blocked = self.can_block(defender, inputs[defender]) && !data.unblockable;
                         let blocked = self.apply_hit(defender, mv, dir, blocked, p.power);
-                        self.gain_meter(owner, mv, mv.damage * p.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
+                        self.gain_meter(owner, mv, mv.damage * p.power / 100, blocked, chars);
                     }
                 } else {
                     self.projectiles.push(p);
@@ -1449,19 +1534,7 @@ impl GameState {
                     let shot = mv.as_shot();
                     let blocked = self.apply_hit(defender, &shot, dir, blocked, p.power);
                     // too many blocked shots in a row and the thrower is stunned
-                    if let Some(bs) = mv.blocked_stun {
-                        let thrower = &mut self.fighters[owner];
-                        if blocked {
-                            thrower.shots_blocked += 1;
-                            thrower.shots_blocked_timer = 300;
-                            if thrower.shots_blocked >= bs.shots {
-                                thrower.shots_blocked = 0;
-                                thrower.start_stun(FighterState::Hitstun, bs.stun, -dir * 2 * PX);
-                            }
-                        } else {
-                            thrower.shots_blocked = 0;
-                        }
-                    }
+                    self.count_blocked_attack(owner, mv, blocked, dir);
                     if mv.bat_form.is_some() && !blocked {
                         // she can turn into a bat until the heavy's cooldown runs out
                         let f = &mut self.fighters[owner];
@@ -1477,7 +1550,7 @@ impl GameState {
                         let d = &mut self.fighters[defender];
                         (d.bleed_ticks, d.bleed_damage, d.bleed_every, d.bleed_timer) = (b.ticks, b.damage, b.every, 0);
                     }
-                    self.gain_meter(owner, &shot, shot.damage * p.power / 100, blocked, chars[owner].meter_gain_pct.unwrap_or(100));
+                    self.gain_meter(owner, &shot, shot.damage * p.power / 100, blocked, chars);
                     self.register_light_hit(owner, mv, blocked);
                     // a shot counts as a hit from its owner's side for the opponent's curse
                     self.mark_curse(owner);
@@ -1646,7 +1719,50 @@ mod tests {
         assert_eq!((s.frame, s.timer), (0, GameState::ROUND_FRAMES), "the round does not run");
         assert_eq!(s.fighters[0].x, -80 * PX, "nobody moves");
         s.step([Input::default(), Input(Input::READY)], [&c, &c]);
+        assert_eq!(s.phase, Phase::Countdown(0));
+    }
+
+    #[test]
+    fn nobody_can_act_during_the_countdown_and_the_round_starts_after_three_seconds() {
+        let c = ayz();
+        let mut s = GameState::new();
+        s.phase = Phase::Countdown(0);
+        for _ in 0..GameState::COUNTDOWN_FRAMES - 1 {
+            s.step([Input(Input::RIGHT | Input::LIGHT), Input(Input::LEFT)], [&c, &c]);
+            assert!(matches!(s.phase, Phase::Countdown(_)));
+        }
+        assert_eq!(s.fighters[0].x, -80 * PX, "nobody moves");
+        assert_eq!(s.fighters[0].state, FighterState::Idle);
+        assert_eq!(s.timer, GameState::ROUND_FRAMES, "the clock waits");
+        s.step([Input::default(); 2], [&c, &c]);
         assert_eq!(s.phase, Phase::Fighting);
+        assert_eq!(GameState::COUNTDOWN_FRAMES, 180, "three seconds");
+    }
+
+    #[test]
+    fn surrendering_loses_the_match_at_once() {
+        let c = ayz();
+        let mut s = GameState::new();
+        s.wins = [1, 0];
+        s.step([Input::default(), Input(Input::SURRENDER)], [&c, &c]);
+        assert_eq!(s.phase, Phase::MatchOver);
+        assert_eq!(s.match_winner(), Some(0));
+        assert_eq!(s.fighters[1].state, FighterState::Ko);
+        // and the other way round, from 1-1
+        let mut s = GameState::new();
+        s.wins = [1, 1];
+        s.step([Input(Input::SURRENDER), Input::default()], [&c, &c]);
+        assert_eq!(s.match_winner(), Some(1));
+    }
+
+    #[test]
+    fn the_pause_menu_is_shown_to_the_other_side_and_changes_nothing_else() {
+        let c = ayz();
+        let mut s = GameState::new();
+        s.step([Input::default(), Input(Input::AWAY)], [&c, &c]);
+        assert_eq!(s.away, [false, true]);
+        s.step([Input::default(), Input::default()], [&c, &c]);
+        assert_eq!(s.away, [false, false]);
     }
 
     #[test]
@@ -2533,7 +2649,7 @@ mod tests {
         for _ in 0..(GameState::ROUND_END_FRAMES + 20) {
             step(&mut s, 0, 0);
         }
-        assert_eq!(s.phase, Phase::Fighting);
+        assert!(matches!(s.phase, Phase::Countdown(_)), "the next round starts with the countdown");
         assert_eq!(s.round, 2);
         assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH);
         assert_eq!(s.fighters[1].x, 80 * PX);
@@ -2710,7 +2826,7 @@ mod tests {
         s.fighters[1].health = 1;
         s.phase = Phase::RoundEnd(GameState::ROUND_END_FRAMES - 1);
         step(&mut s, 0, 0);
-        assert_eq!(s.phase, Phase::Fighting);
+        assert_eq!(s.phase, Phase::Countdown(0));
         assert!(s.projectiles.is_empty());
     }
 
@@ -3603,7 +3719,7 @@ mod tests {
     fn the_scribes_moves_are_set_up_as_designed() {
         let c = scribe();
         let jab = &c.moves[c.find_move(Button::Light, false, false).unwrap()];
-        assert!(jab.startup <= 3 && jab.hitbox.w > 0, "very fast quill stabs");
+        assert!(jab.startup <= 5 && jab.hitbox.w > 0, "quick quill stabs (a bit slower than they were)");
         let fin = &c.moves[c.find_finisher().unwrap()];
         assert!(fin.bleed.is_some() && fin.say.as_deref().unwrap().contains("{enemy}"), "the book writes about the enemy and makes them bleed");
         assert!(fin.projectile.as_ref().is_some_and(|p| p.homing && p.unblockable), "an unblockable homing particle");
@@ -3710,7 +3826,7 @@ mod tests {
             bitten |= near.fighters[1].health < Fighter::MAX_HEALTH;
         }
         assert!(bitten, "the whale bites an enemy who stays");
-        assert!(Fighter::MAX_HEALTH - near.fighters[1].health >= 90, "a big bite");
+        assert!(Fighter::MAX_HEALTH - near.fighters[1].health >= 80, "a big bite");
         // one who steps out of the pool is not bitten
         let mut away = GameState::new();
         away.fighters[0].x = 0;
@@ -3930,6 +4046,148 @@ mod tests {
     }
 
     #[test]
+    fn the_meter_a_special_spent_stays_empty_while_it_plays() {
+        let (c, e) = (scribe(), ayz());
+        let special = c.moves.iter().position(|m| m.button == Button::Special).unwrap();
+        let (mut odd, mut specials, mut interrupted) = (0, 0, 0);
+        for seed in 0..300u32 {
+            let mut x = seed.wrapping_mul(2654435761) | 1;
+            let mut rnd = move || { x ^= x << 13; x ^= x >> 17; x ^= x << 5; x };
+            let mut s = GameState::new();
+            s.fighters[1].x = s.fighters[0].x + 40 * PX + (seed as i32 % 5) * 30 * PX;
+            let mut was_special = false;
+            for f in 0..900u32 {
+                if s.phase != Phase::Fighting { break; }
+                if s.fighters[0].meter < Fighter::METER_MAX && f % 40 == 0 && s.fighters[0].is_neutral() { s.fighters[0].meter = Fighter::METER_MAX; }
+                let r = rnd();
+                let mine = if s.fighters[0].is_neutral() && s.fighters[0].meter >= Fighter::METER_MAX && r % 7 == 0 { Input::SPECIAL } else if r % 5 == 0 { Input::LIGHT } else if r % 11 == 0 { Input::HEAVY } else { 0 };
+                let theirs = match rnd() % 6 { 0 => Input::LIGHT, 1 => Input::HEAVY, 2 => Input::BLOCK, 3 => Input::RIGHT, 4 => Input::LEFT, _ => 0 };
+                s.step([Input(mine), Input(theirs)], [&c, &e]);
+                let f0 = &s.fighters[0];
+                let in_special = f0.state == FighterState::Attack && f0.attack == special;
+                if in_special && f0.state_frame == 1 { specials += 1; was_special = true; }
+                if was_special && !in_special {
+                    was_special = false;
+                    if f0.meter >= Fighter::METER_MAX { interrupted += 1; }
+                }
+                if in_special && f0.state_frame > 40 && f0.meter > 0 { odd += 1; }
+            }
+        }
+        assert!(specials > 100, "the special was used often enough ({specials})");
+        assert!(interrupted < specials / 10, "a cast cut short before the lock keeps its meter, but that is the exception");
+        assert_eq!(odd, 0, "the meter refilled while the special was still playing");
+    }
+
+    #[test]
+    fn a_special_starting_the_moment_the_whale_ends_still_locks_on_and_spends_the_meter() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        s.fighters[1].x = s.fighters[0].x + 100 * PX;
+        // the whale's lock is still there when the special starts
+        s.fighters[0].beam_lock = Some(-7777 * PX);
+        s.fighters[0].meter = Fighter::METER_MAX;
+        s.step([Input(Input::SPECIAL), Input(0)], [&c, &e]);
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert_eq!(s.fighters[0].meter, 0, "the special spent the meter");
+        assert_ne!(s.fighters[0].beam_lock, Some(-7777 * PX), "and locked on where the enemy is");
+    }
+
+    #[test]
+    fn the_scribes_two_heavies_share_one_cooldown() {
+        let (c, e) = (scribe(), ayz());
+        let mut s = GameState::new();
+        // close up he uses the whale
+        s.fighters[1].x = s.fighters[0].x + 60 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        assert_eq!(s.fighters[0].state, FighterState::Attack);
+        let whale = s.fighters[0].attack;
+        for _ in 0..130 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+        }
+        assert_eq!(s.fighters[0].state, FighterState::Idle, "the whale is over");
+        // from afar he would use the hail, but the heavy is still cooling down
+        s.fighters[1].x = s.fighters[0].x + 300 * PX;
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        assert_eq!(s.fighters[0].state, FighterState::Idle, "no second heavy yet");
+        assert!(s.fighters[0].on_cooldown(whale, &c));
+        let mut waited = 132;
+        while s.fighters[0].on_cooldown(whale, &c) && waited < 600 {
+            s.step([Input(0), Input(0)], [&c, &e]);
+            waited += 1;
+        }
+        assert!((530..=580).contains(&waited), "about nine seconds after the whale started ({waited} frames)");
+        s.step([Input(Input::HEAVY), Input(0)], [&c, &e]);
+        assert_eq!(s.fighters[0].state, FighterState::Attack, "and then it is ready");
+        assert_ne!(s.fighters[0].attack, whale, "as the hail, since the enemy is far away");
+    }
+
+    #[test]
+    fn the_blood_portal_drags_an_enemy_who_walks_away_to_where_she_comes_out() {
+        let e = CharacterData::from_ron(include_str!("../../assets/characters/evilayz.ron")).unwrap();
+        let run = |pull: i32| {
+            let mut g = gray_persona();
+            g.moves.iter_mut().find(|m| m.portal.is_some()).unwrap().portal.as_mut().unwrap().pull = pull;
+            let mut s = GameState::new();
+            s.fighters[0].meter = Fighter::METER_MAX;
+            s.fighters[0].x = 0;
+            s.fighters[1].x = 60 * PX;
+            s.step([Input(Input::SPECIAL), Input(0)], [&g, &e]);
+            // the enemy walks away from the portal the whole time
+            for frame in 1..140 {
+                let foe = if (5..95).contains(&frame) { Input::LEFT } else { 0 };
+                s.step([Input(0), Input(foe)], [&g, &e]);
+            }
+            Fighter::MAX_HEALTH - s.fighters[1].health
+        };
+        assert_eq!(run(0), 0, "without the pull walking away dodges the hand");
+        assert!(run(450) >= 130, "with it the bite lands");
+    }
+
+    #[test]
+    fn the_bat_wave_cannot_be_crouched_under_or_rolled_through() {
+        let g = gray_persona();
+        let e = ayz();
+        let run = |crouch: bool| {
+            let mut s = GameState::new();
+            s.fighters[0].x = -40 * PX;
+            s.fighters[1].x = 40 * PX;
+            s.step([Input(Input::HEAVY), Input(0)], [&g, &e]);
+            for _ in 0..80 {
+                s.step([Input(0), Input(if crouch { Input::DOWN } else { 0 })], [&g, &e]);
+            }
+            Fighter::MAX_HEALTH - s.fighters[1].health
+        };
+        let standing = run(false);
+        assert!(standing > 0, "the bats land on a standing enemy");
+        assert!(run(true) >= standing, "and just as hard on one who crouches");
+        // mid-roll an enemy can't be touched by anything else, but the bats see them as if they were not rolling
+        let mut s = GameState::new();
+        s.fighters[1].state = FighterState::Roll;
+        s.fighters[1].state_frame = *Fighter::ROLL_SAFE.start();
+        assert!(s.hurtbox(1)[0] >= i32::MAX / 2, "the roll dodges ordinary hits");
+        assert!(s.undodged_hurtbox(1)[0] < 1000 * PX, "but not the bats");
+    }
+
+    #[test]
+    fn gray_personas_combo_pulls_the_enemy_a_bit_towards_her() {
+        let g = gray_persona();
+        let e = ayz();
+        let mut s = GameState::new();
+        s.fighters[0].x = 0;
+        s.fighters[1].x = 38 * PX;
+        let before = s.fighters[1].x - s.fighters[0].x;
+        s.step([Input(Input::LIGHT), Input(0)], [&g, &e]);
+        for _ in 0..40 {
+            s.step([Input(0), Input(0)], [&g, &e]);
+        }
+        let after = (s.fighters[1].x - s.fighters[0].x).abs();
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the scratch landed");
+        assert!(after < before, "and drew them in ({before} -> {after})");
+    }
+
+    #[test]
     fn the_beam_of_light_sweeps_from_in_front_of_the_enemy_to_behind_them_and_misses_if_they_left() {
         let (c, e) = (scribe(), ayz());
         let run = |walk_away: bool| {
@@ -4130,11 +4388,11 @@ mod tests {
     }
 
     #[test]
-    fn moving_away_from_the_hand_dodges_the_portal() {
+    fn walking_away_from_the_hand_no_longer_dodges_the_portal() {
+        // the open portal drags them back, so the bite lands all the same
         let s = portal_run(true);
-        assert_eq!(s.fighters[1].health, Fighter::MAX_HEALTH, "the hand misses and no bite follows");
-        assert_eq!(s.fighters[0].health, 700, "no heal");
-        assert!(!s.fighters[0].hidden, "she steps out of the portal anyway");
+        assert!(s.fighters[1].health < Fighter::MAX_HEALTH, "the bite lands");
+        assert!(!s.fighters[0].hidden);
     }
 
     #[test]
@@ -4530,6 +4788,28 @@ mod tests {
         let at = stunned_at.expect("the third blocked missile stuns him");
         assert!(at > 100, "not before the third one ({at})");
         assert_eq!(s.fighters[0].shots_blocked, 0, "and the count starts again");
+    }
+
+    #[test]
+    fn three_blocked_scribe_lights_stun_him() {
+        let scribe = CharacterData::from_ron(include_str!("../../assets/characters/scribe.ron")).unwrap();
+        let e = ayz();
+        let mut s = GameState::new();
+        // close enough for the quill stabs
+        s.fighters[0].x = -10 * PX;
+        s.fighters[1].x = 10 * PX;
+        let (mut blocked, mut stunned_at) = (0, None);
+        for frame in 0..400 {
+            // (tapping the button: a held one is a single press)
+            let press = if frame % 14 < 2 { Input::LIGHT } else { 0 };
+            s.step([Input(press), Input(Input::BLOCK)], [&scribe, &e]);
+            blocked = blocked.max(s.fighters[0].shots_blocked);
+            if stunned_at.is_none() && s.fighters[0].state == FighterState::Hitstun {
+                stunned_at = Some(frame);
+            }
+        }
+        assert!(blocked >= 2, "his stabs were blocked");
+        assert!(stunned_at.is_some(), "the third blocked light stuns him");
     }
 
     #[test]

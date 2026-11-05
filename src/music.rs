@@ -1,6 +1,7 @@
-//! Menu music: `assets/music/menu.wav` plays from the start once (the buildup), then loops `LOOP_START` to
-//! `LOOP_END` seamlessly; the echo after `LOOP_END` is mixed over the start of each repeat instead of played as
-//! a gap. It stops when a fight starts and comes back, without the buildup, in the menus after it.
+//! Music. In the menus `assets/music/menu.wav` plays from the start once (the buildup), then loops `loop_start` to
+//! `loop_end` seamlessly; the echo after `loop_end` is mixed over the start of each repeat instead of played as
+//! a gap. From the countdown of a fight until it is left, `assets/music/generic.wav` loops instead; the menu song
+//! comes back, without the buildup, in the menus after it.
 
 use std::num::NonZero;
 use std::sync::Arc;
@@ -9,23 +10,31 @@ use std::time::Duration;
 use bevy::audio::{AddAudioSource, AudioSinkPlayback, ChannelCount, Decodable, Sample, SampleRate, Source, Volume};
 use bevy::prelude::*;
 
-use crate::settings::Settings;
-use crate::AppState;
+use t2f::sim::Phase;
 
-/// Where the loop starts: everything before it is the buildup, heard only once.
-const LOOP_START: Duration = Duration::from_secs(2);
-/// Where the music ends and jumps back to `LOOP_START`; after it the file only has the fading echo.
-const LOOP_END: Duration = Duration::from_secs(42);
+use crate::settings::Settings;
+use crate::{AppState, Sim};
+
+/// A song file and where it loops.
+struct Track {
+    file: &'static str,
+    /// Where the loop starts: everything before it is the buildup, heard only once.
+    loop_start: Duration,
+    /// Where the music ends and jumps back to `loop_start`; after it the file only has the fading echo.
+    loop_end: Duration,
+}
+
+const MENU: Track = Track { file: "music/menu.wav", loop_start: Duration::from_secs(2), loop_end: Duration::from_secs(42) };
+/// (Loops at 1:28; the fade-out that starts at 1:29 carries on over the beginning of the next pass.)
+const FIGHT: Track = Track { file: "music/generic.wav", loop_start: Duration::ZERO, loop_end: Duration::from_secs(88) };
 
 pub struct MusicPlugin;
 
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<Music>()
-            .add_systems(Startup, load_menu_music)
-            .add_systems(OnEnter(AppState::Fight), stop_menu_music)
-            .add_systems(OnExit(AppState::Fight), resume_menu_music)
-            .add_systems(Update, set_music_volume);
+            .add_systems(Startup, load_songs)
+            .add_systems(Update, (choose_music, set_music_volume).chain());
     }
 }
 
@@ -93,31 +102,67 @@ impl Source for MusicDecoder {
     }
 }
 
-/// The decoded menu song, kept so it can restart after a fight.
-#[derive(Resource)]
-struct MenuMusic(Music);
-
-#[derive(Component)]
-struct MenuMusicPlayer;
-
-fn load_menu_music(mut commands: Commands, mut songs: ResMut<Assets<Music>>, settings: Res<Settings>) {
-    let path = crate::assets_dir().join("music/menu.wav");
-    let music = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| parse_wav(&bytes)) {
-        Ok(music) => music,
-        Err(e) => {
-            warn!("no menu music ({}): {e}", path.display());
-            return;
-        }
-    };
-    commands.insert_resource(MenuMusic(music.clone()));
-    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(music)), playback(&settings)));
+/// The decoded songs, kept so they can restart.
+#[derive(Resource, Default)]
+struct Songs {
+    menu: Option<Music>,
+    fight: Option<Music>,
 }
 
-/// Back in the menus after a fight: straight into the loop, no buildup.
-fn resume_menu_music(mut commands: Commands, music: Option<Res<MenuMusic>>, mut songs: ResMut<Assets<Music>>, settings: Res<Settings>) {
-    let Some(music) = music else { return };
-    let song = Music { start: music.0.loop_start, ..music.0.clone() };
-    commands.spawn((MenuMusicPlayer, AudioPlayer(songs.add(song)), playback(&settings)));
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Menu,
+    Fight,
+}
+
+#[derive(Component)]
+struct MusicPlayer(Which);
+
+fn load_songs(mut commands: Commands) {
+    let load = |track: &Track| {
+        let path = crate::assets_dir().join(track.file);
+        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| parse_wav(&bytes, track)) {
+            Ok(music) => Some(music),
+            Err(e) => {
+                warn!("no music ({}): {e}", path.display());
+                None
+            }
+        }
+    };
+    commands.insert_resource(Songs { menu: load(&MENU), fight: load(&FIGHT) });
+}
+
+/// Menu song in the menus (and on the skills screen before a match), fight song from the countdown on.
+fn choose_music(
+    mut commands: Commands,
+    state: Res<State<AppState>>,
+    sim: Res<Sim>,
+    songs: Res<Songs>,
+    mut assets: ResMut<Assets<Music>>,
+    settings: Res<Settings>,
+    players: Query<(Entity, &MusicPlayer)>,
+    mut heard_buildup: Local<bool>,
+) {
+    let fighting = *state.get() == AppState::Fight && !matches!(sim.0.phase, Phase::Briefing(_));
+    let want = if fighting { Which::Fight } else { Which::Menu };
+    for (player, MusicPlayer(which)) in &players {
+        if *which != want {
+            commands.entity(player).despawn();
+        }
+    }
+    if players.iter().any(|(_, MusicPlayer(which))| *which == want) {
+        return;
+    }
+    let Some(song) = (match want {
+        Which::Menu => songs.menu.clone(),
+        Which::Fight => songs.fight.clone(),
+    }) else {
+        return;
+    };
+    // the menu song's buildup is only for the first time it plays
+    let song = if want == Which::Menu && *heard_buildup { Music { start: song.loop_start, ..song } } else { song };
+    *heard_buildup |= want == Which::Menu;
+    commands.spawn((MusicPlayer(want), AudioPlayer(assets.add(song)), playback(&settings)));
 }
 
 fn playback(settings: &Settings) -> PlaybackSettings {
@@ -125,7 +170,7 @@ fn playback(settings: &Settings) -> PlaybackSettings {
 }
 
 /// Options > Music volume, heard while it is changed.
-fn set_music_volume(settings: Res<Settings>, mut sinks: Query<&mut AudioSink, With<MenuMusicPlayer>>) {
+fn set_music_volume(settings: Res<Settings>, mut sinks: Query<&mut AudioSink, With<MusicPlayer>>) {
     if settings.is_changed() {
         for mut sink in &mut sinks {
             sink.set_volume(Volume::Linear(settings.music_gain()));
@@ -133,14 +178,8 @@ fn set_music_volume(settings: Res<Settings>, mut sinks: Query<&mut AudioSink, Wi
     }
 }
 
-fn stop_menu_music(mut commands: Commands, players: Query<Entity, With<MenuMusicPlayer>>) {
-    for player in &players {
-        commands.entity(player).despawn();
-    }
-}
-
 /// Reads an uncompressed 16-bit PCM WAV.
-fn parse_wav(bytes: &[u8]) -> Result<Music, String> {
+fn parse_wav(bytes: &[u8], track: &Track) -> Result<Music, String> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("not a WAV file".into());
     }
@@ -171,7 +210,7 @@ fn parse_wav(bytes: &[u8]) -> Result<Music, String> {
     let samples: Arc<[i16]> = data.chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect();
     // on a whole frame (one sample per channel)
     let frame_index = |at: Duration| (at.as_secs_f64() * rate.get() as f64).round() as usize * channels.get() as usize;
-    let loop_end = frame_index(LOOP_END).min(samples.len());
-    let loop_start = frame_index(LOOP_START).min(loop_end.saturating_sub(channels.get() as usize));
+    let loop_end = frame_index(track.loop_end).min(samples.len());
+    let loop_start = frame_index(track.loop_start).min(loop_end.saturating_sub(channels.get() as usize));
     Ok(Music { samples, channels, rate, loop_start, loop_end, start: 0 })
 }

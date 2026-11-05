@@ -131,6 +131,12 @@ struct Voice {
 }
 
 impl Voice {
+    /// True `pct` percent of the time (only for sound choices: nothing in the sim depends on it).
+    fn chance(&mut self, pct: u32) -> bool {
+        self.count = self.count.wrapping_add(1);
+        (self.count.wrapping_mul(2654435761) >> 12) % 100 < pct
+    }
+
     /// `throttle`: not again within `SAME_SOUND_GAP` frames of the last time it was started.
     fn play(&mut self, commands: &mut Commands, sounds: &Sounds, volume: f32, frame: u32, name: &str, throttle: bool) {
         let Some(variants) = sounds.groups.get(name).filter(|v| !v.is_empty()) else { return };
@@ -224,10 +230,17 @@ fn play_fight_sounds(
     let winner = s.match_winner();
 
     // the match and its rounds
-    if !*started || s.round != *round {
+    // the countdown ticks on each number, and the round-start sound says FIGHT! (`started`: it was counting down last tick)
+    let counting = matches!(s.phase, Phase::Countdown(_));
+    if let Phase::Countdown(n) = s.phase {
+        if n % 60 == 0 {
+            play!("ui_move", false);
+        }
+    }
+    if *started && s.phase == Phase::Fighting {
         play!("round_start", false);
     }
-    *started = true;
+    *started = counting;
     *round = s.round;
     let over = matches!(s.phase, Phase::RoundEnd(_) | Phase::MatchOver);
     let match_just_ended = matches!(s.phase, Phase::MatchOver) && !*match_over;
@@ -327,7 +340,9 @@ fn play_fight_sounds(
                 } else {
                     play!(sfx.and_then(|s| s.hit.as_deref()).unwrap_or(hit_name(lost)), false);
                     if let Some(name) = &own.hurt {
-                        play!(name, false);
+                        if voice.chance(own.hurt_chance.unwrap_or(100)) {
+                            play!(name, false);
+                        }
                     }
                     // the attacker's own cry for landing this move
                     if let Some((name, lock)) = sfx.and_then(|s| s.hit_voice.as_deref().map(|n| (n, s.voice_lock))) {
