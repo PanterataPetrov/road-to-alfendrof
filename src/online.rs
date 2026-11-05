@@ -110,7 +110,7 @@ fn text(commands: &mut Commands, marker: impl Component, value: &str, size: f32,
 #[derive(Component)]
 struct Label;
 
-fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, roster: Res<Roster>, mut info: ResMut<OnlineInfo>, settings: Res<Settings>) {
+fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, roster: Res<Roster>, mut info: ResMut<OnlineInfo>, settings: Res<Settings>, asset_server: Res<AssetServer>) {
     if lobby.0.is_none() {
         // the usual port first, then any free one (a second copy on this PC)
         lobby.0 = Lobby::new(DEFAULT_PORT, build_of(&roster), true).or_else(|_| Lobby::new(0, build_of(&roster), true)).ok();
@@ -123,6 +123,7 @@ fn spawn_online_screen(mut commands: Commands, mut lobby: ResMut<OnlineLobby>, r
     if let Some(l) = lobby.0.as_mut() {
         l.set_name(&settings.username);
     }
+    crate::menus::spawn_backdrop(&mut commands, AppState::Online, &asset_server);
     crate::menus::spawn_panel(&mut commands, AppState::Online);
     let gold = Color::srgb(1.0, 0.9, 0.4);
     let grey = Color::srgb(0.6, 0.6, 0.7);

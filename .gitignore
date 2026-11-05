@@ -6,3 +6,4 @@
 /dist/
 /.direnv/
 __pycache__/
+/AGENTS.md

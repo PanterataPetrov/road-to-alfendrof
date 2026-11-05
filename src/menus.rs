@@ -7,6 +7,7 @@ use crate::settings::{self, Display, Settings, ACTIONS};
 use crate::sfx::UiSound;
 use t2f::skills::move_names;
 use bevy::sprite::Anchor;
+use bevy::window::PrimaryWindow;
 use t2f::sim::Button;
 use crate::{AppState, Mode, Roster, Selection, Sim, Stages};
 use t2f::sim::Phase;
@@ -47,6 +48,7 @@ impl Plugin for MenuPlugin {
                     glitch_subtitles.run_if(menu_live),
                     animate_title.run_if(in_state(AppState::Title)),
                     menu_camera.run_if(not(in_state(AppState::Fight))),
+                    fit_menu_art,
                 ),
             );
     }
@@ -128,6 +130,52 @@ fn back_pressed(keys: &ButtonInput<KeyCode>) -> bool {
 /// (a dark fill, a violet frame) as `(sprite, position)` for the caller to spawn.
 pub const PANEL: Vec2 = Vec2::new(372.0, 204.0);
 
+/// A decorative image that fills the whole visible camera view as the window changes shape.
+#[derive(Component)]
+pub struct FillView;
+
+/// The title tint, anchored to the bottom edge of the visible view.
+#[derive(Component)]
+struct TitleBottomShade;
+
+const TITLE_SHADE_TOP: f32 = -14.0;
+
+fn visible_menu_size(aspect: f32) -> Vec2 {
+    let base = Vec2::new(crate::VIEW_W, crate::VIEW_H);
+    if aspect >= base.x / base.y {
+        Vec2::new(base.y * aspect, base.y)
+    } else {
+        Vec2::new(base.x, base.x / aspect)
+    }
+}
+
+fn fit_menu_art(
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut backgrounds: Query<&mut Sprite, (With<FillView>, Without<TitleBottomShade>)>,
+    mut shades: Query<(&mut Sprite, &mut Transform), (With<TitleBottomShade>, Without<FillView>)>,
+) {
+    if window.height() <= 0.0 || window.width() <= 0.0 {
+        return;
+    }
+    let view = visible_menu_size(window.width() / window.height());
+    for mut sprite in &mut backgrounds {
+        if sprite.custom_size != Some(view) {
+            sprite.custom_size = Some(view);
+        }
+    }
+    let bottom = -view.y / 2.0;
+    let shade_size = Vec2::new(view.x, TITLE_SHADE_TOP - bottom);
+    for (mut sprite, mut transform) in &mut shades {
+        if sprite.custom_size != Some(shade_size) {
+            sprite.custom_size = Some(shade_size);
+        }
+        let y = (TITLE_SHADE_TOP + bottom) / 2.0;
+        if transform.translation.y != y {
+            transform.translation.y = y;
+        }
+    }
+}
+
 pub fn panel_parts() -> Vec<(Sprite, Vec3)> {
     let frame = Color::srgb(0.55, 0.42, 0.85);
     let inner = Color::srgb(0.22, 0.16, 0.4);
@@ -150,9 +198,10 @@ pub fn spawn_panel(commands: &mut Commands, state: AppState) {
 }
 
 /// The pixel-art backdrop of the character and stage select.
-fn spawn_backdrop(commands: &mut Commands, state: AppState, asset_server: &AssetServer) {
+pub fn spawn_backdrop(commands: &mut Commands, state: AppState, asset_server: &AssetServer) {
     commands.spawn((
         DespawnOnExit(state),
+        FillView,
         Sprite { image: asset_server.load("backgrounds/select.png"), custom_size: Some(Vec2::new(384.0, 216.0)), ..default() },
         Transform::from_xyz(0.0, 0.0, -8.0),
     ));
@@ -264,12 +313,12 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     let state = AppState::Title;
     commands.spawn((
         DespawnOnExit(state.clone()),
+        FillView,
         Sprite { image: asset_server.load("backgrounds/galata/near.png"), custom_size: Some(Vec2::new(384.0, 216.0)), ..default() },
         Transform::from_xyz(0.0, 0.0, -8.0),
     ));
-    // dark band behind the menu so it reads, vignette at the top
-    commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.82), Vec2::new(384.0, 96.0)), Transform::from_xyz(0.0, -62.0, 1.0)));
-    commands.spawn((DespawnOnExit(state.clone()), Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.35), Vec2::new(384.0, 22.0)), Transform::from_xyz(0.0, 105.0, 1.0)));
+    // Keep the menu readable and extend its dark band to the bottom of any window shape.
+    commands.spawn((DespawnOnExit(state.clone()), TitleBottomShade, Sprite::from_color(Color::srgba(0.03, 0.02, 0.08, 0.82), Vec2::new(384.0, 94.0)), Transform::from_xyz(0.0, -61.0, 1.0)));
     commands.spawn((
         DespawnOnExit(state.clone()),
         TitleLogo,
@@ -289,9 +338,9 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
     commands.entity(credit).insert(Transform::from_xyz(0.0, -104.0, 5.0));
     let tagline = spawn_text(&mut commands, state.clone(), "A T2SSR Brawl".into(), 9.0, Color::srgb(0.98, 0.92, 0.72), 8.0);
     commands.entity(tagline).insert(Transform::from_xyz(0.0, 8.0, 5.0));
-    // the version, small in the bottom right corner
-    let version = spawn_text(&mut commands, state.clone(), format!("v{}", env!("CARGO_PKG_VERSION")), 8.0, Color::srgba(0.85, 0.85, 0.95, 0.75), -102.0);
-    commands.entity(version).insert((Transform::from_xyz(172.0, -102.0, 5.0), bevy::sprite::Anchor::CENTER_RIGHT));
+    // Keep the version above the logo, clear of the footer's controls and sound credits.
+    let version = spawn_text(&mut commands, state.clone(), format!("v{}", env!("CARGO_PKG_VERSION")), 8.0, Color::srgb(0.12, 0.08, 0.22), 96.0);
+    commands.entity(version).insert((Transform::from_xyz(172.0, 96.0, 5.0), bevy::sprite::Anchor::CENTER_RIGHT));
 
     let white = Color::WHITE;
     let online = Item::new("Online", white);

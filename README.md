@@ -1,4 +1,4 @@
-# Road to Alfendrof
+ # Road to Alfendrof
 
 A Bevy fighting game. Controls are available in Options > Controls.
 Windowed launches start maximized; saved borderless/fullscreen choices still apply.

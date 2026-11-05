@@ -7,7 +7,7 @@ use bevy::sprite::Anchor;
 use t2f::sim::{Input, Phase};
 use t2f::skills::skill_lines;
 
-use crate::menus::{confirm_pressed, panel_parts};
+use crate::menus::{confirm_pressed, panel_parts, FillView};
 use crate::online::NetSession;
 use crate::settings::{key_name, Settings};
 use crate::{rgb, HudRoot, Mode, Roster, Selection, Sim};
@@ -60,6 +60,7 @@ pub fn spawn(
             // covers the fight behind it, however wide the window
             ui.spawn((Sprite::from_color(Color::srgb(0.04, 0.03, 0.09), Vec2::new(3000.0, 1600.0)), Transform::from_xyz(0.0, 0.0, 0.0)));
             ui.spawn((
+                FillView,
                 Sprite { image: asset_server.load("backgrounds/select.png"), custom_size: Some(Vec2::new(384.0, 216.0)), ..default() },
                 Transform::from_xyz(0.0, 0.0, 0.1),
             ));
