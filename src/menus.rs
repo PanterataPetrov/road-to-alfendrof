@@ -1,5 +1,5 @@
 //! Title, options, controls, character select and stage select, all driven by one cursor.
-//! Both players' keys work: WASD + F/G or arrows + J/K, Enter and Esc.
+//! Navigate with WASD or arrows, select with Enter, and go back with Escape.
 
 use bevy::prelude::*;
 
@@ -119,11 +119,11 @@ impl Item {
 }
 
 pub fn confirm_pressed(keys: &ButtonInput<KeyCode>) -> bool {
-    [KeyCode::Enter, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::Space].iter().any(|&k| keys.just_pressed(k))
+    keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter)
 }
 
 fn back_pressed(keys: &ButtonInput<KeyCode>) -> bool {
-    [KeyCode::Escape, KeyCode::KeyG, KeyCode::KeyK, KeyCode::Backspace].iter().any(|&k| keys.just_pressed(k))
+    keys.just_pressed(KeyCode::Escape)
 }
 
 /// The box every menu's text sits in, so all screens use the same part of the window: size, and the sprites
@@ -349,7 +349,7 @@ fn spawn_title(mut commands: Commands, mut menu: ResMut<Menu>, asset_server: Res
         &mut menu,
         state,
         "",
-        "W/S or Up/Down: move    F / J / Enter: select    Esc: quit",
+        "W/S or Up/Down: move    Enter: select    Esc: quit",
         vec![Item::new("vs CPU", white), online, Item::new("Options", white)],
         Some(-30.0),
     );
@@ -392,7 +392,7 @@ fn spawn_char_select(
     menu.per_page = 1;
     let header = spawn_text(&mut commands, state.clone(), pick_title(0, *mode), 16.0, Color::srgb(1.0, 0.9, 0.4), 90.0);
     commands.entity(header).insert(Header);
-    spawn_text(&mut commands, state.clone(), "A/D: turn    F / J / Enter: pick    G / K / Esc: back".into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
+    spawn_text(&mut commands, state.clone(), "A/D or Left/Right: turn    Enter: pick    Esc: back".into(), 9.0, Color::srgb(0.6, 0.6, 0.7), -92.0);
     for (index, c) in roster.0.iter().enumerate() {
         // portraits/<sprite folder>.png, if it exists
         let folder = c.sprites.clone().unwrap_or_else(|| c.name.to_lowercase());
@@ -594,7 +594,7 @@ fn spawn_stage_select(mut commands: Commands, mut menu: ResMut<Menu>, stages: Re
         &mut menu,
         AppState::StageSelect,
         "Choose a stage",
-        "W/S or Up/Down: move    F / J / Enter: fight    G / K / Esc: back",
+        "W/S or Up/Down: move    Enter: fight    Esc: back",
         items,
         None,
     );
@@ -720,7 +720,7 @@ fn title_confirm(
     mut next: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if back_pressed(&keys) && keys.just_pressed(KeyCode::Escape) {
+    if back_pressed(&keys) {
         exit.write(AppExit::Success);
     } else if confirm_pressed(&keys) {
         match menu.cursor {
@@ -826,7 +826,7 @@ fn build_options(commands: &mut Commands, menu: &mut Menu, state: AppState, sett
         menu,
         state,
         "Options",
-        "W/S: move    A/D or Left/Right: change    F / J / Enter: select    Esc: back",
+        "W/S or Up/Down: move    A/D or Left/Right: change    Enter: select    Esc: back",
         items,
         None,
     );
@@ -915,7 +915,7 @@ fn build_controls(commands: &mut Commands, menu: &mut Menu, state: AppState, set
         menu,
         state,
         "Controls",
-        "F / J / Enter: change, then press the new key    Esc: back",
+        "Enter: change, then press the new key    Esc: back",
         items,
         None,
     );
@@ -1076,7 +1076,7 @@ fn sync_pause(
         Pause::Main => {
             let title = if *mode == Mode::Online { "Paused (the match goes on)" } else { "Paused" };
             let items = vec![Item::new("Resume", Color::WHITE), Item::new("Options", Color::WHITE), Item::new("Surrender", red)];
-            spawn_menu(&mut commands, &mut menu, AppState::Overlay, title, "W/S or Up/Down: move    F / J / Enter: select    Esc: resume", items, None);
+            spawn_menu(&mut commands, &mut menu, AppState::Overlay, title, "W/S or Up/Down: move    Enter: select    Esc: resume", items, None);
         }
         Pause::Options => build_options(&mut commands, &mut menu, AppState::Overlay, &settings),
         Pause::Controls => build_controls(&mut commands, &mut menu, AppState::Overlay, &settings),
@@ -1116,5 +1116,76 @@ fn menu_camera(mut cam: Single<(&mut Transform, &mut Projection), With<Camera2d>
                 ortho.scale = 1.0;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_confirmation_and_back_use_enter_and_escape() {
+        for key in [KeyCode::Enter, KeyCode::NumpadEnter] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert!(confirm_pressed(&keys));
+            assert!(!back_pressed(&keys));
+        }
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Escape);
+        assert!(back_pressed(&keys));
+        assert!(!confirm_pressed(&keys));
+
+        for key in [KeyCode::KeyF, KeyCode::KeyG, KeyCode::KeyJ, KeyCode::KeyK, KeyCode::Space, KeyCode::Backspace] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert!(!confirm_pressed(&keys));
+            assert!(!back_pressed(&keys));
+        }
+    }
+
+    #[test]
+    fn horizontal_navigation_accepts_wasd_and_arrows() {
+        for (key, expected) in [(KeyCode::KeyA, -1), (KeyCode::ArrowLeft, -1), (KeyCode::KeyD, 1), (KeyCode::ArrowRight, 1)] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert_eq!(left_right(&keys), expected);
+        }
+    }
+
+    #[test]
+    fn vertical_keys_move_the_menu_cursor() {
+        for (key, expected) in [(KeyCode::KeyW, 0), (KeyCode::ArrowUp, 0), (KeyCode::KeyS, 2), (KeyCode::ArrowDown, 2)] {
+            let mut app = App::new();
+            app.init_resource::<ButtonInput<KeyCode>>()
+                .insert_resource(Menu { cursor: 1, len: 3, per_page: 3 })
+                .init_resource::<Rebinding>()
+                .add_message::<UiSound>()
+                .add_systems(Update, menu_nav);
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+            assert_eq!(app.world().resource::<Menu>().cursor, expected);
+        }
+    }
+
+    #[test]
+    fn escape_opens_pause_and_enter_resumes() {
+        let mut app = App::new();
+        let mut sim = Sim::default();
+        sim.0.phase = Phase::Fighting;
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Pause>()
+            .init_resource::<Menu>()
+            .init_resource::<Surrendering>()
+            .insert_resource(sim)
+            .add_systems(Update, pause_main);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert_eq!(*app.world().resource::<Pause>(), Pause::Main);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.press(KeyCode::Enter);
+        app.update();
+        assert_eq!(*app.world().resource::<Pause>(), Pause::Closed);
     }
 }
